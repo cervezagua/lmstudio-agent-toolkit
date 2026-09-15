@@ -1,0 +1,7 @@
+{
+  "type": "plugin",
+  "runner": "node",
+  "owner": "local",
+  "name": "web-tools",
+  "revision": 1
+}

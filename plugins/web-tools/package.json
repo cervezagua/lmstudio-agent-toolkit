@@ -1,0 +1,26 @@
+{
+  "name": "lms-plugin-web-tools",
+  "version": "1.0.0",
+  "description": "Web search, page fetching, and browser automation tools for LM Studio models",
+  "private": true,
+  "scripts": {
+    "dev": "lms dev",
+    "install-plugin": "lms dev --install --yes",
+    "typecheck": "tsc --noEmit"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@lmstudio/sdk": "1.5.0",
+    "@mozilla/readability": "^0.6.0",
+    "linkedom": "^0.18.13",
+    "playwright-core": "^1.63.0",
+    "turndown": "^7.2.4",
+    "unpdf": "^1.8.1",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/turndown": "^5.0.6",
+    "typescript": "^5.9.0"
+  }
+}

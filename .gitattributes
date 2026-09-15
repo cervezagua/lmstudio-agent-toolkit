@@ -1,0 +1,6 @@
+# Shell scripts and systemd units run inside WSL/Linux and must keep LF line endings.
+*.sh text eol=lf
+*.service text eol=lf
+searxng/*.yml text eol=lf
+# cmd.exe can misparse batch files with LF-only line endings.
+*.cmd text eol=crlf

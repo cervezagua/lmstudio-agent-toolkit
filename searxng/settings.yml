@@ -1,0 +1,55 @@
+# SearXNG settings for a private, local instance used by the web-tools LM Studio plugin.
+# Only overrides are listed; everything else comes from SearXNG's defaults.
+# Installed to /etc/searxng/settings.yml by setup-wsl.sh (which fills in secret_key).
+use_default_settings: true
+
+general:
+  instance_name: "LM Studio SearXNG"
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  # web-tools requests format=json; html keeps the normal web UI working.
+  formats:
+    - html
+    - json
+
+server:
+  # Loopback only: WSL forwards localhost ports to Windows, so nothing else on the network can reach it.
+  bind_address: "127.0.0.1"
+  port: 8888
+  secret_key: "__SECRET_KEY__"
+  # The limiter is anti-bot protection for public instances; it would block the plugin's requests.
+  limiter: false
+  public_instance: false
+  image_proxy: false
+  method: "GET"
+
+outgoing:
+  # On the test machine, first connections to engines took 2-3.5 s (a high-latency link plus WSL
+  # NAT), and SearXNG's 3 s default made engines time out and get suspended right after startup.
+  request_timeout: 8.0
+  max_request_timeout: 15.0
+  # WSL has no IPv6 route; binding to the IPv4 wildcard skips futile IPv6 connection attempts.
+  source_ips:
+    - "0.0.0.0"
+
+# Web engines, chosen by testing from one Windows machine (September 2026): brave, bing and google
+# returned results; duckduckgo and qwant answered with CAPTCHAs, google cse timed out, and
+# yep/privacywall denied access. Results vary by network. Unlisted engines keep SearXNG's defaults.
+engines:
+  - name: bing
+    disabled: false
+  - name: google
+    disabled: false
+  - name: duckduckgo
+    disabled: true
+  - name: google cse
+    disabled: true
+
+# No Valkey/Redis needed without the limiter.
+valkey:
+  url: false
+
+ui:
+  static_use_hash: true

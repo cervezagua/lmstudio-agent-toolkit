@@ -1,0 +1,29 @@
+[Unit]
+Description=SearXNG metasearch (local instance for the LM Studio web-tools plugin)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=searxng
+Group=searxng
+WorkingDirectory=/usr/local/searxng/searxng-src
+Environment=SEARXNG_SETTINGS_PATH=/etc/searxng/settings.yml
+# Same server settings as SearXNG's official container image, but loopback only.
+Environment=GRANIAN_INTERFACE=wsgi
+Environment=GRANIAN_HOST=127.0.0.1
+Environment=GRANIAN_PORT=8888
+Environment=GRANIAN_PROCESS_NAME=searxng
+Environment=GRANIAN_WEBSOCKETS=false
+Environment=GRANIAN_BLOCKING_THREADS=4
+Environment=GRANIAN_WORKERS_KILL_TIMEOUT=30s
+ExecStart=/usr/local/searxng/searx-pyenv/bin/granian searx.webapp:app
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
