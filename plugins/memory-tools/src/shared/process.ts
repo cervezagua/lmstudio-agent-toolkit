@@ -21,10 +21,11 @@ export interface RunResult {
 }
 
 // LM Studio runs plugins inside an Electron utility process, which on Windows can hand us an
-// environment with no PATHEXT. PATH is intact, but cmd.exe and PowerShell use PATHEXT to turn a
-// bare "node" into "node.exe", so every command fails with "is not recognized". Node's own spawn()
-// has a built-in extension list and is unaffected, which is why git-tools keeps working while the
-// shell does not. Restore the four extensions that make programs runnable; deliberately not the
+// environment with no PATHEXT. PATH is intact, but PowerShell relies on PATHEXT to turn a bare
+// "node" into "node.exe" and has no fallback, so every command fails with "is not recognized".
+// cmd.exe and Node's own spawn() both fall back to a built-in list when PATHEXT is missing or empty,
+// which is why git-tools kept working while our PowerShell-based shell did not. Restore the four
+// extensions that make programs runnable; deliberately not the
 // full Windows default, which also includes script types like .JS and .VBS that Windows would hand
 // to the script host.
 const FALLBACK_PATHEXT = ".COM;.EXE;.BAT;.CMD";
