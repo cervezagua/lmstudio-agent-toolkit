@@ -45,6 +45,9 @@ export class ShellSession {
     });
     child.stdout.setEncoding("utf-8");
     child.stderr.setEncoding("utf-8");
+    // The shell can die between commands; writing to its stdin then fails with EPIPE, which the
+    // next exec() handles by starting a fresh shell.
+    child.stdin.on("error", () => {});
     child.on("error", () => this.dispose());
     child.on("exit", () => (this.child = null));
     this.child = child;

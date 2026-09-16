@@ -37,6 +37,16 @@ describe("runProcess", () => {
     expect(result.stdout).toBe("piped");
   });
 
+  it("survives a process that exits before its stdin is written", async () => {
+    // Writing to a dead child's stdin raises EPIPE; that must not escape as an unhandled error.
+    const result = await runProcess(process.execPath, ["-e", "process.exit(3)"], {
+      cwd: process.cwd(),
+      timeoutMs: 10000,
+      stdin: "x".repeat(200_000),
+    });
+    expect(result.exitCode).toBe(3);
+  });
+
   it("kills processes that exceed the timeout", async () => {
     const result = await runProcess(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
       cwd: process.cwd(),

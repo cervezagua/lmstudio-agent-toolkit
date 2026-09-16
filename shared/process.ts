@@ -103,6 +103,10 @@ export function runProcess(file: string, args: string[], options: RunOptions): P
       resolvePromise({ exitCode, stdout, stderr, timedOut, aborted });
     });
 
+    // A process can exit before we finish writing (e.g. a command that fails immediately), which
+    // makes the write fail with EPIPE. That is not an error worth surfacing: the exit code and
+    // output still arrive through the "close" handler above.
+    child.stdin.on("error", () => {});
     child.stdin.end(options.stdin ?? "");
   });
 }

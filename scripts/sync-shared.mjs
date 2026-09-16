@@ -11,6 +11,8 @@ const check = process.argv.includes("--check");
 const header = "// GENERATED: copied from /shared by scripts/sync-shared.mjs. Edit the original there.\n";
 
 const sources = readdirSync(sharedDir).filter(f => f.endsWith(".ts") && !f.endsWith(".test.ts"));
+// Git checks files out with CRLF on Windows, so compare content regardless of line endings.
+const normalize = text => text.replace(/\r\n/g, "\n");
 let stale = [];
 
 for (const plugin of readdirSync(pluginsDir)) {
@@ -22,7 +24,7 @@ for (const plugin of readdirSync(pluginsDir)) {
     const expected = header + readFileSync(join(sharedDir, file), "utf-8");
     const destination = join(target, file);
     const actual = existsSync(destination) ? readFileSync(destination, "utf-8") : null;
-    if (actual === expected) continue;
+    if (actual !== null && normalize(actual) === normalize(expected)) continue;
     if (check) stale.push(`${plugin}/src/shared/${file}`);
     else writeFileSync(destination, expected);
   }
