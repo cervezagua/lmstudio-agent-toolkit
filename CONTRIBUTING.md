@@ -80,6 +80,7 @@ It publishes each plugin from a clean staging copy, the same way the installer d
 - Return recoverable problems as `Error: ...` strings: throw `ToolError` inside an implementation wrapped in `safe(...)`. Throw normal errors only for real failures.
 - Call `ctx.status(...)` and `ctx.warn(...)` on the tool context object. Don't destructure them: they're methods that rely on `this`. The fake context behaves the same way, so tests catch it.
 - Resolve every user-supplied path with `resolveSafe(root, path)`.
+- The plugin host's environment is not your terminal's. LM Studio runs plugins in an Electron utility process, which on Windows has been seen to supply no `PATHEXT` — enough to make every shell command fail with "is not recognized". Spawn with `commandEnv()` from `shared/process.ts` instead of `process.env`, and don't assume a variable exists just because your shell has it. Tests call tool code directly in a normal environment, so they cannot catch this class of bug; it only shows up inside LM Studio.
 - Keep descriptions short and concrete; the model reads every one on every message.
 - Put optional tool groups behind a config switch, since long tool lists make small models choose worse.
 - PDF work goes through `plugins/ocr-tools/src/lib/pdf-worker.mjs` in a separate process; PDF.js doesn't work when bundled as CommonJS.

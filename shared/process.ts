@@ -40,9 +40,12 @@ const executableCache = new Map<string, string | null>();
 /** Finds an executable on PATH (honouring PATHEXT on Windows). Returns null if absent. */
 export function findExecutable(name: string): string | null {
   if (executableCache.has(name)) return executableCache.get(name)!;
+  // Through commandEnv, so a host that supplies no PATHEXT (or an empty one) does not leave us with
+  // an empty extension list, which would report every executable as missing — git-tools would then
+  // quietly drop its gh_* tools because it could not find gh.
   const extensions =
     process.platform === "win32"
-      ? ["", ...(process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";").map(e => e.toLowerCase())]
+      ? ["", ...(commandEnv().PATHEXT ?? "").split(";").filter(Boolean).map(e => e.toLowerCase())]
       : [""];
   let found: string | null = null;
   outer: for (const dir of (process.env.PATH ?? "").split(delimiter).filter(Boolean)) {

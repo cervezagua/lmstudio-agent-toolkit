@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commandEnv, formatRunResult, runProcess } from "./process";
+import { commandEnv, findExecutable, formatRunResult, runProcess } from "./process";
 import { truncate } from "./truncate";
 
 describe("truncate", () => {
@@ -120,5 +120,24 @@ describe("commandEnv", () => {
     } finally {
       if (original !== undefined) process.env.PATHEXT = original;
     }
+  });
+});
+
+describe("findExecutable", () => {
+  // An empty PATHEXT used to leave the extension list empty, so every lookup reported "missing" and
+  // git-tools silently hid its gh_* tools.
+  it.runIf(process.platform === "win32")("finds a program when the host supplies an empty PATHEXT", () => {
+    const original = process.env.PATHEXT;
+    process.env.PATHEXT = "";
+    try {
+      expect(findExecutable("where")).toMatch(/where\.exe$/i);
+    } finally {
+      if (original === undefined) delete process.env.PATHEXT;
+      else process.env.PATHEXT = original;
+    }
+  });
+
+  it("returns null for a program that is not installed", () => {
+    expect(findExecutable("definitely-not-a-real-binary-xyz")).toBeNull();
   });
 });

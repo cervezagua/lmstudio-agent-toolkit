@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/cervezagua/lmstudio-agent-toolkit/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/cervezagua/lmstudio-agent-toolkit/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <img alt="Tests" src="https://img.shields.io/badge/tests-175%20passing-brightgreen">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-177%20passing-brightgreen">
   <img alt="Tested on Windows and Linux" src="https://img.shields.io/badge/tested%20on-Windows%20%7C%20Linux-informational">
 </p>
 
