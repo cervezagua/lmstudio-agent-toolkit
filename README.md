@@ -45,9 +45,21 @@ Each plugin is separate and every optional group has an on/off switch, because s
 ## Quickstart
 
 > [!NOTE]
-> Needs **LM Studio** (with its `lms` CLI), **Node.js 22+** and **git**. Optional: [GitHub CLI](https://cli.github.com) for the `gh_*` tools, [ripgrep](https://github.com/BurntSushi/ripgrep) for faster search, Edge or Chrome for the browser tools.
+> Needs **LM Studio** (with its `lms` CLI). Optional: [GitHub CLI](https://cli.github.com) for the `gh_*` tools, [ripgrep](https://github.com/BurntSushi/ripgrep) for faster search, Edge or Chrome for the browser tools.
 
-With LM Studio running:
+**From LM Studio Hub** — install what you want, no clone needed:
+
+```bash
+lms get cervezagua/coder-tools
+lms get cervezagua/memory-tools
+lms get cervezagua/git-tools
+lms get cervezagua/web-tools
+lms get cervezagua/ocr-tools
+```
+
+Each is also browsable at `lmstudio.ai/cervezagua/<plugin>`.
+
+**From source** — for hacking on them, or installing all five at once (needs Node.js 22+ and git):
 
 ```bash
 git clone https://github.com/cervezagua/lmstudio-agent-toolkit.git
@@ -55,7 +67,7 @@ cd lmstudio-agent-toolkit
 npm run setup
 ```
 
-That installs all five plugins into LM Studio, which fetches each plugin's dependencies itself. Install a subset with `node scripts/install-plugins.mjs coder-tools memory-tools`, and re-run the same command after `git pull` to update.
+Either way LM Studio fetches each plugin's dependencies itself. From source you can install a subset with `node scripts/install-plugins.mjs coder-tools memory-tools`, and re-run the same command after `git pull` to update.
 
 Then, in LM Studio:
 
