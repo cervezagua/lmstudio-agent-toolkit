@@ -21,7 +21,8 @@
     "install-plugins": "node scripts/install-plugins.mjs",
     "e2e": "node scripts/e2e.mjs",
     "install:all": "node scripts/each-plugin.mjs npm install",
-    "typecheck": "node scripts/each-plugin.mjs npx tsc --noEmit"
+    "typecheck": "node scripts/each-plugin.mjs npx tsc --noEmit",
+    "hub:push": "node scripts/hub-push.mjs"
   },
   "devDependencies": {
     "tsx": "^4.23.13",

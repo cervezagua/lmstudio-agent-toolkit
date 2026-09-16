@@ -65,6 +65,16 @@ node scripts/e2e.mjs <model-key> --in-process
 
 `--in-process` runs the tool code inside the script. Without it, the script uses the installed plugins through LM Studio, which only works if you've granted API clients permission to use plugins (otherwise you get `Permission denied ... plugins.use`).
 
+## Publishing to LM Studio Hub
+
+Maintainers only. Sign in once with `lms login` (it shows a code to enter at lmstudio.ai/pairing), then:
+
+```bash
+npm run hub:push -- --private --owner <your-hub-account>
+```
+
+It publishes each plugin from a clean staging copy, the same way the installer does. `--private` only has an effect the first time a plugin is pushed. Drop it to publish publicly, and add `--dry-run` to see what would happen.
+
 ## Writing tools
 
 - Return recoverable problems as `Error: ...` strings: throw `ToolError` inside an implementation wrapped in `safe(...)`. Throw normal errors only for real failures.

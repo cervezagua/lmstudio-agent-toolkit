@@ -3,6 +3,7 @@
 // Usage: node scripts/hub-push.mjs [--private] [--owner <hub-account>] [--dry-run] [plugin-name ...]
 //   --private   publish as private (only takes effect the first time a plugin is pushed)
 //   --owner     publish under this Hub account or organization instead of the manifest's owner
+//   --yes       skip lms prompts (only works once this machine is already paired)
 //   --dry-run   stage and show what would be pushed, without contacting the Hub
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -27,6 +28,7 @@ const option = name => {
 };
 
 const isPrivate = flag("--private");
+const assumeYes = flag("--yes");
 const dryRun = flag("--dry-run");
 const owner = option("--owner");
 const plugins = selectPlugins(args);
@@ -49,6 +51,7 @@ const ok = withStagedPlugins(plugins, (name, stage) => {
     return true;
   }
   console.log(`\n=== Pushing ${target}`);
-  return runLms(["push", "--yes", ...(isPrivate ? ["--private"] : [])], stage);
+  // Without --yes, lms can show its pairing prompt the first time this machine publishes.
+  return runLms(["push", ...(assumeYes ? ["--yes"] : []), ...(isPrivate ? ["--private"] : [])], stage);
 });
 process.exit(ok ? 0 : 1);
