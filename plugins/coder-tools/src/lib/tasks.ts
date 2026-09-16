@@ -1,4 +1,5 @@
 import { spawn } from "child_process";
+import { commandEnv } from "../shared/process";
 import { randomBytes } from "crypto";
 import { mkdir, open, readFile, rename, rm, stat, writeFile } from "fs/promises";
 import { join } from "path";
@@ -125,6 +126,7 @@ export class TaskManager {
     try {
       const child = spawn(shell.file, shell.args(command), {
         cwd,
+        env: commandEnv(),
         windowsHide: true,
         detached: process.platform !== "win32",
         stdio: ["ignore", handle.fd, handle.fd],

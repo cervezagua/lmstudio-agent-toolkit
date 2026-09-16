@@ -1,4 +1,5 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "child_process";
+import { commandEnv } from "../shared/process";
 import { randomUUID } from "crypto";
 
 export interface ShellSpec {
@@ -41,7 +42,7 @@ export class ShellSession {
       windowsHide: true,
       detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"],
-      env: { ...process.env, NO_COLOR: "1", TERM: "dumb" },
+      env: commandEnv({ NO_COLOR: "1", TERM: "dumb" }),
     });
     child.stdout.setEncoding("utf-8");
     child.stderr.setEncoding("utf-8");

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatRunResult, runProcess } from "./process";
+import { commandEnv, formatRunResult, runProcess } from "./process";
 import { truncate } from "./truncate";
 
 describe("truncate", () => {
@@ -71,5 +71,54 @@ describe("runProcess", () => {
     await expect(
       runProcess("definitely-not-a-real-binary-xyz", [], { cwd: process.cwd(), timeoutMs: 1000 }),
     ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
+
+describe("commandEnv", () => {
+  const withPathext = (value: string | undefined, run: () => void) => {
+    const original = process.env.PATHEXT;
+    if (value === undefined) delete process.env.PATHEXT;
+    else process.env.PATHEXT = value;
+    try {
+      run();
+    } finally {
+      if (original === undefined) delete process.env.PATHEXT;
+      else process.env.PATHEXT = original;
+    }
+  };
+
+  it("keeps the host's PATHEXT when it has one", () => {
+    withPathext(".EXE;.CMD", () => expect(commandEnv().PATHEXT).toBe(".EXE;.CMD"));
+  });
+
+  it.runIf(process.platform === "win32")("supplies one when the host has none", () => {
+    withPathext(undefined, () => expect(commandEnv().PATHEXT).toBe(".COM;.EXE;.BAT;.CMD"));
+    withPathext("   ", () => expect(commandEnv().PATHEXT).toBe(".COM;.EXE;.BAT;.CMD"));
+  });
+
+  it.runIf(process.platform !== "win32")("leaves PATHEXT alone off Windows", () => {
+    withPathext(undefined, () => expect(commandEnv().PATHEXT).toBeUndefined());
+  });
+
+  it("passes extra variables through", () => {
+    expect(commandEnv({ NO_COLOR: "1" }).NO_COLOR).toBe("1");
+  });
+
+  // The bug this exists for: LM Studio's plugin host gave us no PATHEXT, so PowerShell could not
+  // turn "node" into "node.exe" and every run_command failed with "is not recognized".
+  it.runIf(process.platform === "win32")("still resolves a bare command in PowerShell", async () => {
+    const original = process.env.PATHEXT;
+    delete process.env.PATHEXT;
+    try {
+      const result = await runProcess(
+        "powershell",
+        ["-NoProfile", "-NonInteractive", "-Command", "node --version"],
+        { cwd: process.cwd(), timeoutMs: 30000 },
+      );
+      expect(result.stderr).not.toContain("is not recognized");
+      expect(result.stdout.trim()).toMatch(/^v\d+\./);
+    } finally {
+      if (original !== undefined) process.env.PATHEXT = original;
+    }
   });
 });

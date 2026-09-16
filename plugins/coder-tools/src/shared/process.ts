@@ -20,6 +20,22 @@ export interface RunResult {
   aborted: boolean;
 }
 
+// LM Studio runs plugins inside an Electron utility process, which on Windows can hand us an
+// environment with no PATHEXT. PATH is intact, but cmd.exe and PowerShell use PATHEXT to turn a
+// bare "node" into "node.exe", so every command fails with "is not recognized". Node's own spawn()
+// has a built-in extension list and is unaffected, which is why git-tools keeps working while the
+// shell does not. Restore the four extensions that make programs runnable; deliberately not the
+// full Windows default, which also includes script types like .JS and .VBS that Windows would hand
+// to the script host.
+const FALLBACK_PATHEXT = ".COM;.EXE;.BAT;.CMD";
+
+/** The environment to give a spawned command: the plugin's own, with a usable PATHEXT on Windows. */
+export function commandEnv(extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env = { ...process.env, ...extra };
+  if (process.platform === "win32" && !env.PATHEXT?.trim()) env.PATHEXT = FALLBACK_PATHEXT;
+  return env;
+}
+
 const executableCache = new Map<string, string | null>();
 
 /** Finds an executable on PATH (honouring PATHEXT on Windows). Returns null if absent. */
@@ -67,7 +83,7 @@ export function runProcess(file: string, args: string[], options: RunOptions): P
   return new Promise((resolvePromise, reject) => {
     const child = spawn(file, args, {
       cwd: options.cwd,
-      env: options.env ?? process.env,
+      env: options.env ?? commandEnv(),
       windowsHide: true,
       detached: process.platform !== "win32", // own process group so killTree can reach children
       stdio: ["pipe", "pipe", "pipe"],
