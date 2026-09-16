@@ -34,6 +34,7 @@ const chatConfig = () => ({
   injectMemoryIndex: true,
   enableSkills: false,
   enablePlanMode: true,
+  injectGitSnapshot: false,
   maxInjectedChars: 12000,
 });
 

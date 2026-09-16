@@ -57,6 +57,18 @@ export const configSchematics = createConfigSchematics()
     20000,
   )
   .field(
+    "maxReadBytes",
+    "numeric",
+    {
+      int: true,
+      min: 8192,
+      max: 10485760,
+      displayName: "Max Read Bytes",
+      subtitle: "Largest file read_file will read whole. Bigger files must be read with offset and limit, or searched with grep.",
+    },
+    262144,
+  )
+  .field(
     "blockedCommandPatterns",
     "stringArray",
     {

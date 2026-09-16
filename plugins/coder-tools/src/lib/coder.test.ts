@@ -80,3 +80,50 @@ describe("search", () => {
     expect(result.matches).toHaveLength(1);
   });
 });
+
+describe("grep output modes", () => {
+  let root: string;
+
+  beforeAll(async () => {
+    root = await mkdtemp(join(tmpdir(), "coder-grepmodes-"));
+    await writeFile(join(root, "a.ts"), "import x\nconst target = 1;\nuse(target);\ndone();\n");
+    await writeFile(join(root, "b.ts"), "no hits here\n");
+    await writeFile(join(root, "c.ts"), "target\ntarget\n");
+  });
+
+  afterAll(async () => {
+    await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  });
+
+  const grep = (extra: Record<string, unknown> = {}) =>
+    grepFiles({ root, searchPath: root, pattern: "target", ignoreCase: false, maxResults: 50, ...extra });
+
+  it("lists only file paths in files_with_matches mode", async () => {
+    const result = await grep({ outputMode: "files_with_matches" });
+    expect(result.matches).toEqual(["a.ts", "c.ts"]);
+  });
+
+  it("counts matches per file in count mode", async () => {
+    const result = await grep({ outputMode: "count" });
+    expect(result.matches).toEqual(["a.ts: 2", "c.ts: 2"]);
+  });
+
+  it("includes context lines around each match", async () => {
+    const result = await grep({ context: 1, maxResults: 1 });
+    expect(result.matches[0]).toBe("a.ts:1- import x\na.ts:2: const target = 1;\na.ts:3- use(target);");
+  });
+
+  it("pages through matches with offset", async () => {
+    const all = await grep();
+    expect(all.matches).toHaveLength(4);
+    const paged = await grep({ offset: 2 });
+    expect(paged.matches).toEqual(all.matches.slice(2));
+    expect((await grep({ offset: 99 })).matches).toEqual([]);
+  });
+
+  it("reports truncation when more results exist", async () => {
+    const result = await grep({ maxResults: 2 });
+    expect(result).toMatchObject({ truncated: true });
+    expect(result.matches).toHaveLength(2);
+  });
+});

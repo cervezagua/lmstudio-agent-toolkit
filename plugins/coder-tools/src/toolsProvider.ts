@@ -6,6 +6,11 @@ import { configSchematics } from "./config";
 import { BackupStore } from "./lib/backups";
 import { findBlockedPattern, parsePatterns } from "./lib/blocklist";
 import { applyEdit, applyEdits, insertLines, previewDiff } from "./lib/edit";
+import { assertFresh, forget, recordRead, recordWrite } from "./lib/fileState";
+import { assertReadableSize, looksBinary, readTextSlice } from "./lib/readText";
+import { writeFileAtomic } from "./lib/safeWrite";
+import { overflowNote, storeOverflow } from "./lib/overflow";
+import { notFoundMessage } from "./lib/suggest";
 import { availableCheckers, runChecker } from "./lib/diagnostics";
 import { editNotebook, parseNotebook, renderNotebook } from "./lib/notebook";
 import { pickSubagentModel, runSubagent } from "./lib/subagent";
@@ -19,6 +24,7 @@ import { findExecutable, formatRunResult, runProcess } from "./shared/process";
 import { truncate } from "./shared/truncate";
 
 const MAX_LINE_CHARS = 2000;
+const MAX_EDIT_BYTES = 5 * 1024 * 1024;
 
 function resolveShellName(choice: string): string {
   if (choice !== "auto") return choice;
@@ -58,6 +64,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
   const config = ctl.getPluginConfig(configSchematics);
   const root = config.get("rootDirectory").trim() || ctl.getWorkingDirectory();
   const maxOutputChars = config.get("maxOutputChars");
+  const maxReadBytes = config.get("maxReadBytes");
   const rootStat = await stat(root).catch(() => null);
   if (!rootStat?.isDirectory()) {
     throw new Error(`coder-tools: root directory "${root}" does not exist or is not a directory.`);
@@ -67,6 +74,39 @@ export async function toolsProvider(ctl: ToolsProviderController) {
   const stateDir = join(ctl.getWorkingDirectory(), ".coder-tools");
   const backups = new BackupStore(join(stateDir, "backups"));
   const readIfExists = (file: string) => readFile(file, "utf-8").catch(() => null);
+
+  /** Paths resolve inside the project root, or inside the plugin's own state folder (overflow output). */
+  const resolveReadable = async (path: string) => {
+    try {
+      return await resolveSafe(root, path);
+    } catch (error) {
+      try {
+        return await resolveSafe(stateDir, path);
+      } catch {
+        throw error; // report the project-root error, which is the one the model needs
+      }
+    }
+  };
+
+  /**
+   * Shared preparation for every tool that changes a file: resolve it, refuse notebooks and huge
+   * files, and refuse editing a version the model has not read (or that changed since it did).
+   */
+  const openForEdit = async (path: string) => {
+    const file = await resolveSafe(root, path);
+    if (file.toLowerCase().endsWith(".ipynb")) {
+      throw new ToolError(`${show(file)} is a Jupyter notebook; use notebook_edit instead of text edits.`);
+    }
+    const info = await stat(file).catch(() => null);
+    if (!info) throw new ToolError(await notFoundMessage(root, path, `${show(file)} does not exist.`));
+    if (info.isDirectory()) throw new ToolError(`${show(file)} is a directory.`);
+    if (info.size > MAX_EDIT_BYTES) {
+      throw new ToolError(`${show(file)} is ${Math.round(info.size / 1024 / 1024)} MB, too large to edit safely.`);
+    }
+    const content = await readFile(file, "utf-8");
+    await assertFresh(file, show(file), content);
+    return { file, content };
+  };
   // memory-tools' plan mode: while planning, the tools that change things are not offered at all.
   const planning = (await readMode(ctl.getWorkingDirectory())).planning;
 
@@ -87,26 +127,25 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         limit: z.number().int().min(1).optional(),
       },
       implementation: safe(async ({ path, offset, limit }) => {
-        const file = await resolveSafe(root, path);
-        const buffer = await readFile(file);
-        if (buffer.subarray(0, 8000).includes(0)) {
-          throw new ToolError(`"${path}" looks like a binary file (${buffer.length} bytes).`);
-        }
-        const lines = buffer.toString("utf-8").split(/\r?\n/);
-        const start = (offset ?? 1) - 1;
-        const end = Math.min(lines.length, start + (limit ?? 2000));
-        if (start >= lines.length && lines.length > 0) {
-          throw new ToolError(`offset ${offset} is past the end of the file (${lines.length} lines).`);
-        }
+        const file = await resolveReadable(path);
+        const windowed = offset !== undefined || limit !== undefined;
+        await assertReadableSize(file, show(file), maxReadBytes, windowed);
+        if (await looksBinary(file)) throw new ToolError(`"${path}" looks like a binary file.`);
+
+        const { lines, start, totalLines } = await readTextSlice(file, offset ?? 1, limit ?? 2000);
         const body = lines
-          .slice(start, end)
           .map((line, i) => {
             const clipped = line.length > MAX_LINE_CHARS ? line.slice(0, MAX_LINE_CHARS) + "…" : line;
-            return `${start + i + 1}\t${clipped}`;
+            return `${start + i}\t${clipped}`;
           })
           .join("\n");
+        const end = start + lines.length - 1;
         const note =
-          end < lines.length ? `\n\n[showing lines ${start + 1}-${end} of ${lines.length}; use offset to read more]` : "";
+          end < totalLines ? `\n\n[showing lines ${start}-${end} of ${totalLines}; use offset to read more]` : "";
+
+        // Remember what the model has seen, so edits to a stale view can be refused. The content is
+        // re-read inside recordRead so the hash matches the bytes on disk, line endings included.
+        if (!windowed) await recordRead(file);
         return truncate(body, maxOutputChars) + note || "(empty file)";
       }),
     }),
@@ -128,7 +167,8 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         const existing = await readIfExists(file);
         await mkdir(dirname(file), { recursive: true });
         await backups.save(file, existing);
-        await writeFile(file, content, "utf-8");
+        await writeFileAtomic(file, content);
+        await recordWrite(file, content);
         return `${existing === null ? "Created" : "Overwrote"} ${show(file)} (${Buffer.byteLength(content)} bytes).`;
       }),
     }),
@@ -151,12 +191,12 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         preview: z.boolean().optional(),
       },
       implementation: safe(async ({ path, old_string, new_string, replace_all, preview }) => {
-        const file = await resolveSafe(root, path);
-        const original = await readFile(file, "utf-8");
+        const { file, content: original } = await openForEdit(path);
         const { content, replacements } = applyEdit(original, old_string, new_string, replace_all ?? false);
         if (preview) return `Preview of ${show(file)} (nothing written):\n${previewDiff(original, content)}`;
         await backups.save(file, original);
-        await writeFile(file, content, "utf-8");
+        await writeFileAtomic(file, content);
+        await recordWrite(file, content);
         return `Edited ${show(file)}: ${replacements} replacement${replacements === 1 ? "" : "s"}.`;
       }),
     }),
@@ -178,12 +218,12 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         preview: z.boolean().optional(),
       },
       implementation: safe(async ({ path, edits, preview }) => {
-        const file = await resolveSafe(root, path);
-        const original = await readFile(file, "utf-8");
+        const { file, content: original } = await openForEdit(path);
         const { content, replacements } = applyEdits(original, edits);
         if (preview) return `Preview of ${show(file)} (nothing written):\n${previewDiff(original, content)}`;
         await backups.save(file, original);
-        await writeFile(file, content, "utf-8");
+        await writeFileAtomic(file, content);
+        await recordWrite(file, content);
         return `Edited ${show(file)}: ${edits.length} edits, ${replacements} replacements.`;
       }),
     }),
@@ -203,12 +243,16 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         preview: z.boolean().optional(),
       },
       implementation: safe(async ({ path, after_line, content, preview }) => {
-        const file = await resolveSafe(root, path);
-        const original = (await readIfExists(file)) ?? "";
+        // Inserting into a file that does not exist yet is allowed, so only existing files go
+        // through the read-before-edit check.
+        const existing = await readIfExists(await resolveSafe(root, path));
+        const { file, content: original } =
+          existing === null ? { file: await resolveSafe(root, path), content: "" } : await openForEdit(path);
         const updated = insertLines(original, after_line, content);
         if (preview) return `Preview of ${show(file)} (nothing written):\n${previewDiff(original, updated)}`;
-        await backups.save(file, original === "" ? null : original);
-        await writeFile(file, updated, "utf-8");
+        await backups.save(file, existing === null ? null : original);
+        await writeFileAtomic(file, updated);
+        await recordWrite(file, updated);
         return `Inserted ${content.split(/\r?\n/).length} line(s) into ${show(file)} after line ${after_line}.`;
       }),
     }),
@@ -222,6 +266,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       implementation: safe(async ({ path }) => {
         const file = await resolveSafe(root, path);
         const { restored, savedAt } = await backups.restore(file);
+        forget(file);
         return restored === "deleted"
           ? `${show(file)} did not exist before that change, so it has been removed again.`
           : `Restored ${show(file)} to its content from ${savedAt}.`;
@@ -269,6 +314,9 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       description: text`
         Search file contents with a regular expression. Returns "path:line: text" for each matching
         line. Optionally restrict to a sub-path and/or a file glob like "*.py".
+        output_mode "files_with_matches" lists only the files (cheapest way to answer "where is X
+        used?"), "count" gives matches per file. context adds surrounding lines, offset pages
+        through results.
       `,
       parameters: {
         pattern: z.string(),
@@ -276,8 +324,11 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         glob: z.string().optional(),
         ignore_case: z.boolean().optional(),
         max_results: z.number().int().min(1).max(1000).optional(),
+        context: z.number().int().min(0).max(10).optional(),
+        output_mode: z.enum(["content", "files_with_matches", "count"]).optional(),
+        offset: z.number().int().min(0).optional(),
       },
-      implementation: safe(async ({ pattern, path, glob, ignore_case, max_results }, { signal }) => {
+      implementation: safe(async ({ pattern, path, glob, ignore_case, max_results, context, output_mode, offset }, { signal }) => {
         try {
           new RegExp(pattern);
         } catch (error) {
@@ -285,19 +336,26 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         }
         const searchPath = await resolveSafe(root, path ?? ".");
         const maxResults = max_results ?? 100;
+        const mode = output_mode ?? "content";
+        const skip = offset ?? 0;
         const rg = findExecutable("rg");
         let lines: string[];
         let truncated: boolean;
         if (rg) {
-          const args = ["--line-number", "--no-heading", "--color", "never", "--max-columns", "300"];
+          const args = ["--color", "never", "--max-columns", "300"];
+          if (mode === "files_with_matches") args.push("--files-with-matches");
+          else if (mode === "count") args.push("--count");
+          else args.push("--line-number", "--no-heading");
+          if (context && mode === "content") args.push("--context", String(context));
           if (ignore_case) args.push("-i");
           if (glob) args.push("-g", glob);
           args.push("-e", pattern, "--", relative(root, searchPath) || ".");
           const result = await runProcess(rg, args, { cwd: root, timeoutMs: 60_000, signal });
           if (result.exitCode === 2) throw new ToolError(result.stderr.trim() || "ripgrep failed");
           const all = result.stdout.split(/\r?\n/).filter(Boolean).map(l => l.replace(/\\/g, "/"));
-          lines = all.slice(0, maxResults).map(l => l.replace(/^([^:]+:\d+):/, "$1: "));
-          truncated = all.length > maxResults;
+          const paged = all.slice(skip, skip + maxResults);
+          lines = mode === "content" ? paged.map(l => l.replace(/^([^:]+:\d+):/, "$1: ")) : paged;
+          truncated = all.length > skip + maxResults;
         } else {
           const result = await grepFiles({
             root,
@@ -307,12 +365,17 @@ export async function toolsProvider(ctl: ToolsProviderController) {
             ignoreCase: ignore_case ?? false,
             maxResults,
             signal,
+            context,
+            outputMode: mode,
+            offset: skip,
           });
           lines = result.matches;
           truncated = result.truncated;
         }
-        if (lines.length === 0) return "No matches.";
-        const note = truncated ? `\n[stopped at ${maxResults} results; narrow the search]` : "";
+        if (lines.length === 0) return skip > 0 ? "No more matches." : "No matches.";
+        const note = truncated
+          ? `\n[stopped at ${maxResults} results; narrow the search, or pass offset ${skip + maxResults} for more]`
+          : "";
         return truncate(lines.join("\n"), maxOutputChars) + note;
       }),
     }),
@@ -327,7 +390,9 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         parameters: { path: z.string() },
         implementation: safe(async ({ path }) => {
           const file = await resolveSafe(root, path);
-          const notebook = parseNotebook(await readFile(file, "utf-8"));
+          const raw = await readFile(file, "utf-8");
+          await recordRead(file, raw);
+          const notebook = parseNotebook(raw);
           return truncate(`${show(file)} (${notebook.cells.length} cells)\n\n${renderNotebook(notebook)}`, maxOutputChars);
         }),
       }),
@@ -349,6 +414,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         implementation: safe(async ({ path, cell_index, mode, source, cell_type }) => {
           const file = await resolveSafe(root, path);
           const original = await readFile(file, "utf-8");
+          await assertFresh(file, show(file), original);
           const { notebook, message } = editNotebook(parseNotebook(original), {
             index: cell_index,
             mode,
@@ -356,7 +422,9 @@ export async function toolsProvider(ctl: ToolsProviderController) {
             cellType: cell_type,
           });
           await backups.save(file, original);
-          await writeFile(file, JSON.stringify(notebook, null, 1) + "\n", "utf-8");
+          const serialized = JSON.stringify(notebook, null, 1) + "\n";
+          await writeFileAtomic(file, serialized);
+          await recordWrite(file, serialized);
           return `${message} (${show(file)})`;
         }),
       }),
@@ -369,6 +437,15 @@ export async function toolsProvider(ctl: ToolsProviderController) {
     const shellChoice = config.get("shell");
     const shellName = resolveShellName(shellChoice);
     const persistent = config.get("persistentShell");
+    /** Keeps the whole output when it is far past the limit, instead of dropping the middle. */
+    const withOverflow = async (result: Parameters<typeof formatRunResult>[0]) => {
+      const formatted = formatRunResult(result, maxOutputChars);
+      const full = [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join("\n");
+      if (full.length <= maxOutputChars * 2) return formatted;
+      const file = await storeOverflow(join(stateDir, "output"), full);
+      return overflowNote(file, formatted, maxOutputChars);
+    };
+
     const checkCommand = (command: string) => {
       const blocked = findBlockedPattern(command, extraPatterns);
       if (blocked) {
@@ -387,12 +464,15 @@ export async function toolsProvider(ctl: ToolsProviderController) {
               : "Each call runs in a fresh shell."
           }
           Starts in the project root; pass cwd (relative to the root) to run elsewhere.
+          Pass description: one short line saying what the command does, shown to the person who
+          approves it. Very long output is saved to a file and its path returned, so nothing is lost.
           Non-interactive only: commands that wait for input hang until the timeout.
           Default timeout is ${defaultTimeout}s; use task_run for servers, watchers and long builds.
           ${planning ? PLANNING_NOTE : ""}
         `,
         parameters: {
           command: z.string(),
+          description: z.string().optional(),
           cwd: z.string().optional(),
           timeout_seconds: z
             .number()
@@ -401,12 +481,13 @@ export async function toolsProvider(ctl: ToolsProviderController) {
             .max(defaultTimeout * 10)
             .optional(),
         },
-        implementation: safe(async ({ command, cwd, timeout_seconds }, ctx) => {
+        implementation: safe(async ({ command, description, cwd, timeout_seconds }, ctx) => {
           const { signal } = ctx;
           checkCommand(command);
           const workingDir = await resolveSafe(root, cwd ?? ".");
           const timeoutMs = (timeout_seconds ?? defaultTimeout) * 1000;
-          ctx.status(`Running: ${command.length > 80 ? command.slice(0, 80) + "…" : command}`);
+          const label = description?.trim() || (command.length > 80 ? command.slice(0, 80) + "…" : command);
+          ctx.status(`Running: ${label}`);
 
           if (persistent) {
             const spec = sessionSpec(shellChoice);
@@ -423,16 +504,15 @@ export async function toolsProvider(ctl: ToolsProviderController) {
             if (result.timedOut) {
               return `[command timed out after ${timeoutMs / 1000}s; the shell session was restarted]\n${truncate(result.stdout, maxOutputChars)}`;
             }
-            return formatRunResult(
+            return withOverflow(
               { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr, timedOut: false, aborted: false },
-              maxOutputChars,
             );
           }
 
           const { file, args } = shellInvocation(shellChoice, command);
           try {
             const result = await runProcess(file, args, { cwd: workingDir, timeoutMs, signal });
-            return formatRunResult(result, maxOutputChars);
+            return withOverflow(result);
           } catch (error: any) {
             if (error?.code === "ENOENT") throw new ToolError(`Shell "${file}" was not found on PATH.`);
             throw error;

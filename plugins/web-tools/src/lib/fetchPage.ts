@@ -15,6 +15,9 @@ export interface FetchedPage {
   markdown: string;
   /** How the content was obtained, so the tool can tell the model what it is looking at. */
   kind: "html" | "pdf" | "text";
+  /** Set when the server redirected to a different host, which is worth showing to a person. */
+  redirectedFrom?: string;
+  fromCache?: boolean;
 }
 
 function absolutize(href: string | null, base: string): string {
@@ -110,6 +113,49 @@ async function pdfToText(bytes: Uint8Array): Promise<{ title: string; text: stri
 }
 
 const RETRYABLE_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+const MAX_URL_LENGTH = 2048;
+const CACHE_TTL_MS = 10 * 60 * 1000;
+const CACHE_MAX_ENTRIES = 20;
+const CACHE_MAX_BYTES = 20 * 1024 * 1024;
+
+interface CacheEntry {
+  page: FetchedPage;
+  storedAt: number;
+  bytes: number;
+}
+
+/**
+ * Models re-fetch the same page repeatedly while working through it. This keeps recent pages in
+ * memory for a few minutes; insertion order gives a simple oldest-out policy.
+ */
+const cache = new Map<string, CacheEntry>();
+
+function cacheGet(url: string): FetchedPage | null {
+  const entry = cache.get(url);
+  if (!entry) return null;
+  if (Date.now() - entry.storedAt > CACHE_TTL_MS) {
+    cache.delete(url);
+    return null;
+  }
+  return entry.page;
+}
+
+function cacheSet(url: string, page: FetchedPage): void {
+  const bytes = page.markdown.length;
+  if (bytes > CACHE_MAX_BYTES) return; // one huge page should not evict everything else
+  cache.set(url, { page, storedAt: Date.now(), bytes });
+  let total = [...cache.values()].reduce((sum, entry) => sum + entry.bytes, 0);
+  for (const [key, entry] of cache) {
+    if (cache.size <= CACHE_MAX_ENTRIES && total <= CACHE_MAX_BYTES) break;
+    cache.delete(key);
+    total -= entry.bytes;
+  }
+}
+
+/** Test helper. */
+export function clearFetchCache(): void {
+  cache.clear();
+}
 
 /** Waits for the Retry-After header when the server sends a sensible one, otherwise backs off. */
 function retryDelayMs(response: Response | null, attempt: number): number {
@@ -121,7 +167,7 @@ function retryDelayMs(response: Response | null, attempt: number): number {
 
 export async function fetchPage(
   url: string,
-  options: { signal?: AbortSignal; timeoutMs?: number; retries?: number } = {},
+  options: { signal?: AbortSignal; timeoutMs?: number; retries?: number; refresh?: boolean } = {},
 ): Promise<FetchedPage> {
   let parsed: URL;
   try {
@@ -131,6 +177,17 @@ export async function fetchPage(
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new ToolError("Only http and https URLs can be fetched.");
+  }
+  if (parsed.username || parsed.password) {
+    throw new ToolError("URLs with a username or password are refused; credentials do not belong in a fetched URL.");
+  }
+  if (url.length > MAX_URL_LENGTH) {
+    throw new ToolError(`That URL is ${url.length} characters, over the ${MAX_URL_LENGTH} character limit.`);
+  }
+
+  if (!options.refresh) {
+    const cached = cacheGet(parsed.href);
+    if (cached) return { ...cached, fromCache: true };
   }
 
   const retries = options.retries ?? 2;
@@ -172,13 +229,27 @@ export async function fetchPage(
     throw new ToolError(`HTTP ${response.status} ${response.statusText} for ${response.url || parsed.href}${retried}.`);
   }
   const finalUrl = response.url || parsed.href;
+  // Following redirects is convenient, but a hop to another host is worth showing to the model and
+  // to the person approving the call.
+  const finalHost = (() => {
+    try {
+      return new URL(finalUrl).host;
+    } catch {
+      return parsed.host;
+    }
+  })();
+  const redirectedFrom = finalHost !== parsed.host ? parsed.host : undefined;
+  const remember = (page: FetchedPage) => {
+    cacheSet(parsed.href, page);
+    return page;
+  };
 
   if (contentType === "application/pdf" || (contentType === "" && parsed.pathname.toLowerCase().endsWith(".pdf"))) {
     const buffer = new Uint8Array(await response.arrayBuffer());
     if (buffer.byteLength > MAX_BYTES) throw new ToolError(`The PDF at ${finalUrl} is larger than 5 MB.`);
     try {
       const { title, text } = await pdfToText(buffer);
-      return { url: finalUrl, title, contentType: "application/pdf", markdown: text, kind: "pdf" };
+      return remember({ url: finalUrl, title, contentType: "application/pdf", markdown: text, kind: "pdf", redirectedFrom });
     } catch (error) {
       throw new ToolError(`Could not read the PDF at ${finalUrl}: ${(error as Error).message}`);
     }
@@ -193,7 +264,7 @@ export async function fetchPage(
   const body = await readLimited(response, MAX_BYTES);
   if (contentType.includes("html") || (contentType === "" && /<html|<body|<!doctype html/i.test(body.slice(0, 2000)))) {
     const { title, markdown } = htmlToMarkdown(body, finalUrl);
-    return { url: finalUrl, title, contentType: contentType || "text/html", markdown, kind: "html" };
+    return remember({ url: finalUrl, title, contentType: contentType || "text/html", markdown, kind: "html", redirectedFrom });
   }
-  return { url: finalUrl, title: "", contentType, markdown: body, kind: "text" };
+  return remember({ url: finalUrl, title: "", contentType, markdown: body, kind: "text", redirectedFrom });
 }

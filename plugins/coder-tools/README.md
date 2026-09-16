@@ -6,13 +6,13 @@ File and shell tools for LM Studio models: read, write and edit files, search a 
 
 | Tool | Parameters | What it does |
 |---|---|---|
-| `read_file` | `path`, `offset?`, `limit?` | Returns lines prefixed with their line numbers. `offset` (1-based) and `limit` page through large files (default: first 2000 lines). Binary files are refused. |
+| `read_file` | `path`, `offset?`, `limit?` | Returns lines prefixed with their line numbers. `offset` (1-based) and `limit` page through large files (default: first 2000 lines), and only the requested lines are read into memory. Binary files, and whole-file reads over **Max Read Bytes**, are refused. |
 | `write_file` | `path`, `content` | Creates or overwrites a file. Missing parent folders are created. |
 | `edit_file` | `path`, `old_string`, `new_string`, `replace_all?` | Exact search-and-replace. `old_string` must appear exactly once unless `replace_all` is true. LF text matches Windows CRLF files. |
 | `list_dir` | `path?` | Lists a folder, subfolders first (marked with `/`). |
 | `glob` | `pattern`, `path?` | Finds files by pattern (`**/*.ts`), most recently modified first. |
-| `grep` | `pattern`, `path?`, `glob?`, `ignore_case?`, `max_results?` | Regex search of file contents; each result is `path:line: text`. Uses ripgrep if installed, otherwise a built-in search. |
-| `run_command` | `command`, `cwd?`, `timeout_seconds?` | Runs a shell command and returns the exit code, stdout and stderr. With **Persistent Shell Session** on, every command shares one shell, so `cd`, environment variables and activated virtualenvs carry over. Only present when **Allow Shell Commands** is on. |
+| `grep` | `pattern`, `path?`, `glob?`, `ignore_case?`, `max_results?`, `context?`, `output_mode?`, `offset?` | Regex search of file contents. `output_mode` is `content` (default), `files_with_matches` (paths only, the cheapest way to answer "where is X used?") or `count`. `context` adds surrounding lines, `offset` pages through results. Uses ripgrep if installed, otherwise a built-in search. |
+| `run_command` | `command`, `description?`, `cwd?`, `timeout_seconds?` | Runs a shell command and returns the exit code, stdout and stderr. `description` is one line saying what it does, shown while it runs. Output far past the limit is written to a file and its path returned, so nothing is lost. With **Persistent Shell Session** on, every command shares one shell, so `cd`, environment variables and activated virtualenvs carry over. Only present when **Allow Shell Commands** is on. |
 | `shell_reset` | – | Restarts that shell session, clearing its directory and variables. Only with the session enabled. |
 
 ### Editing tools
@@ -51,15 +51,26 @@ All tools skip `node_modules`, `.git`, `dist`, `build`, `.venv` and similar fold
 | Allow Shell Commands | on | Off removes `run_command` from the model's tool list. |
 | Shell | auto | `auto` = `pwsh` (or Windows PowerShell) on Windows, `bash` (or `sh`) elsewhere. |
 | Default Command Timeout (seconds) | 60 | The model may ask for up to 10× this. Processes that time out are killed along with their child processes. |
-| Max Output Characters | 20000 | Lower it for models with small context windows. |
+| Max Output Characters | 20000 | Lower it for models with small context windows. Output far past this is saved to a file instead of being thrown away. |
+| Max Read Bytes | 256 KB | Largest file `read_file` will read whole. Bigger files must be read with `offset`/`limit`, or searched with `grep`. |
 | Extra Blocked Command Patterns | – | Regular expressions (case-insensitive), added to the built-in list. For example, `git\s+push` stops the model from pushing. |
 | Persistent Shell Session | on | One shell for the whole chat, so `cd` and environment variables stick. Off runs each command in a fresh shell. |
 | Background Tasks | on | Adds the four `task_*` tools. |
+| Diagnostics | on | Adds `diagnostics`, which runs the project's own checkers (tsc, ESLint, Ruff, Pyright, cargo, go vet). |
+| Research Sub-agent | off | Adds `run_subagent`, a read-only nested agent for search-heavy questions. Costs extra generation time. |
+| Sub-agent Model | *(first loaded model)* | Which model the sub-agent runs on. |
 | Jupyter Notebook Tools | off | Adds `notebook_read` and `notebook_edit`. Leave it off unless you work with notebooks: fewer tools means better tool choice by small models. |
 
 ## Plan mode
 
 If memory-tools is enabled too, `enter_plan_mode` makes this plugin withhold every tool that changes things (`write_file`, `edit_file`, `multi_edit`, `insert_lines`, `undo_edit`, `notebook_edit`, `task_run`, `task_stop`) until `exit_plan_mode`. Reading, searching and `run_command` stay, and `run_command`'s description tells the model to keep to read-only commands. See memory-tools' README.
+
+## Protecting your files
+
+- **Read before edit.** A file must have been read in this chat before it can be edited, and if it changed on disk since that read, the edit is refused with a note to read it again. This stops a model overwriting work it cannot see. Antivirus and cloud-sync touching a file without changing it are tolerated. The record lives in the plugin process, so after LM Studio restarts the model is asked to read once more.
+- **Atomic writes.** Files are written to a temporary file and renamed into place, so an interrupted write can't leave a half-written or empty file.
+- **Undo.** `undo_edit` restores this chat's last change to a file, from a copy kept outside your project.
+- **Diffs first.** Any edit can be run with `preview: true` to see the change before writing.
 
 ## Safety
 

@@ -155,8 +155,36 @@ export class MemoryStore {
   }
 }
 
-export function renderIndex(memories: Memory[]): string {
+const INDEX_MAX_ENTRIES = 200;
+const INDEX_MAX_CHARS = 25_000;
+const STALE_AFTER_DAYS = 30;
+
+/**
+ * The index is injected into every new chat, so it has to stay small and honest: one line per
+ * memory, oldest ones marked stale, and a hard cap so a big collection cannot crowd out the
+ * conversation.
+ */
+export function renderIndex(memories: Memory[], now = new Date()): string {
   if (memories.length === 0) return "# Memory index\n\n(no memories saved yet)\n";
-  const lines = memories.map(m => `- [${m.name}](${m.name}.md) (${m.type}) — ${m.description || "(no description)"}`);
-  return `# Memory index\n\n${lines.join("\n")}\n`;
+
+  const staleBefore = now.getTime() - STALE_AFTER_DAYS * 24 * 60 * 60 * 1000;
+  const lines: string[] = [];
+  let used = 0;
+  let dropped = 0;
+
+  for (const memory of memories) {
+    const updated = Date.parse(memory.updated);
+    const stale = Number.isFinite(updated) && updated < staleBefore ? " (stale)" : "";
+    const line = `- [${memory.name}](${memory.name}.md) (${memory.type})${stale} — ${memory.description || "(no description)"}`;
+    if (lines.length >= INDEX_MAX_ENTRIES || used + line.length > INDEX_MAX_CHARS) {
+      dropped++;
+      continue;
+    }
+    lines.push(line);
+    used += line.length + 1;
+  }
+
+  const notes = ["Keep each entry to a single line."];
+  if (dropped > 0) notes.push(`${dropped} older memories are not listed; find them with memory_search.`);
+  return `# Memory index\n\n${lines.join("\n")}\n\n${notes.join(" ")}\n`;
 }

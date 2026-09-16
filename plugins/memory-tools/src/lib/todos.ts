@@ -39,6 +39,18 @@ export async function writeTodos(workingDirectory: string, todos: Todo[]) {
   await writeFile(file, JSON.stringify(todos, null, 2), "utf-8");
 }
 
+/**
+ * Agents tend to stop the moment the last task is ticked off, without checking their work. When a
+ * real list finishes and nothing in it mentioned verifying, ask for one check before wrapping up.
+ */
+export function completionNudge(todos: Todo[]): string | null {
+  if (todos.length < 3) return null;
+  if (!todos.every(todo => todo.status === "completed")) return null;
+  const mentionsChecking = todos.some(todo => /\b(verify|verified|test|tests|check|run|lint|typecheck|build)\b/i.test(todo.content));
+  if (mentionsChecking) return null;
+  return "All items are done. Before summarizing, verify the change actually works (run the tests, or diagnostics).";
+}
+
 export function renderTodos(todos: Todo[]): string {
   if (todos.length === 0) return "No todos.";
   const mark: Record<TodoStatus, string> = { pending: "[ ]", in_progress: "[>]", completed: "[x]" };

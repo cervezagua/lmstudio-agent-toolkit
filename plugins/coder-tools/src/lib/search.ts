@@ -39,6 +39,8 @@ export async function globFiles({ cwd, pattern, limit, includeHidden = true }: G
   return { files: entries.slice(0, limit).map(e => e.path), total: entries.length };
 }
 
+export type GrepOutputMode = "content" | "files_with_matches" | "count";
+
 export interface GrepOptions {
   root: string;
   searchPath: string;
@@ -47,6 +49,12 @@ export interface GrepOptions {
   ignoreCase: boolean;
   maxResults: number;
   signal?: AbortSignal;
+  /** Lines of context to show around each matching line (content mode only). */
+  context?: number;
+  /** content: matching lines; files_with_matches: paths only; count: matches per file. */
+  outputMode?: GrepOutputMode;
+  /** Skip this many results before returning any, so the model can page through matches. */
+  offset?: number;
 }
 
 export interface GrepResult {
@@ -73,8 +81,15 @@ export async function grepFiles(options: GrepOptions): Promise<GrepResult> {
         })
       ).sort();
 
+  const mode = options.outputMode ?? "content";
+  const context = Math.max(0, Math.min(options.context ?? 0, 10));
+  const skip = Math.max(0, options.offset ?? 0);
+  const clip = (line: string) => (line.length > 300 ? line.slice(0, 300) + "…" : line);
+
   const matches: string[] = [];
   let filesSearched = 0;
+  let seen = 0; // results found, including those skipped by offset
+
   for (const file of files) {
     if (options.signal?.aborted) break;
     try {
@@ -83,13 +98,36 @@ export async function grepFiles(options: GrepOptions): Promise<GrepResult> {
       if (buffer.subarray(0, 8000).includes(0)) continue; // binary
       filesSearched++;
       const lines = buffer.toString("utf-8").split(/\r?\n/);
+      const shown = displayPath(options.root, file);
+
+      if (mode !== "content") {
+        // One result per file: its path, or its path and match count.
+        const count = lines.filter(line => regex.test(line)).length;
+        if (count === 0) continue;
+        seen++;
+        if (seen <= skip) continue;
+        matches.push(mode === "count" ? `${shown}: ${count}` : shown);
+        if (matches.length >= options.maxResults) return { matches, truncated: true, filesSearched };
+        continue;
+      }
+
       for (let i = 0; i < lines.length; i++) {
-        if (regex.test(lines[i])) {
-          const line = lines[i].length > 300 ? lines[i].slice(0, 300) + "…" : lines[i];
-          matches.push(`${displayPath(options.root, file)}:${i + 1}: ${line}`);
-          if (matches.length >= options.maxResults) {
-            return { matches, truncated: true, filesSearched };
+        if (!regex.test(lines[i])) continue;
+        seen++;
+        if (seen <= skip) continue;
+        if (context === 0) {
+          matches.push(`${shown}:${i + 1}: ${clip(lines[i])}`);
+        } else {
+          const from = Math.max(0, i - context);
+          const to = Math.min(lines.length - 1, i + context);
+          const block = [];
+          for (let j = from; j <= to; j++) {
+            block.push(`${shown}:${j + 1}${j === i ? ":" : "-"} ${clip(lines[j])}`);
           }
+          matches.push(block.join("\n"));
+        }
+        if (matches.length >= options.maxResults) {
+          return { matches, truncated: true, filesSearched };
         }
       }
     } catch {

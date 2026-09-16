@@ -7,7 +7,7 @@ Web search, page reading, and a real browser for LM Studio models. Search runs t
 | Tool | Parameters | What it does |
 |---|---|---|
 | `web_search` | `query`, `count?` | Titles, URLs and snippets from the configured search backend |
-| `fetch_url` | `url`, `max_chars?` | Downloads a page and returns its main content as markdown (Readability + Turndown), with absolute links. Plain text and JSON come back as-is. Non-text content (images, PDFs, …) is refused. Downloads are capped at 5 MB with a 30 s timeout. |
+| `fetch_url` | `url`, `max_chars?`, `offset?`, `refresh?` | Downloads a page and returns its main content as markdown (Readability + Turndown), with absolute links. Also reads PDFs page by page; plain text and JSON come back as-is. `offset` continues a long document where the last call stopped. Results are cached for ten minutes unless `refresh` is set, and a redirect to another host is reported in the result. Downloads are capped at 5 MB with a 30 s timeout, and retried on temporary failures. |
 | `browser_open` | `url` | Opens the URL in a real browser (runs JavaScript) and returns a snapshot |
 | `browser_snapshot` | – | A fresh snapshot of the current page |
 | `browser_click` | `ref` | Clicks element `[ref]` from the latest snapshot, then returns the new snapshot |
@@ -64,6 +64,7 @@ server:
 | SearXNG URL | chat | `http://localhost:8888` | |
 | Default Search Results | chat | 8 | The model can ask for up to 20. |
 | Max Page Characters | chat | 15000 | Applies to `fetch_url` and snapshots. Lower it for small context windows. |
+| Browser Fallback for fetch_url | chat | on | When a fetched page has almost no text (a JavaScript-only site), render it in the browser instead. |
 | Enable Browser Tools | chat | on | Off leaves only `web_search` and `fetch_url`. |
 | Browser | chat | msedge | `msedge` and `chrome` use the installed browser. `chromium` needs `npx playwright install chromium` in the plugin folder. |
 | Headless Browser | chat | on | Turn it off to watch the model use the browser. |

@@ -49,15 +49,17 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         JSON. Long documents are cut off: pass offset (characters already read) to continue where
         the previous call stopped, or a bigger max_chars.
         Pages that only render through JavaScript are retried automatically in the browser.
+        Recent pages are cached for a few minutes; pass refresh to fetch again.
       `,
       parameters: {
         url: z.string(),
         max_chars: z.number().int().min(500).max(200000).optional(),
         offset: z.number().int().min(0).optional(),
+        refresh: z.boolean().optional(),
       },
-      implementation: safe(async ({ url, max_chars, offset }, ctx) => {
+      implementation: safe(async ({ url, max_chars, offset, refresh }, ctx) => {
         ctx.status(`Fetching ${url}`);
-        const page = await fetchPage(url, { signal: ctx.signal });
+        const page = await fetchPage(url, { signal: ctx.signal, refresh });
         let body = page.markdown.trim();
         let note = "";
 
@@ -82,7 +84,12 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         const limit = max_chars ?? maxPageChars;
         const slice = body.slice(start, start + limit);
         const more = start + slice.length < body.length ? `\n\n[${body.length - start - slice.length} characters left; call again with offset ${start + slice.length}]` : "";
-        const header = `URL: ${page.url}\n${page.title ? `Title: ${page.title}\n` : ""}${page.kind === "pdf" ? "Type: PDF\n" : ""}`;
+        const header =
+          `URL: ${page.url}\n` +
+          (page.title ? `Title: ${page.title}\n` : "") +
+          (page.kind === "pdf" ? "Type: PDF\n" : "") +
+          (page.redirectedFrom ? `Redirected: ${page.redirectedFrom} -> ${new URL(page.url).host}\n` : "") +
+          (page.fromCache ? "From cache (pass refresh to fetch again)\n" : "");
         return `${header}${note}\n${slice || "(no readable text)"}${more}`;
       }),
     }),

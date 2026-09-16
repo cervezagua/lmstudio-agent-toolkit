@@ -6,8 +6,10 @@ Gives LM Studio models memory that lasts between chats, loads your project instr
 
 On the **first message of every new chat**, the plugin adds a context block before your message containing:
 
+- today's date, which a local model otherwise has no way to know
 - the project instruction files it finds (by default `AGENTS.md`, `CLAUDE.md`, `.lmstudio/instructions.md` in the Project Directory)
 - the index of saved memories (names and one-line descriptions), so the model knows what it can look up
+- when the project is a git repository: the current branch, uncommitted changes and the last five commits
 
 Later messages are left alone, so this costs context once per chat. Attached files and images are kept. The status line shows which files were loaded.
 
@@ -95,6 +97,7 @@ The files live in `~/.lmstudio-agent-memory/` (configurable), next to a `MEMORY.
 | Instruction Files | chat | `AGENTS.md`, `CLAUDE.md`, `.lmstudio/instructions.md` | Paths relative to the Project Directory; files outside it are ignored. |
 | Inject Memory Index | chat | on | |
 | Skills | chat | on | Adds `skill_list`/`skill_read` and lists installed skills at chat start. |
+| Git Snapshot | chat | on | Adds the branch, uncommitted changes and recent commits to the first message. |
 | Plan Mode | chat | on | Adds `enter_plan_mode`/`exit_plan_mode`. |
 | Max Injected Characters | chat | 12000 | Cap for instructions plus index plus skill list. Lower it for small context windows. |
 | Memory Directory | global | `~/.lmstudio-agent-memory` | Shared by all chats. |

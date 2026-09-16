@@ -36,6 +36,7 @@ const config = () => ({
   injectMemoryIndex: false,
   enableSkills: true,
   enablePlanMode: true,
+  injectGitSnapshot: false,
   maxInjectedChars: 12000,
 });
 

@@ -2,6 +2,7 @@ import { type ChatMessage, type PromptPreprocessorController } from "@lmstudio/s
 import { configSchematics, globalConfigSchematics } from "./config";
 import { buildContextBlock, loadInstructionFiles } from "./lib/instructions";
 import { defaultMemoryDirectory, INDEX_FILE, MemoryStore } from "./lib/memoryStore";
+import { gitSnapshot } from "./lib/gitSnapshot";
 import { defaultSkillsDirectory, listSkills, renderSkillList } from "./lib/skills";
 import { PLANNING_NOTE, readMode } from "./shared/mode";
 
@@ -38,11 +39,14 @@ export async function preprocess(ctl: PromptPreprocessorController, userMessage:
     if (skills.length > 0) skillList = renderSkillList(skills);
   }
 
+  const snapshot = config.get("injectGitSnapshot") ? await gitSnapshot(projectDirectory, ctl.abortSignal) : null;
+
   const block = buildContextBlock({
     projectDirectory,
     instructions,
     memoryIndex,
     skillList,
+    gitSnapshot: snapshot,
     maxChars: config.get("maxInjectedChars"),
   });
   if (!block) return userMessage;
@@ -51,6 +55,7 @@ export async function preprocess(ctl: PromptPreprocessorController, userMessage:
     ...instructions.map(i => i.name),
     ...(memoryIndex ? [INDEX_FILE] : []),
     ...(skillList ? ["skills"] : []),
+    ...(snapshot ? ["git status"] : []),
   ];
   ctl.createStatus({ status: "done", text: `memory-tools loaded ${loaded.join(", ")}` });
   // replaceText keeps attached files/images on the message.

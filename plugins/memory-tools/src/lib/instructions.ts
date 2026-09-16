@@ -30,6 +30,9 @@ export function buildContextBlock(options: {
   instructions: InstructionFile[];
   memoryIndex: string | null;
   skillList?: string | null;
+  gitSnapshot?: string | null;
+  /** Overridable so tests do not depend on the clock. */
+  today?: Date;
   maxChars: number;
 }): string | null {
   const sections: string[] = [];
@@ -55,10 +58,17 @@ export function buildContextBlock(options: {
     sections.push(`## Skills available\n\n${body}\nLoad one with skill_read before doing work it covers.`);
   }
 
+  if (options.gitSnapshot) {
+    const body = truncate(options.gitSnapshot, Math.max(500, Math.floor(options.maxChars / 4)));
+    sections.push(`## Repository\n\n${body}`);
+  }
+
   if (sections.length === 0) return null;
+  // Local models have no idea what day it is, which quietly ruins anything date-related.
+  const today = (options.today ?? new Date()).toISOString().slice(0, 10);
   return [
     `<context source="memory-tools" project="${options.projectDirectory}">`,
-    "The following was loaded automatically. Follow the project instructions.",
+    `Today is ${today}. The following was loaded automatically; follow the project instructions.`,
     "",
     sections.join("\n\n"),
     "</context>",

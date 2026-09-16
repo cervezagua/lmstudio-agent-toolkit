@@ -3,10 +3,10 @@ import { mkdtemp, rm, stat } from "fs/promises";
 import { createServer, type Server } from "http";
 import { tmpdir } from "os";
 import { join } from "path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { callTool, fakeController } from "../../../shared/testing/fake-controller";
 import { browserSession, formatSnapshot } from "./lib/browser";
-import { fetchPage, htmlToMarkdown } from "./lib/fetchPage";
+import { clearFetchCache, fetchPage, htmlToMarkdown } from "./lib/fetchPage";
 import { decodeDuckDuckGoUrl, formatResults, parseDuckDuckGoHtml, runSearch, searchSearxng } from "./lib/search";
 import { ToolError } from "./shared/errors";
 import { toolsProvider } from "./toolsProvider";
@@ -161,6 +161,8 @@ describe("search parsing", () => {
 });
 
 describe("page fetching", () => {
+  beforeEach(() => clearFetchCache());
+
   it("extracts the article as markdown with absolute links and no inline images", () => {
     const { title, markdown } = htmlToMarkdown(ARTICLE, "https://site.example/blog/post");
     expect(title).toBe("Fallback Title");
@@ -353,4 +355,57 @@ describe.runIf(process.env.LIVE_WEB === "1")("live network (LIVE_WEB=1)", () => 
     const page = await callTool(tools, "fetch_url", { url: "https://example.com" });
     expect(page).toContain("Example Domain");
   }, 60_000);
+});
+
+describe("fetch cache and URL checks", () => {
+  beforeEach(() => clearFetchCache());
+
+  it("serves a repeat fetch from cache, and refresh bypasses it", async () => {
+    requestCounts.clear();
+    const first = await fetchPage(`${baseUrl}/article`);
+    expect(first.fromCache).toBeUndefined();
+    expect(requestCounts.get("/article")).toBe(1);
+
+    const second = await fetchPage(`${baseUrl}/article`);
+    expect(second.fromCache).toBe(true);
+    expect(second.markdown).toBe(first.markdown);
+    expect(requestCounts.get("/article")).toBe(1); // no second request
+
+    const forced = await fetchPage(`${baseUrl}/article`, { refresh: true });
+    expect(forced.fromCache).toBeUndefined();
+    expect(requestCounts.get("/article")).toBe(2);
+  });
+
+  it("refuses URLs with credentials or absurd length", async () => {
+    await expect(fetchPage("https://user:secret@example.com/")).rejects.toThrow(/username or password/);
+    await expect(fetchPage(`https://example.com/${"x".repeat(2100)}`)).rejects.toThrow(/over the 2048 character limit/);
+  });
+
+  it("reports a redirect that changes host", async () => {
+    // A second server on another port counts as a different host, which is what we want to flag.
+    const other = createServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "text/plain" });
+      res.end("landed elsewhere");
+    });
+    await new Promise<void>(resolve => other.listen(0, "127.0.0.1", resolve));
+    const otherUrl = `http://127.0.0.1:${(other.address() as any).port}/`;
+
+    const hop = createServer((_req, res) => {
+      res.writeHead(302, { Location: otherUrl });
+      res.end();
+    });
+    await new Promise<void>(resolve => hop.listen(0, "127.0.0.1", resolve));
+    const hopUrl = `http://127.0.0.1:${(hop.address() as any).port}/`;
+
+    try {
+      const page = await fetchPage(hopUrl);
+      expect(page.markdown).toBe("landed elsewhere");
+      expect(page.redirectedFrom).toBe(new URL(hopUrl).host);
+      // Same-host redirects stay quiet.
+      expect((await fetchPage(`${baseUrl}/redirect`)).redirectedFrom).toBeUndefined();
+    } finally {
+      await new Promise(resolve => hop.close(resolve));
+      await new Promise(resolve => other.close(resolve));
+    }
+  }, 30000);
 });

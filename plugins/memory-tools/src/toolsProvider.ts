@@ -4,7 +4,7 @@ import { configSchematics, globalConfigSchematics } from "./config";
 import { defaultSkillsDirectory, listSkills, readSkill, renderSkillList } from "./lib/skills";
 import { readMode, writeMode } from "./shared/mode";
 import { defaultMemoryDirectory, MEMORY_TYPES, MemoryStore, renderIndex } from "./lib/memoryStore";
-import { readTodos, renderTodos, TODO_STATUSES, writeTodos } from "./lib/todos";
+import { completionNudge, readTodos, renderTodos, TODO_STATUSES, writeTodos } from "./lib/todos";
 import { safe, ToolError } from "./shared/errors";
 
 export async function toolsProvider(ctl: ToolsProviderController) {
@@ -126,7 +126,8 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       },
       implementation: safe(async ({ todos }) => {
         await writeTodos(workingDirectory, todos);
-        return renderTodos(todos);
+        const nudge = completionNudge(todos);
+        return nudge ? `${renderTodos(todos)}\n\n${nudge}` : renderTodos(todos);
       }),
     }),
   );

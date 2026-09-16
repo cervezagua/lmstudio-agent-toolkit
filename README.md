@@ -64,6 +64,9 @@ web-tools searches through [SearXNG](https://github.com/searxng/searxng) at `htt
 
 - Tools return recoverable problems (a bad path, non-unique edit text, a git error) as `Error: ...` text, so the model can fix its call and retry instead of the chat failing.
 - `edit_file` is an exact search-and-replace that must match once, so models don't rewrite whole files. It handles Windows CRLF files when the model sends LF text, and every edit can be previewed or undone.
+- **A file must be read before it can be edited**, and an edit is refused if the file changed on disk since that read: a model cannot overwrite work it never saw. Writes go through a temporary file and a rename, so an interrupted write can't truncate your file.
+- Long command output is saved whole to a file and its path returned, instead of dropping the middle. Fetched pages are cached briefly, and `grep` can return just file names or counts, which is far cheaper than full matches.
+- The first message of a chat carries today's date and, in a git repository, the branch and uncommitted changes — things a local model otherwise guesses at.
 - `run_command` reports the real exit code; PowerShell's `-Command` normally collapses every failure to 1.
 - git-tools runs `git` and `gh` directly, not through a shell, rejects refs that look like options, and never opens an editor or credential prompt.
 - memory-tools rebuilds `MEMORY.md` from the memory files each time, so the index can't drift from them.

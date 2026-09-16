@@ -1,5 +1,7 @@
 import { ToolError } from "../shared/errors";
 
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 function countOccurrences(haystack: string, needle: string): number {
   let count = 0;
   let index = haystack.indexOf(needle);
@@ -55,6 +57,16 @@ export function applyEdit(
     );
   }
 
+  // Deleting a whole line should take its newline too, otherwise the file keeps a blank line
+  // where the model asked for the text to be gone.
+  if (replacement === "") {
+    const wholeLine = new RegExp(`(^|\\n)${escapeRegExp(search)}\\r?\\n`, replaceAll ? "g" : "");
+    if (wholeLine.test(content)) {
+      const updated = content.replace(wholeLine, "$1");
+      return { content: updated, replacements: replaceAll ? count : 1 };
+    }
+  }
+
   // split/join avoids String.replace's special `$&`-style patterns in the replacement.
   const updated = replaceAll
     ? content.split(search).join(replacement)
@@ -78,11 +90,21 @@ export function applyEdits(content: string, edits: EditOperation[]): { content: 
   if (edits.length === 0) throw new ToolError("edits must contain at least one edit.");
   let current = content;
   let replacements = 0;
+  const applied: string[] = [];
   edits.forEach((edit, index) => {
+    // An edit that matches text an earlier edit just inserted would apply the batch twice over.
+    const clash = applied.findIndex(previous => previous !== "" && previous.includes(edit.old_string));
+    if (clash !== -1) {
+      throw new ToolError(
+        `Edit ${index + 1} of ${edits.length} searches for text that edit ${clash + 1} just inserted, ` +
+          `so it would be applied twice. Combine them into one edit. No changes were written.`,
+      );
+    }
     try {
       const result = applyEdit(current, edit.old_string, edit.new_string, edit.replace_all ?? false);
       current = result.content;
       replacements += result.replacements;
+      applied.push(edit.new_string);
     } catch (error) {
       const reason = error instanceof ToolError ? error.message : String(error);
       throw new ToolError(`Edit ${index + 1} of ${edits.length} failed: ${reason} No changes were written.`);

@@ -11,6 +11,7 @@ const baseConfig = {
   shell: "auto",
   commandTimeoutSeconds: 30,
   maxOutputChars: 20000,
+  maxReadBytes: 262144,
   blockedCommandPatterns: ["git\\s+push"],
   persistentShell: false,
   enableBackgroundTasks: true,
@@ -89,7 +90,8 @@ describe("coder-tools toolsProvider", () => {
     expect(await callTool(tools, "write_file", { path: "src/hello.txt", content: "hello\nworld\n" })).toMatch(
       /^Created src\/hello.txt/,
     );
-    expect(await callTool(tools, "read_file", { path: "src/hello.txt" })).toBe("1\thello\n2\tworld\n3\t");
+    // A file ending in a newline has two lines, not a phantom empty third one.
+    expect(await callTool(tools, "read_file", { path: "src/hello.txt" })).toBe("1\thello\n2\tworld");
     expect(await callTool(tools, "edit_file", { path: "src/hello.txt", old_string: "hello", new_string: "hi" })).toBe(
       "Edited src/hello.txt: 1 replacement.",
     );
@@ -106,17 +108,79 @@ describe("coder-tools toolsProvider", () => {
   it("returns recoverable errors as strings", async () => {
     expect(await callTool(tools, "read_file", { path: "../../outside.txt" })).toMatch(/^Error: .*outside the allowed root/);
     expect(await callTool(tools, "read_file", { path: "nope.txt" })).toMatch(/^Error: ENOENT/);
+    await callTool(tools, "read_file", { path: "long.txt" }); // edits need a prior read
     expect(await callTool(tools, "edit_file", { path: "long.txt", old_string: "line", new_string: "row" })).toMatch(
       /^Error: old_string occurs/,
     );
     expect(await callTool(tools, "grep", { pattern: "([bad" })).toMatch(/^Error: Invalid regular expression/);
   });
 
+  it("refuses to edit a file it has not read, and one that changed underneath", async () => {
+    await writeFile(join(root, "unseen.txt"), "first\n");
+    expect(await callTool(tools, "edit_file", { path: "unseen.txt", old_string: "first", new_string: "second" })).toMatch(
+      /^Error: You have not read unseen.txt/,
+    );
+
+    await callTool(tools, "read_file", { path: "unseen.txt" });
+    await writeFile(join(root, "unseen.txt"), "changed by someone else\n"); // e.g. the user, or a build
+    expect(await callTool(tools, "edit_file", { path: "unseen.txt", old_string: "changed", new_string: "x" })).toMatch(
+      /^Error: unseen.txt changed on disk since you read it/,
+    );
+
+    // Reading again makes the edit go through.
+    await callTool(tools, "read_file", { path: "unseen.txt" });
+    expect(await callTool(tools, "edit_file", { path: "unseen.txt", old_string: "changed", new_string: "edited" })).toMatch(
+      /^Edited unseen.txt/,
+    );
+  });
+
+  it("suggests a likely path when a file does not exist", async () => {
+    await writeFile(join(root, "notes.md"), "hi");
+    expect(await callTool(tools, "edit_file", { path: "notes.txt", old_string: "hi", new_string: "ho" })).toMatch(
+      /does not exist. Did you mean: notes.md\?/,
+    );
+  });
+
+  it("refuses a whole-file read over the size limit but allows a window", async () => {
+    const small = await toolsProvider(
+      fakeController({ config: { ...baseConfig, rootDirectory: root, maxReadBytes: 8192 }, workingDirectory: work }),
+    );
+    await writeFile(join(root, "huge.txt"), "x".repeat(20000));
+    expect(await callTool(small, "read_file", { path: "huge.txt" })).toMatch(/^Error: huge.txt is \d+ KB, over the 8 KB limit/);
+    expect(await callTool(small, "read_file", { path: "huge.txt", limit: 1 })).toContain("1\txxx");
+  });
+
+  it("sends text edits on notebooks to notebook_edit", async () => {
+    await callTool(tools, "write_file", { path: "book.ipynb", content: JSON.stringify({ cells: [] }) });
+    expect(await callTool(tools, "edit_file", { path: "book.ipynb", old_string: "cells", new_string: "x" })).toMatch(
+      /^Error: book.ipynb is a Jupyter notebook; use notebook_edit/,
+    );
+  });
+
+  it("saves very long command output to a file the model can read", async () => {
+    const tiny = await toolsProvider(
+      fakeController({ config: { ...baseConfig, rootDirectory: root, maxOutputChars: 1000 }, workingDirectory: work }),
+    );
+    const result = await callTool(tiny, "run_command", {
+      command: `node -e "for (let i = 0; i < 400; i++) console.log('line ' + i + ' ' + 'y'.repeat(40))"`,
+      description: "print a lot of output",
+    });
+    const path = /saved to (.+?) - read it/.exec(result)?.[1];
+    expect(path).toBeTruthy();
+    expect(result).toContain("characters truncated");
+
+    // The overflow file lives outside the project root, but read_file can still open it.
+    const full = await callTool(tiny, "read_file", { path: path!, limit: 5 });
+    expect(full).toContain("line 0");
+  }, 30000);
+
   it("lists, globs, and greps", async () => {
-    expect(await callTool(tools, "list_dir", {})).toMatch(/^\.:\nsrc\/\nlong\.txt/);
+    const listing = await callTool(tools, "list_dir", {});
+    expect(listing).toMatch(/^\.:\nsrc\//); // folders first
+    expect(listing).toContain("long.txt");
     expect(await callTool(tools, "glob", { pattern: "**/*.txt" })).toContain("src/hello.txt");
     expect(await callTool(tools, "grep", { pattern: "line 4\\d", max_results: 3 })).toBe(
-      "long.txt:40: line 40\nlong.txt:41: line 41\nlong.txt:42: line 42\n[stopped at 3 results; narrow the search]",
+      "long.txt:40: line 40\nlong.txt:41: line 41\nlong.txt:42: line 42\n[stopped at 3 results; narrow the search, or pass offset 3 for more]",
     );
   });
 

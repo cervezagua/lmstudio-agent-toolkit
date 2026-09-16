@@ -51,6 +51,16 @@ export const configSchematics = createConfigSchematics()
     true,
   )
   .field(
+    "injectGitSnapshot",
+    "boolean",
+    {
+      displayName: "Git Snapshot",
+      subtitle:
+        "Show the branch, uncommitted changes and recent commits at the start of a chat, when the project is a git repository.",
+    },
+    true,
+  )
+  .field(
     "maxInjectedChars",
     "numeric",
     {

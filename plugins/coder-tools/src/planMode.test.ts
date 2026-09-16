@@ -19,6 +19,7 @@ const baseConfig = {
   shell: "auto",
   commandTimeoutSeconds: 30,
   maxOutputChars: 20000,
+  maxReadBytes: 262144,
   blockedCommandPatterns: [],
   persistentShell: false,
   enableBackgroundTasks: true,
