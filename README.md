@@ -18,10 +18,10 @@
 ## What it looks like
 
 <p align="center">
-  <img src="docs/demo.png" alt="A session in which the model lists the project, reads slugify.js and its test, edits the regex to stop stripping digits, and runs the test to exit code 0." width="920">
+  <img src="docs/demo.png" alt="LM Studio running qwen3.8-27b with coder-tools: the model globs for the file, lists the folder, reads slugify.js and its test, runs the test, and explains that the regex strips digits." width="920">
 </p>
 
-<p align="center"><sub>A real run with <code>qwen/qwen3.8-27b</code> and coder-tools, rendered from the model's own tool calls and their results.</sub></p>
+<p align="center"><sub>A real session in LM Studio. The model goes on to fix the regex and re-run the test to <code>exit_code: 0</code>.</sub></p>
 
 Every one of those calls is shown to you for approval before it runs.
 
