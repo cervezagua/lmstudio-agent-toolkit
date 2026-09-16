@@ -1,5 +1,6 @@
 import { spawn } from "child_process";
-import { mkdir, open, readFile, stat, writeFile } from "fs/promises";
+import { randomBytes } from "crypto";
+import { mkdir, open, readFile, rename, rm, stat, writeFile } from "fs/promises";
 import { join } from "path";
 import { ToolError } from "../shared/errors";
 import { truncate } from "../shared/truncate";
@@ -47,16 +48,26 @@ export class TaskManager {
 
   private async readIndex(): Promise<TaskRecord[]> {
     try {
-      return JSON.parse(await readFile(this.indexFile, "utf-8"));
+      const text = await readFile(this.indexFile, "utf-8");
+      const parsed = JSON.parse(text);
+      return Array.isArray(parsed) ? parsed : [];
     } catch (error: any) {
-      if (error?.code === "ENOENT") return [];
+      // Missing is normal; unparsable means a write was interrupted, and an empty list is a better
+      // answer than an exception thrown from a background process-exit handler.
+      if (error?.code === "ENOENT" || error instanceof SyntaxError) return [];
       throw error;
     }
   }
 
   private async writeIndex(tasks: TaskRecord[]) {
     await mkdir(this.directory, { recursive: true });
-    await writeFile(this.indexFile, JSON.stringify(tasks, null, 2), "utf-8");
+    // Write, then rename: a reader never sees a half-written index.
+    const temporary = `${this.indexFile}.${randomBytes(4).toString("hex")}.tmp`;
+    await writeFile(temporary, JSON.stringify(tasks, null, 2), "utf-8");
+    await rename(temporary, this.indexFile).catch(async error => {
+      await rm(temporary, { force: true }).catch(() => {});
+      throw error;
+    });
   }
 
   async list(): Promise<TaskRecord[]> {
@@ -102,7 +113,8 @@ export class TaskManager {
       };
       await this.writeIndex([...(await this.readIndex()), task]);
       child.on("exit", code => {
-        void this.update(id, { exitCode: code ?? -1, endedAt: new Date().toISOString() });
+        // Nothing awaits this handler, so a failure here must not become an unhandled rejection.
+        this.update(id, { exitCode: code ?? -1, endedAt: new Date().toISOString() }).catch(() => {});
       });
       child.unref();
       return task;

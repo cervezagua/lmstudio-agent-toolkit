@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -216,4 +216,33 @@ describe("ShellSession", () => {
     const after = await session.exec("echo alive", 20000);
     expect(after.stdout).toContain("alive");
   }, 60000);
+});
+
+describe("TaskManager index robustness", () => {
+  const shell =
+    process.platform === "win32"
+      ? { file: "cmd.exe", args: (c: string) => ["/d", "/s", "/c", c] }
+      : { file: "bash", args: (c: string) => ["-lc", c] };
+
+  it("survives a half-written index instead of throwing", async () => {
+    const tasks = new TaskManager(join(dir, "tasks"));
+    await tasks.start(shell, "echo hi", dir, "one");
+    // Simulate a write interrupted midway, which a reader used to hit as invalid JSON.
+    await writeFile(join(dir, "tasks", "tasks.json"), '[{"id":"t1","na');
+    await expect(tasks.list()).resolves.toEqual([]);
+    await expect(tasks.get("t1")).rejects.toThrow(/No background task/);
+  });
+
+  it("writes the index atomically, leaving no temporary files", async () => {
+    const tasks = new TaskManager(join(dir, "tasks"));
+    await Promise.all([
+      tasks.start(shell, "echo a", dir, "a"),
+      tasks.start(shell, "echo b", dir, "b"),
+      tasks.start(shell, "echo c", dir, "c"),
+    ]);
+    await new Promise(resolve => setTimeout(resolve, 500));
+    const left = (await readdir(join(dir, "tasks"))).filter(name => name.endsWith(".tmp"));
+    expect(left).toEqual([]);
+    expect(JSON.parse(await readFile(join(dir, "tasks", "tasks.json"), "utf-8"))).toBeInstanceOf(Array);
+  }, 20000);
 });
