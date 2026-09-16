@@ -1,5 +1,7 @@
 # coder-tools
 
+*Part of the [LM Studio Agent Toolkit](https://github.com/cervezagua/lmstudio-agent-toolkit) — five plugins for files and shell, memory, git, the web and documents. Install the others with `lms get cervezagua/<plugin>`.*
+
 File and shell tools for LM Studio models: read, write and edit files, search a codebase, and run commands. The model works inside a single project folder you choose and can't reach anything outside it.
 
 ## Tools

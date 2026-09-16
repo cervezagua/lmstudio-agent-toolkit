@@ -1,5 +1,7 @@
 # memory-tools
 
+*Part of the [LM Studio Agent Toolkit](https://github.com/cervezagua/lmstudio-agent-toolkit) — five plugins for files and shell, memory, git, the web and documents. Install the others with `lms get cervezagua/<plugin>`.*
+
 Gives LM Studio models memory that lasts between chats, loads your project instructions automatically, and adds a todo list for multi-step work.
 
 ## What happens automatically

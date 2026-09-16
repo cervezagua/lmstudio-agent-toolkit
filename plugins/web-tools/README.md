@@ -1,5 +1,7 @@
 # web-tools
 
+*Part of the [LM Studio Agent Toolkit](https://github.com/cervezagua/lmstudio-agent-toolkit) — five plugins for files and shell, memory, git, the web and documents. Install the others with `lms get cervezagua/<plugin>`.*
+
 Web search, page reading, and a real browser for LM Studio models. Search runs through your own SearXNG instance (falling back to DuckDuckGo), pages come back as clean markdown, and the browser tools drive your installed Edge or Chrome.
 
 ## Tools

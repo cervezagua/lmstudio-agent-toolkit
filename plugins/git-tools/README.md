@@ -1,5 +1,7 @@
 # git-tools
 
+*Part of the [LM Studio Agent Toolkit](https://github.com/cervezagua/lmstudio-agent-toolkit) — five plugins for files and shell, memory, git, the web and documents. Install the others with `lms get cervezagua/<plugin>`.*
+
 Git and GitHub tools for LM Studio models: inspect changes, stage and commit, manage branches, and work with pull requests and issues through the GitHub CLI.
 
 ## Requirements

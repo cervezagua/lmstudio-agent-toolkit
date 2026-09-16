@@ -1,5 +1,7 @@
 # ocr-tools
 
+*Part of the [LM Studio Agent Toolkit](https://github.com/cervezagua/lmstudio-agent-toolkit) — five plugins for files and shell, memory, git, the web and documents. Install the others with `lms get cervezagua/<plugin>`.*
+
 Lets a model read documents off your disk: PDFs (including scanned ones) and images. Nothing extra has to be installed.
 
 ## Do you need this?
