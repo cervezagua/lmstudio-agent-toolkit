@@ -1,87 +1,117 @@
-# LM Studio Agent Toolkit
+<h1 align="center">LM Studio Agent Toolkit</h1>
 
-[![CI](https://github.com/cervezagua/lmstudio-agent-toolkit/actions/workflows/ci.yml/badge.svg)](https://github.com/cervezagua/lmstudio-agent-toolkit/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+<p align="center">
+  <b>Turn a local model in <a href="https://lmstudio.ai">LM Studio</a> into a working coding agent.</b><br>
+  Files and a shell, memory that survives between chats, Git and GitHub, the web with a real browser, and documents.<br>
+  No API keys, no cloud, nothing leaves your machine.
+</p>
 
-Five [LM Studio](https://lmstudio.ai) plugins that give local models the tools a coding agent has: files and a shell, memory that lasts between chats, Git and GitHub, the web with a real browser, and reading documents. Everything runs on your machine.
+<p align="center">
+  <a href="https://github.com/cervezagua/lmstudio-agent-toolkit/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/cervezagua/lmstudio-agent-toolkit/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
+  <img alt="Tests" src="https://img.shields.io/badge/tests-171%20passing-brightgreen">
+  <img alt="Tested on Windows and Linux" src="https://img.shields.io/badge/tested%20on-Windows%20%7C%20Linux-informational">
+</p>
 
-| Plugin | Tools | Also does |
+---
+
+## What it looks like
+
+> **You:** the date parser drops the timezone on ISO strings. Find it, fix it, and prove it works.
+
+```text
+grep        pattern="parseDate" output_mode="files_with_matches"  → 3 files
+read_file   src/time/parseDate.ts                                 → 142 lines
+edit_file   src/time/parseDate.ts                                 → 1 replacement
+run_command "npm test -- parseDate"                               → exit_code: 0, 12 passed
+```
+
+> **Model:** It was stripping the offset before parsing. Fixed, and the parser tests pass.
+
+Every one of those calls is shown to you for approval before it runs.
+
+## The five plugins
+
+| Plugin | What the model can do | Highlights |
 |---|---|---|
-| [`coder-tools`](plugins/coder-tools/README.md) | `read_file` `write_file` `edit_file` `multi_edit` `insert_lines` `undo_edit` `list_dir` `glob` `grep` `run_command` | Root-directory sandbox, blocked commands, persistent shell session, background tasks (`task_run`/`task_list`/`task_output`/`task_stop`), `diagnostics`, notebooks, optional `run_subagent` |
-| [`memory-tools`](plugins/memory-tools/README.md) | `memory_save` `memory_read` `memory_search` `memory_list` `memory_delete` `save_session_summary` `todo_write` `todo_read` | Adds `AGENTS.md`/`CLAUDE.md`, the memory index and the skill list to the first message of every chat; skills (`skill_list`/`skill_read`) and plan mode (`enter_plan_mode`/`exit_plan_mode`) |
-| [`git-tools`](plugins/git-tools/README.md) | `git_status` `git_diff` `git_log` `git_show` `git_add` `git_commit` `git_branch` `git_init` (+ `git_push` if enabled) | `gh_pr_list` `gh_pr_view` `gh_pr_diff` `gh_pr_checks` `gh_pr_create` `gh_issue_list` `gh_issue_view` when the GitHub CLI is installed |
-| [`web-tools`](plugins/web-tools/README.md) | `web_search` `fetch_url` | PDF and paging support, automatic browser fallback, plus `browser_open` `browser_snapshot` `browser_click` `browser_type` `browser_back` `browser_screenshot` `browser_close` (Playwright + installed Edge/Chrome) |
-| [`ocr-tools`](plugins/ocr-tools/README.md) | `read_document_text` `ocr_document` `pdf_to_images` | Reads scanned PDFs and images with a vision model you already run in LM Studio |
+| **[coder-tools](plugins/coder-tools/README.md)** | Read, write and edit files, search, run commands | Locked to one project folder · read-before-edit protection · background tasks · project diagnostics · optional research sub-agent |
+| **[memory-tools](plugins/memory-tools/README.md)** | Remember things between chats, keep a todo list, follow skills | Loads your `AGENTS.md` + today's date + git status into each new chat · plan mode that really withholds tools |
+| **[git-tools](plugins/git-tools/README.md)** | Status, diff, commit, branch, and GitHub PRs and issues | Runs `git`/`gh` directly, never through a shell · push is opt-in and never forced |
+| **[web-tools](plugins/web-tools/README.md)** | Search, read pages as markdown, drive a real browser | Private SearXNG search · PDF reading · pages cached · Edge/Chrome via Playwright |
+| **[ocr-tools](plugins/ocr-tools/README.md)** | Read PDFs, scans and images from disk | Text layer first (free and exact) · OCR only when needed · **your chat model does not need vision** |
 
-Each plugin is separate, so you can enable only what a chat needs; small models choose tools better from a short list. Each plugin's README documents its tools and every setting.
+Each plugin is separate and every optional group has an on/off switch, because small models pick tools better from a short list.
 
-## Install
+## Quickstart
 
-**Requirements:** LM Studio with plugin support and its `lms` CLI, Node.js 22 or newer, and `git`. Optional: [GitHub CLI](https://cli.github.com) for the `gh_*` tools, [ripgrep](https://github.com/BurntSushi/ripgrep) for faster search, Edge or Chrome for the browser tools.
+> [!NOTE]
+> Needs **LM Studio** (with its `lms` CLI), **Node.js 22+** and **git**. Optional: [GitHub CLI](https://cli.github.com) for the `gh_*` tools, [ripgrep](https://github.com/BurntSushi/ripgrep) for faster search, Edge or Chrome for the browser tools.
 
 With LM Studio running:
 
 ```bash
 git clone https://github.com/cervezagua/lmstudio-agent-toolkit.git
-```
-
-```bash
 cd lmstudio-agent-toolkit
-```
-
-```bash
 npm run setup
 ```
 
-That installs all five plugins into LM Studio; LM Studio downloads each plugin's dependencies itself. To install only some, name them: `node scripts/install-plugins.mjs coder-tools memory-tools`. Run the same command again after `git pull` to update.
+That installs all five plugins into LM Studio, which fetches each plugin's dependencies itself. Install a subset with `node scripts/install-plugins.mjs coder-tools memory-tools`, and re-run the same command after `git pull` to update.
 
-## Use
+Then, in LM Studio:
 
-1. Load a model that supports tool use (LM Studio marks these "Tool use"; Qwen 3.x and Nemotron models work well).
-2. In the chat's sidebar, enable the plugins you want.
-3. Set the project folder in the chat's plugin settings: **coder-tools → Root Directory**, and the same folder for **memory-tools → Project Directory** and **git-tools → Repository Directory**.
-4. Keep LM Studio's **tool call confirmation** on, and approve calls as the model makes them.
-5. Ask for work: "explain this project", "fix the failing test", "add a README".
+1. **Load a tool-capable model** (LM Studio marks these "Tool use"). Give it at least ~32k context: file contents and command output fill a window fast.
+2. **Enable the plugins** you want in the chat's sidebar.
+3. **Point them at your project**: coder-tools → **Root Directory**, and the same folder in memory-tools → **Project Directory** and git-tools → **Repository Directory**.
+4. **Keep tool call confirmation on**, and approve calls as they come.
+5. **Ask for work**: *"explain this project"*, *"fix the failing test"*, *"what changed since last week?"*
 
-Load the model with at least ~32k context; file contents and command output fill a window quickly.
+Verified end to end with `qwen/qwen3.8-27b`: editing files, running commands, git, browsing, and transcribing a scanned page.
 
 ## Safety
 
-These plugins exist to let a model act on your computer: they read and write files, run shell commands, browse the web and commit to git. Treat approving a tool call like running that command yourself.
+> [!WARNING]
+> These plugins let a model act on your computer. Approving a tool call is the same as running that command yourself.
 
-- File tools can't leave the Root Directory (checked after resolving symlinks and junctions).
-- A built-in list refuses catastrophic commands such as `rm -rf /` or `format C:`. It's a safety net, not a sandbox: a shell command can still do anything your user account can.
-- `git_push` is off by default and never force-pushes.
-- In plan mode, the tools that change things are removed from the model's tool list until it presents a plan.
+| Guard | What it does |
+|---|---|
+| **Root Directory** | File tools resolve every path inside your project folder, after following symlinks and junctions. (`read_file` may also open the plugin's own output files in the chat folder.) |
+| **Read before edit** | A file must be read in this chat before it can be edited, and the edit is refused if the file changed since. The model can't overwrite what it never saw. |
+| **Atomic writes** | Files are written to a temp file and renamed, so an interrupted write can't truncate your work. |
+| **Blocked commands** | Refuses catastrophic ones (`rm -rf /`, `format C:`, `diskpart`…). A seatbelt, not a sandbox: a shell command can still do anything your account can. |
+| **Opt-in danger** | `git_push` is off by default and never force-pushes; the shell can be turned off entirely. |
+| **Plan mode** | While planning, every tool that changes anything disappears from the model's tool list until it presents a plan. |
 
-See [SECURITY.md](SECURITY.md) for more, and for how to report a problem.
+Details and how to report a problem: [SECURITY.md](SECURITY.md).
+
+## Why it behaves well with small models
+
+<details>
+<summary><b>Design decisions that matter in practice</b> (click to expand)</summary>
+
+- **Mistakes come back as text, not failures.** A bad path, ambiguous edit or git error returns `Error: …` so the model can correct itself instead of the chat dying.
+- **Edits are exact replacements** that must match once, so a model never rewrites a whole file to change one line. LF text matches CRLF files, and any edit can be previewed as a diff or undone.
+- **Nothing is silently lost.** Long command output is written whole to a file and its path returned; long documents and search results page with `offset`.
+- **Cheap answers first.** `grep` can return only file names or counts, `read_document_text` reads a PDF's text layer without a model, and fetched pages are cached for a few minutes.
+- **The model starts informed.** Each chat opens with today's date, your `AGENTS.md`, the memory index, and — in a git repo — the branch, uncommitted changes and recent commits.
+- **Real exit codes.** PowerShell's `-Command` collapses every failure to `1`; `run_command` reports what actually happened.
+- **No shell in the middle of git.** git-tools runs `git` and `gh` directly, rejects refs that look like options, and never opens an editor or credential prompt.
+- **The browser is navigable by number.** A snapshot lists `[3] link "Docs" -> /docs`, and the model clicks or types by that number.
+
+</details>
 
 ## Web search
 
-web-tools searches through [SearXNG](https://github.com/searxng/searxng) at `http://localhost:8888` when it's running, and falls back to DuckDuckGo otherwise. DuckDuckGo often answers automated requests with a bot check; the tool reports that rather than trying to get around it. For dependable search, run SearXNG: [`searxng/`](searxng/README.md) sets it up in WSL on Windows, and any other SearXNG instance with the JSON format enabled works too. A Brave Search API key is the third option.
+web-tools uses [SearXNG](https://github.com/searxng/searxng) at `http://localhost:8888` when it's running and falls back to DuckDuckGo otherwise — though DuckDuckGo often answers automated requests with a bot check, which the tool reports rather than works around. [`searxng/`](searxng/README.md) sets up a private instance in WSL on Windows; any SearXNG with the JSON format enabled works. A Brave Search API key is the third option.
 
-## How it works
+## Limitations
 
-- Tools return recoverable problems (a bad path, non-unique edit text, a git error) as `Error: ...` text, so the model can fix its call and retry instead of the chat failing.
-- `edit_file` is an exact search-and-replace that must match once, so models don't rewrite whole files. It handles Windows CRLF files when the model sends LF text, and every edit can be previewed or undone.
-- **A file must be read before it can be edited**, and an edit is refused if the file changed on disk since that read: a model cannot overwrite work it never saw. Writes go through a temporary file and a rename, so an interrupted write can't truncate your file.
-- Long command output is saved whole to a file and its path returned, instead of dropping the middle. Fetched pages are cached briefly, and `grep` can return just file names or counts, which is far cheaper than full matches.
-- The first message of a chat carries today's date and, in a git repository, the branch and uncommitted changes — things a local model otherwise guesses at.
-- `run_command` reports the real exit code; PowerShell's `-Command` normally collapses every failure to 1.
-- git-tools runs `git` and `gh` directly, not through a shell, rejects refs that look like options, and never opens an editor or credential prompt.
-- memory-tools rebuilds `MEMORY.md` from the memory files each time, so the index can't drift from them.
-- The browser snapshot numbers each visible interactive element (`[3] link "Docs" -> /docs`), and the model clicks or types by number.
-- Plan mode is stored in a small file in the chat's working directory, which every plugin in the chat shares; coder-tools and git-tools read it each time they build their tool list.
-
-### Limitations
-
-- LM Studio plugins can't rewrite earlier chat history, so there's no automatic context compaction. When a chat gets long, have the model call `save_session_summary`, then continue in a new chat.
+- LM Studio plugins can't rewrite earlier chat history, so there's no automatic context compaction. When a chat gets long, have the model call `save_session_summary` and continue in a new one.
 - All chats share one browser instance.
-- Tool quality depends on the model. Larger tool-use models plan multi-step work far better than small ones.
+- Results depend on the model. Bigger tool-use models plan multi-step work far better than small ones.
 
 ## Contributing
 
-Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers the layout, tests and how to add a plugin.
+Issues and pull requests welcome — [CONTRIBUTING.md](CONTRIBUTING.md) covers the layout, the tests and how to add a plugin. Tests run on Windows and Linux in CI.
 
 ## License
 

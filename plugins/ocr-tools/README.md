@@ -1,6 +1,16 @@
 # ocr-tools
 
-Lets LM Studio models read documents: PDFs (including scanned ones) and images. OCR is done by a vision model you already run in LM Studio, so nothing extra has to be installed.
+Lets a model read documents off your disk: PDFs (including scanned ones) and images. Nothing extra has to be installed.
+
+## Do you need this?
+
+LM Studio can already show an image to a vision model when **you** attach one to a chat. This plugin is for the rest:
+
+- **The model opens files itself**, mid-task, without you attaching anything.
+- **PDFs are not images.** A PDF can't be handed to a vision model as-is. `read_document_text` pulls out the text layer — no model involved, exact and instant — and only scanned pages go through OCR, page by page, with page ranges and a page limit.
+- **Your chat model does not need vision.** OCR runs on a separate vision model chosen by key, so a text-only coding model can still read a scanned invoice.
+
+If your chat model has vision and you just want to drop one image into the conversation, you don't need this plugin.
 
 ## Tools
 

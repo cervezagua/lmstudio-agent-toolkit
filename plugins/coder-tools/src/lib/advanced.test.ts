@@ -243,6 +243,8 @@ describe("TaskManager index robustness", () => {
     await new Promise(resolve => setTimeout(resolve, 500));
     const left = (await readdir(join(dir, "tasks"))).filter(name => name.endsWith(".tmp"));
     expect(left).toEqual([]);
-    expect(JSON.parse(await readFile(join(dir, "tasks", "tasks.json"), "utf-8"))).toBeInstanceOf(Array);
+    // All three survive: index changes are serialized, so none is lost to a concurrent write.
+    const index = JSON.parse(await readFile(join(dir, "tasks", "tasks.json"), "utf-8"));
+    expect(index.map((t: any) => t.name).sort()).toEqual(["a", "b", "c"]);
   }, 20000);
 });

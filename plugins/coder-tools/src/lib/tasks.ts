@@ -42,6 +42,19 @@ export function taskState(task: TaskRecord): TaskState {
 export class TaskManager {
   constructor(private readonly directory: string) {}
 
+  /**
+   * Index changes run one at a time. Without this, two tasks starting together would each read the
+   * index, add themselves and write it back, losing one of the two, and their renames would collide
+   * (EPERM on Windows).
+   */
+  private queue: Promise<unknown> = Promise.resolve();
+
+  private withIndexLock<T>(action: () => Promise<T>): Promise<T> {
+    const result = this.queue.then(action, action);
+    this.queue = result.catch(() => {});
+    return result;
+  }
+
   private get indexFile() {
     return join(this.directory, "tasks.json");
   }
@@ -64,10 +77,24 @@ export class TaskManager {
     // Write, then rename: a reader never sees a half-written index.
     const temporary = `${this.indexFile}.${randomBytes(4).toString("hex")}.tmp`;
     await writeFile(temporary, JSON.stringify(tasks, null, 2), "utf-8");
-    await rename(temporary, this.indexFile).catch(async error => {
+    try {
+      // Windows can refuse a rename while another process has the target open (antivirus, an
+      // editor, a reader): retry briefly, then fall back to writing in place.
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await rename(temporary, this.indexFile);
+          return;
+        } catch (error: any) {
+          const retryable = error?.code === "EPERM" || error?.code === "EBUSY" || error?.code === "EACCES";
+          if (!retryable || attempt >= 4) throw error;
+          await new Promise(resolve => setTimeout(resolve, 20 * (attempt + 1)));
+        }
+      }
+    } catch {
+      await writeFile(this.indexFile, JSON.stringify(tasks, null, 2), "utf-8");
+    } finally {
       await rm(temporary, { force: true }).catch(() => {});
-      throw error;
-    });
+    }
   }
 
   async list(): Promise<TaskRecord[]> {
@@ -81,11 +108,13 @@ export class TaskManager {
   }
 
   private async update(id: string, patch: Partial<TaskRecord>) {
-    const tasks = await this.readIndex();
-    const index = tasks.findIndex(t => t.id === id);
-    if (index === -1) return;
-    tasks[index] = { ...tasks[index], ...patch };
-    await this.writeIndex(tasks);
+    await this.withIndexLock(async () => {
+      const tasks = await this.readIndex();
+      const index = tasks.findIndex(t => t.id === id);
+      if (index === -1) return;
+      tasks[index] = { ...tasks[index], ...patch };
+      await this.writeIndex(tasks);
+    });
   }
 
   async start(shell: { file: string; args: (command: string) => string[] }, command: string, cwd: string, name?: string) {
@@ -111,7 +140,7 @@ export class TaskManager {
         exitCode: null,
         logFile,
       };
-      await this.writeIndex([...(await this.readIndex()), task]);
+      await this.withIndexLock(async () => this.writeIndex([...(await this.readIndex()), task]));
       child.on("exit", code => {
         // Nothing awaits this handler, so a failure here must not become an unhandled rejection.
         this.update(id, { exitCode: code ?? -1, endedAt: new Date().toISOString() }).catch(() => {});
@@ -171,10 +200,12 @@ export class TaskManager {
 
   /** Drops finished tasks from the index (logs are left on disk). */
   async prune() {
-    const tasks = await this.readIndex();
-    const keep = tasks.filter(t => taskState(t) === "running");
-    if (keep.length !== tasks.length) await this.writeIndex(keep);
-    return tasks.length - keep.length;
+    return this.withIndexLock(async () => {
+      const tasks = await this.readIndex();
+      const keep = tasks.filter(t => taskState(t) === "running");
+      if (keep.length !== tasks.length) await this.writeIndex(keep);
+      return tasks.length - keep.length;
+    });
   }
 }
 
