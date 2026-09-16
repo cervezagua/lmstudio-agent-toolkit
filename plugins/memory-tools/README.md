@@ -44,6 +44,8 @@ A skill is a written set of instructions for one kind of task: a workflow, a hou
   commit-style.md     # or just a single markdown file
 ```
 
+This is the same layout Claude Code, Codex and LM Studio Bionic use, so a skills folder written for any of them works unchanged — set **Skills Directory** to `~/.claude/skills` (or wherever yours live) instead of copying files around.
+
 `SKILL.md` can start with frontmatter; without it, the file name is the skill name and the first real line becomes the description:
 
 ```markdown

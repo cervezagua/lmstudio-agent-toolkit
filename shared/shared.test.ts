@@ -106,21 +106,29 @@ describe("commandEnv", () => {
 
   // The bug this exists for: LM Studio's plugin host gave us no PATHEXT, so PowerShell could not
   // turn "node" into "node.exe" and every run_command failed with "is not recognized".
-  it.runIf(process.platform === "win32")("still resolves a bare command in PowerShell", async () => {
-    const original = process.env.PATHEXT;
-    delete process.env.PATHEXT;
-    try {
-      const result = await runProcess(
-        "powershell",
-        ["-NoProfile", "-NonInteractive", "-Command", "node --version"],
-        { cwd: process.cwd(), timeoutMs: 30000 },
-      );
-      expect(result.stderr).not.toContain("is not recognized");
-      expect(result.stdout.trim()).toMatch(/^v\d+\./);
-    } finally {
-      if (original !== undefined) process.env.PATHEXT = original;
-    }
-  });
+  // Windows PowerShell can take many seconds to start on a cold CI runner, so this test gets its own
+  // budget: longer than the runProcess timeout below, so a real hang is reported as our timeout with
+  // its output rather than killed by the runner with nothing to show.
+  it.runIf(process.platform === "win32")(
+    "still resolves a bare command in PowerShell",
+    async () => {
+      const original = process.env.PATHEXT;
+      delete process.env.PATHEXT;
+      try {
+        const result = await runProcess(
+          "powershell",
+          ["-NoProfile", "-NonInteractive", "-Command", "node --version"],
+          { cwd: process.cwd(), timeoutMs: 45000 },
+        );
+        expect(result.timedOut).toBe(false);
+        expect(result.stderr).not.toContain("is not recognized");
+        expect(result.stdout.trim()).toMatch(/^v\d+\./);
+      } finally {
+        if (original !== undefined) process.env.PATHEXT = original;
+      }
+    },
+    60000,
+  );
 });
 
 describe("findExecutable", () => {

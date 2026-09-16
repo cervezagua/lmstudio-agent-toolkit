@@ -37,6 +37,9 @@ Every one of those calls is shown to you for approval before it runs.
 
 Each plugin is separate and every optional group has an on/off switch, because small models pick tools better from a short list.
 
+> [!TIP]
+> **Skills you already wrote work here.** memory-tools reads the standard Agent Skills layout — `<skill>/SKILL.md` with `name:` and `description:` frontmatter — so pointing its **Skills Directory** at `~/.claude/skills` hands your local model the same skills you use with Claude Code, Codex or LM Studio Bionic.
+
 ## Quickstart
 
 > [!NOTE]
