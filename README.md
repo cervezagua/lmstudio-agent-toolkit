@@ -17,16 +17,11 @@
 
 ## What it looks like
 
-> **You:** the date parser drops the timezone on ISO strings. Find it, fix it, and prove it works.
+<p align="center">
+  <img src="docs/demo.png" alt="A session in which the model lists the project, reads slugify.js and its test, edits the regex to stop stripping digits, and runs the test to exit code 0." width="920">
+</p>
 
-```text
-grep        pattern="parseDate" output_mode="files_with_matches"  → 3 files
-read_file   src/time/parseDate.ts                                 → 142 lines
-edit_file   src/time/parseDate.ts                                 → 1 replacement
-run_command "npm test -- parseDate"                               → exit_code: 0, 12 passed
-```
-
-> **Model:** It was stripping the offset before parsing. Fixed, and the parser tests pass.
+<p align="center"><sub>A real run with <code>qwen/qwen3.8-27b</code> and coder-tools, rendered from the model's own tool calls and their results.</sub></p>
 
 Every one of those calls is shown to you for approval before it runs.
 
