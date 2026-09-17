@@ -39,13 +39,13 @@ const memoryDir = inProcess ? scratchMemoryDir : join(homedir(), ".lmstudio-agen
 /** Per-chat and global config used in --in-process mode (mirrors each plugin's defaults). */
 const inProcessConfig = {
   coder: {
-    config: { rootDirectory: "", allowShell: true, shell: "auto", commandTimeoutSeconds: 60, maxOutputChars: 20000, blockedCommandPatterns: [] },
+    config: { projectFolder: "", allowShell: true, shell: "auto", commandTimeoutSeconds: 60, maxOutputChars: 20000, blockedCommandPatterns: [] },
   },
   memory: {
-    config: { projectDirectory: "", instructionFiles: ["AGENTS.md"], injectMemoryIndex: true, maxInjectedChars: 12000 },
+    config: { projectFolder: "", instructionFiles: ["AGENTS.md"], injectMemoryIndex: true, maxInjectedChars: 12000 },
     globalConfig: { memoryDirectory: scratchMemoryDir },
   },
-  git: { config: { repoDirectory: "", allowPush: false, enableGitHub: false, maxOutputChars: 20000 } },
+  git: { config: { projectFolder: "", allowPush: false, enableGitHub: false, maxOutputChars: 20000 } },
   web: {
     config: {
       searchBackend: "duckduckgo",

@@ -1,7 +1,0 @@
-{
-  "type": "plugin",
-  "runner": "node",
-  "owner": "local",
-  "name": "memory-tools",
-  "revision": 1
-}

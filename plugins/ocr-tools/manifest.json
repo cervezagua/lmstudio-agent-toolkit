@@ -1,7 +1,0 @@
-{
-  "type": "plugin",
-  "runner": "node",
-  "owner": "local",
-  "name": "ocr-tools",
-  "revision": 1
-}

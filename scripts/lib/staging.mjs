@@ -1,50 +1,29 @@
-// Shared by install-plugins.mjs and hub-push.mjs: pick plugins, sync shared files, and stage clean
-// copies (no node_modules, build output or tests) that LM Studio can install or publish.
+// Shared by install.mjs and hub-push.mjs: stage a clean copy of the plugin (no node_modules, build
+// output or tests) that LM Studio can install or publish.
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
 export const repo = join(import.meta.dirname, "..", "..");
-const pluginsDir = join(repo, "plugins");
+export const pluginDir = join(repo, "plugin");
 
-/** All plugin folders, or only the requested ones; exits with a message if none match. */
-export function selectPlugins(requested) {
-  const all = readdirSync(pluginsDir).filter(name => existsSync(join(pluginsDir, name, "manifest.json")));
-  const plugins = requested.length === 0 ? all : all.filter(name => requested.includes(name));
-  const unknown = requested.filter(name => !all.includes(name));
-  if (unknown.length > 0 || plugins.length === 0) {
-    console.error(`Unknown plugin(s): ${unknown.join(", ") || "(none given)"}. Available: ${all.join(", ")}`);
-    process.exit(1);
-  }
-  return plugins;
-}
-
-export function syncShared() {
-  const result = spawnSync(process.execPath, [join(repo, "scripts", "sync-shared.mjs")], { stdio: "inherit" });
-  if (result.status !== 0) process.exit(1);
-}
-
-/** Copies each plugin to a temporary folder, calls `action(name, stageDir)`, then cleans up. */
-export function withStagedPlugins(plugins, action) {
+/** Copies the plugin to a temporary folder, calls `action(stageDir)`, then cleans up. */
+export function withStagedPlugin(action) {
   const stageRoot = mkdtempSync(join(tmpdir(), "lms-plugin-stage-"));
-  let failed = false;
+  const stage = join(stageRoot, "agent-toolkit");
   try {
-    for (const name of plugins) {
-      const stage = join(stageRoot, name);
-      cpSync(join(pluginsDir, name), stage, {
-        recursive: true,
-        filter: source => {
-          const base = basename(source);
-          return base !== "node_modules" && base !== ".lmstudio" && !base.endsWith(".test.ts");
-        },
-      });
-      if (!action(name, stage)) failed = true;
-    }
+    cpSync(pluginDir, stage, {
+      recursive: true,
+      filter: source => {
+        const base = basename(source);
+        return base !== "node_modules" && base !== ".lmstudio" && base !== "dist" && !base.endsWith(".test.ts");
+      },
+    });
+    return action(stage);
   } finally {
     rmSync(stageRoot, { recursive: true, force: true });
   }
-  return !failed;
 }
 
 /** Runs the lms CLI in a folder; returns true on success. */

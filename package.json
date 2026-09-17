@@ -1,7 +1,7 @@
 {
   "name": "lmstudio-agent-toolkit",
   "private": true,
-  "description": "LM Studio plugins that give local models coding-agent tools: files and shell, memory, git, web and OCR",
+  "description": "An LM Studio plugin that gives local models coding-agent tools: files and shell, memory, git, web and documents",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/cervezagua/lmstudio-agent-toolkit.git"
@@ -15,13 +15,11 @@
     "node": ">=22"
   },
   "scripts": {
-    "setup": "node scripts/install-plugins.mjs",
-    "test": "node scripts/sync-shared.mjs --check && vitest run",
-    "sync-shared": "node scripts/sync-shared.mjs",
-    "install-plugins": "node scripts/install-plugins.mjs",
+    "setup": "node scripts/install.mjs",
+    "deps": "npm --prefix plugin install",
+    "test": "vitest run",
+    "typecheck": "npm --prefix plugin run typecheck",
     "e2e": "node scripts/e2e.mjs",
-    "install:all": "node scripts/each-plugin.mjs npm install",
-    "typecheck": "node scripts/each-plugin.mjs npx tsc --noEmit",
     "hub:push": "node scripts/hub-push.mjs"
   },
   "devDependencies": {
