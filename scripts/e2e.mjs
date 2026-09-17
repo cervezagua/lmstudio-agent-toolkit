@@ -3,7 +3,7 @@
 //
 // Usage: node scripts/e2e.mjs <modelKey> [--in-process] [--only coder,memory,git,web]
 //
-// Default mode asks LM Studio for the installed plugins' tools (`npm run install-plugins` first).
+// Default mode asks LM Studio for the installed plugin's tools (`npm run setup` first).
 // LM Studio only allows that for API clients granted the "use plugins" permission.
 // --in-process runs the same toolsProvider code inside this script instead (no install or permission
 // needed; memory is written to a temporary folder). A model loaded by this script is unloaded again.
@@ -14,7 +14,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 const repo = join(import.meta.dirname, "..");
-const require = createRequire(join(repo, "plugins", "coder-tools", "package.json"));
+const require = createRequire(join(repo, "plugin", "package.json"));
 const { LMStudioClient } = require("@lmstudio/sdk");
 
 const args = process.argv.slice(2);
@@ -36,38 +36,58 @@ const importTs = async path => tsxRequire(join(repo, path), import.meta.url);
 const scratchMemoryDir = await mkdtemp(join(tmpdir(), "lms-e2e-memory-"));
 const memoryDir = inProcess ? scratchMemoryDir : join(homedir(), ".lmstudio-agent-memory");
 
-/** Per-chat and global config used in --in-process mode (mirrors each plugin's defaults). */
-const inProcessConfig = {
-  coder: {
-    config: { projectFolder: "", allowShell: true, shell: "auto", commandTimeoutSeconds: 60, maxOutputChars: 20000, blockedCommandPatterns: [] },
-  },
-  memory: {
-    config: { projectFolder: "", instructionFiles: ["AGENTS.md"], injectMemoryIndex: true, maxInjectedChars: 12000 },
-    globalConfig: { memoryDirectory: scratchMemoryDir },
-  },
-  git: { config: { projectFolder: "", allowPush: false, enableGitHub: false, maxOutputChars: 20000 } },
-  web: {
-    config: {
-      searchBackend: "duckduckgo",
-      searxngUrl: "",
-      maxSearchResults: 5,
-      maxPageChars: 8000,
-      enableBrowser: true,
-      browserChannel: "msedge",
-      headless: true,
-    },
-    globalConfig: { braveApiKey: "" },
-  },
+/** One plugin now: every group is off, and each scenario switches on the one it exercises. */
+const allGroupsOff = {
+  projectFolder: "",
+  maxOutputChars: 20000,
+  enableFiles: false,
+  allowShell: true,
+  shell: "auto",
+  commandTimeoutSeconds: 60,
+  blockedCommandPatterns: [],
+  persistentShell: false,
+  maxReadBytes: 262144,
+  enableBackgroundTasks: false,
+  enableDiagnostics: false,
+  enableNotebookTools: false,
+  enableSubagent: false,
+  subagentModel: "",
+  enableMemory: false,
+  instructionFiles: ["AGENTS.md"],
+  injectMemoryIndex: true,
+  injectGitSnapshot: false,
+  enableSkills: false,
+  enablePlanMode: false,
+  maxInjectedChars: 12000,
+  enableGit: false,
+  allowPush: false,
+  enableGitHub: false,
+  enableWeb: false,
+  searchBackend: "duckduckgo",
+  searxngUrl: "",
+  maxSearchResults: 5,
+  maxPageChars: 8000,
+  browserFallback: false,
+  enableBrowser: true,
+  browserChannel: "msedge",
+  headless: true,
+  enableDocuments: false,
+  visionModel: "",
+  renderScale: 2,
+  maxPages: 10,
 };
+const groupFor = { coder: "enableFiles", memory: "enableMemory", git: "enableGit", web: "enableWeb", ocr: "enableDocuments" };
 
 async function getTools(name, workingDirectory) {
   if (!inProcess) {
-    const session = await client.plugins.pluginTools(`local/${name}-tools`, { workingDirectory });
+    const session = await client.plugins.pluginTools("local/agent-toolkit", { workingDirectory });
     return { tools: session.tools, dispose: () => session[Symbol.dispose]() };
   }
-  const { fakeController } = await importTs("shared/testing/fake-controller.ts");
-  const { toolsProvider } = await importTs(`plugins/${name}-tools/src/toolsProvider.ts`);
-  const tools = await toolsProvider(fakeController({ ...inProcessConfig[name], workingDirectory }));
+  const { fakeController } = await importTs("plugin/src/shared/testing/fake-controller.ts");
+  const { toolsProvider } = await importTs("plugin/src/toolsProvider.ts");
+  const config = { ...allGroupsOff, [groupFor[name]]: true };
+  const globalConfig = { memoryDirectory: scratchMemoryDir, skillsDirectory: "", braveApiKey: "" };
+  const tools = await toolsProvider(fakeController({ config, globalConfig, workingDirectory }));
   // A browser left open by the web scenario is closed when this process exits.
   return { tools, dispose: () => {} };
 }

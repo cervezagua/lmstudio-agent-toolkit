@@ -1,8 +1,8 @@
-# Local SearXNG for web-tools
+# Local SearXNG for the Web group
 
-A private [SearXNG](https://github.com/searxng/searxng) metasearch instance running in WSL (Ubuntu) as a systemd service. The web-tools plugin uses it by default at `http://localhost:8888`: search backend `auto`, falling back to DuckDuckGo when SearXNG isn't running.
+A private [SearXNG](https://github.com/searxng/searxng) metasearch instance running in WSL (Ubuntu) as a systemd service. The toolkit's Web group uses it by default at `http://localhost:8888`: search backend `auto`, falling back to DuckDuckGo when SearXNG isn't running.
 
-This setup is **optional** and **Windows + WSL-specific**. On Linux or macOS, run SearXNG any way you like (its official container works) and point web-tools' **SearXNG URL** at it; enable the `json` format and turn off the limiter as described under [Settings choices](#settings-choices).
+This setup is **optional** and **Windows + WSL-specific**. On Linux or macOS, run SearXNG any way you like (its official container works) and point the toolkit's **SearXNG URL** at it; enable the `json` format and turn off the limiter as described under [Settings choices](#settings-choices).
 
 | File | Purpose |
 |---|---|
@@ -25,7 +25,7 @@ The script installs build packages with apt, creates a `searxng` system user, cl
 
 ## Keeping it running
 
-WSL stops a distro a few seconds after its last session closes, and SearXNG stops with it. After a reboot, or whenever web-tools reports `SearXNG unavailable, used DuckDuckGo`, **double-click `start-searxng.cmd`**. It starts the service, keeps WSL running in the background, and closes after a few seconds once SearXNG answers. If something fails, the window stays open with the error. `stop-searxng.cmd` stops it again.
+WSL stops a distro a few seconds after its last session closes, and SearXNG stops with it. After a reboot, or whenever the Web group reports `SearXNG unavailable, used DuckDuckGo`, **double-click `start-searxng.cmd`**. It starts the service, keeps WSL running in the background, and closes after a few seconds once SearXNG answers. If something fails, the window stays open with the error. `stop-searxng.cmd` stops it again.
 
 Don't use right-click → **Run with PowerShell** on the `.ps1`. On many Windows installs that runs Windows PowerShell 5.1, whose default execution policy (Restricted) blocks every script file; the error flashes and the window closes. The `.cmd` files relax the policy for their own process only and change no system setting. From a terminal in this folder, either of these works:
 
@@ -47,7 +47,7 @@ This only registers a task for your user. It changes no global WSL settings and 
 
 ## Settings choices
 
-- **JSON output enabled** (`search.formats`): web-tools requests `format=json`.
+- **JSON output enabled** (`search.formats`): the Web group requests `format=json`.
 - **Limiter off, not a public instance**: the limiter is anti-bot protection for public servers and would block the plugin's requests. That's safe here because the service listens only on loopback, so only your PC can reach it (WSL forwards `localhost` to Windows).
 - **Engines**: chosen by testing from one Windows machine in September 2026. Brave, Bing and Google returned results; DuckDuckGo and Qwant answered with CAPTCHAs, Google CSE timed out, and Yep and PrivacyWall denied access. So DuckDuckGo and Google CSE are disabled and Bing and Google are enabled. Engines behave differently on other networks and IP addresses; to test one yourself, run:
 

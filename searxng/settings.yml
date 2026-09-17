@@ -1,4 +1,4 @@
-# SearXNG settings for a private, local instance used by the web-tools LM Studio plugin.
+# SearXNG settings for a private, local instance used by the LM Studio agent toolkit.
 # Only overrides are listed; everything else comes from SearXNG's defaults.
 # Installed to /etc/searxng/settings.yml by setup-wsl.sh (which fills in secret_key).
 use_default_settings: true
@@ -9,7 +9,7 @@ general:
 search:
   safe_search: 0
   autocomplete: ""
-  # web-tools requests format=json; html keeps the normal web UI working.
+  # The toolkit requests format=json; html keeps the normal web UI working.
   formats:
     - html
     - json

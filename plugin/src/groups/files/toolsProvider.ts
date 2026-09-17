@@ -18,7 +18,7 @@ import { globFiles, grepFiles } from "./lib/search";
 import { getSession, resetSession, type ShellSpec } from "./lib/session";
 import { formatTaskLine, TaskManager } from "./lib/tasks";
 import { safe, ToolError } from "../../shared/errors";
-import { PLANNING_NOTE, readMode } from "../../shared/mode";
+import { isChatStateFile, PLANNING_NOTE, readMode } from "../../shared/mode";
 import { displayPath, resolveSafe } from "../../shared/paths";
 import { findExecutable, formatRunResult, runProcess } from "../../shared/process";
 import { truncate } from "../../shared/truncate";
@@ -88,12 +88,21 @@ export async function toolsProvider(ctl: ToolsProviderController) {
     }
   };
 
+  /** Resolves a path a tool is about to change, refusing the toolkit's own chat state files. */
+  const resolveWritable = async (path: string) => {
+    const file = await resolveSafe(root, path);
+    if (isChatStateFile(ctl.getWorkingDirectory(), file)) {
+      throw new ToolError(`${show(file)} is managed by the toolkit and cannot be changed by a tool.`);
+    }
+    return file;
+  };
+
   /**
    * Shared preparation for every tool that changes a file: resolve it, refuse notebooks and huge
    * files, and refuse editing a version the model has not read (or that changed since it did).
    */
   const openForEdit = async (path: string) => {
-    const file = await resolveSafe(root, path);
+    const file = await resolveWritable(path);
     if (file.toLowerCase().endsWith(".ipynb")) {
       throw new ToolError(`${show(file)} is a Jupyter notebook; use notebook_edit instead of text edits.`);
     }
@@ -161,7 +170,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       `,
       parameters: { path: z.string(), content: z.string() },
       implementation: safe(async ({ path, content }) => {
-        const file = await resolveSafe(root, path);
+        const file = await resolveWritable(path);
         const info = await stat(file).catch(() => null);
         if (info?.isDirectory()) throw new ToolError(`"${path}" is a directory.`);
         const existing = await readIfExists(file);
@@ -264,7 +273,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       description: "Restore a file to the state it had before this chat's most recent change to it.",
       parameters: { path: z.string() },
       implementation: safe(async ({ path }) => {
-        const file = await resolveSafe(root, path);
+        const file = await resolveWritable(path);
         const { restored, savedAt } = await backups.restore(file);
         forget(file);
         return restored === "deleted"
@@ -389,7 +398,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
           "Read a Jupyter notebook (.ipynb): every cell with its index, type, source and a summary of its outputs.",
         parameters: { path: z.string() },
         implementation: safe(async ({ path }) => {
-          const file = await resolveSafe(root, path);
+          const file = await resolveWritable(path);
           const raw = await readFile(file, "utf-8");
           await recordRead(file, raw);
           const notebook = parseNotebook(raw);
@@ -412,7 +421,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
           cell_type: z.enum(["code", "markdown", "raw"]).optional(),
         },
         implementation: safe(async ({ path, cell_index, mode, source, cell_type }) => {
-          const file = await resolveSafe(root, path);
+          const file = await resolveWritable(path);
           const original = await readFile(file, "utf-8");
           await assertFresh(file, show(file), original);
           const { notebook, message } = editNotebook(parseNotebook(original), {

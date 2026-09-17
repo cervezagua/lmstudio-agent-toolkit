@@ -1,5 +1,5 @@
 import { mkdir, readFile, writeFile } from "fs/promises";
-import { join } from "path";
+import { join, resolve } from "path";
 
 /**
  * The chat's current mode, shared between plugins through a small file in the chat's working
@@ -16,6 +16,17 @@ export interface ChatMode {
 
 export function modeFile(workingDirectory: string): string {
   return join(workingDirectory, ".agent-mode.json");
+}
+
+/**
+ * Files in the chat's working directory that the toolkit owns. The file tools refuse to change
+ * them: when no project folder is set the root *is* the working directory, so without this the
+ * model could turn planning off by writing the file instead of calling exit_plan_mode.
+ */
+export function isChatStateFile(workingDirectory: string, file: string): boolean {
+  const a = resolve(file);
+  const b = resolve(modeFile(workingDirectory));
+  return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
 export async function readMode(workingDirectory: string): Promise<ChatMode> {

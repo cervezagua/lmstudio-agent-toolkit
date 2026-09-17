@@ -4,13 +4,13 @@
 
 By design, these plugins let a language model act on your computer:
 
-- **coder-tools** reads and writes files inside a folder you choose and runs shell commands with your user account's permissions.
-- **git-tools** commits to repositories and, if you enable it, pushes to remotes.
-- **web-tools** fetches web pages and drives a real browser; it can reach anything your computer can, including services on your local network.
-- **memory-tools** stores notes on disk in plain text.
-- **ocr-tools** reads documents inside a folder you choose and sends page images to a model running in LM Studio.
+- **Files & Shell** reads and writes files inside the folder you choose and runs shell commands with your user account's permissions.
+- **Git & GitHub** commits to repositories and, if you enable it, pushes to remotes.
+- **Web** fetches web pages and drives a real browser; it can reach anything your computer can, including services on your local network.
+- **Memory & Context** stores notes on disk in plain text.
+- **Documents** reads documents inside the folder you choose and sends page images to a model running in LM Studio.
 
-Nothing is sent to an outside service except the web requests the model makes through web-tools.
+Nothing is sent to an outside service except the web requests the model makes through the Web group.
 
 ## Safeguards, and their limits
 
@@ -20,7 +20,7 @@ Nothing is sent to an outside service except the web requests the model makes th
 - **Plan mode.** Tools that change things are withheld until the model presents a plan.
 - **Prompt injection.** Web pages, documents and files can contain text written to manipulate a model. A model that reads such content may attempt harmful tool calls, which is another reason to review calls before approving them.
 
-For untrusted work, disable **Allow Shell Commands** in coder-tools, or run LM Studio inside a virtual machine or container.
+For untrusted work, switch off **Allow Shell Commands**, or run LM Studio inside a virtual machine or container.
 
 ## Reporting a problem
 

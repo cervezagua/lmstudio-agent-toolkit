@@ -36,7 +36,7 @@ jobs:
         run: npm ci
 
       - name: Install plugin dependencies
-        run: node scripts/each-plugin.mjs npm ci
+        run: npm --prefix plugin ci
 
       - name: Typecheck
         run: npm run typecheck
