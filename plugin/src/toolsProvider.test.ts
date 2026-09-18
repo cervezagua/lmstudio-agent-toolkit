@@ -103,6 +103,31 @@ describe("project folder", () => {
   });
 });
 
+describe("outside a chat", () => {
+  // LM Studio asks for the tool list to show it in the plugin's settings, with no chat attached, and
+  // the SDK's getWorkingDirectory() throws there. That used to fail the whole list with "This
+  // prediction process is not attached to a working directory".
+  const buildWithoutChat = (config: Record<string, unknown>) =>
+    toolsProvider(fakeController({ config: { ...baseConfig, ...config }, workingDirectory: null, globalConfig }));
+
+  it("still lists every enabled group's tools", async () => {
+    const names = (await buildWithoutChat({ enableMemory: true, enableGit: true })).map(t => t.name);
+    expect(names).toContain("read_file");
+    expect(names).toContain("memory_save");
+    expect(names).toContain("git_status");
+  });
+
+  it("still lists them when a project folder is set", async () => {
+    const names = (await buildWithoutChat({ projectFolder: project, enableDocuments: true })).map(t => t.name);
+    expect(names).toContain("read_file");
+    expect(names).toContain("read_document_text");
+  });
+
+  it("names the setting when the project folder does not exist", async () => {
+    await expect(buildWithoutChat({ projectFolder: join(project, "missing") })).rejects.toThrow(/Project Folder/);
+  });
+});
+
 describe("chat state files", () => {
   // With no project folder the root is the chat's working directory, which is where plan mode keeps
   // its file, so the file tools would otherwise be able to rewrite the chat's own mode. (While

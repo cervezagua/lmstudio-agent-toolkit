@@ -67,7 +67,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
   const maxReadBytes = config.get("maxReadBytes");
   const rootStat = await stat(root).catch(() => null);
   if (!rootStat?.isDirectory()) {
-    throw new Error(`coder-tools: root directory "${root}" does not exist or is not a directory.`);
+    throw new Error(`Project Folder "${root}" does not exist or is not a directory.`);
   }
   const show = (path: string) => displayPath(root, path);
   // State that must not pollute the user's project lives in the chat's working directory.

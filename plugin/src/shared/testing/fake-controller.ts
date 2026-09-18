@@ -4,7 +4,8 @@
 export interface FakeControllerOptions {
   config?: Record<string, unknown>;
   globalConfig?: Record<string, unknown>;
-  workingDirectory: string;
+  /** null mirrors LM Studio asking for the tool list outside any chat (e.g. the settings panel). */
+  workingDirectory: string | null;
   /** For prompt preprocessors: the chat history before the current message (an SDK `Chat`). */
   history?: unknown;
 }
@@ -25,7 +26,11 @@ export function fakeController({ config = {}, globalConfig = {}, workingDirector
     client: undefined as any,
     abortSignal: abort.signal,
     statuses,
-    getWorkingDirectory: () => workingDirectory,
+    getWorkingDirectory: () => {
+      // Same behaviour as the SDK's controller.
+      if (workingDirectory === null) throw new Error("This prediction process is not attached to a working directory.");
+      return workingDirectory;
+    },
     getPluginConfig: () => parsedConfig(config),
     getGlobalPluginConfig: () => parsedConfig(globalConfig),
     pullHistory: async () => history,

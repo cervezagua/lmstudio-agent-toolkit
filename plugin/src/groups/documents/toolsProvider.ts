@@ -20,7 +20,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
 
   const rootStat = await stat(root).catch(() => null);
   if (!rootStat?.isDirectory()) {
-    throw new Error(`ocr-tools: root directory "${root}" does not exist or is not a directory.`);
+    throw new Error(`Project Folder "${root}" does not exist or is not a directory.`);
   }
 
   const resolveDocument = async (path: string) => {
