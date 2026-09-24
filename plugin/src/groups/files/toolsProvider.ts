@@ -14,7 +14,7 @@ import { notFoundMessage } from "./lib/suggest";
 import { availableCheckers, runChecker } from "./lib/diagnostics";
 import { editNotebook, parseNotebook, renderNotebook } from "./lib/notebook";
 import { pickSubagentModel, runSubagent } from "./lib/subagent";
-import { globFiles, grepFiles } from "./lib/search";
+import { globFiles, grepFiles, parseRipgrepOutput } from "./lib/search";
 import { getSession, resetSession, type ShellSpec } from "./lib/session";
 import { formatTaskLine, TaskManager } from "./lib/tasks";
 import { safe, ToolError } from "../../shared/errors";
@@ -351,7 +351,8 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         let lines: string[];
         let truncated: boolean;
         if (rg) {
-          const args = ["--color", "never", "--max-columns", "300"];
+          // --null ends every path with a NUL, so the path can be split off exactly.
+          const args = ["--color", "never", "--max-columns", "300", "--null"];
           if (mode === "files_with_matches") args.push("--files-with-matches");
           else if (mode === "count") args.push("--count");
           else args.push("--line-number", "--no-heading");
@@ -361,9 +362,8 @@ export async function toolsProvider(ctl: ToolsProviderController) {
           args.push("-e", pattern, "--", relative(root, searchPath) || ".");
           const result = await runProcess(rg, args, { cwd: root, timeoutMs: 60_000, signal });
           if (result.exitCode === 2) throw new ToolError(result.stderr.trim() || "ripgrep failed");
-          const all = result.stdout.split(/\r?\n/).filter(Boolean).map(l => l.replace(/\\/g, "/"));
-          const paged = all.slice(skip, skip + maxResults);
-          lines = mode === "content" ? paged.map(l => l.replace(/^([^:]+:\d+):/, "$1: ")) : paged;
+          const all = parseRipgrepOutput(result.stdout, mode);
+          lines = all.slice(skip, skip + maxResults);
           truncated = all.length > skip + maxResults;
         } else {
           const result = await grepFiles({

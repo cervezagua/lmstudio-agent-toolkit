@@ -41,6 +41,42 @@ export async function globFiles({ cwd, pattern, limit, includeHidden = true }: G
 
 export type GrepOutputMode = "content" | "files_with_matches" | "count";
 
+/**
+ * Reshapes one line of ripgrep `--null` output to look exactly like the built-in search's, so
+ * results read the same whether or not ripgrep is installed. The NUL ends the path, which is the
+ * only part whose backslashes become slashes: doing it to the whole line would rewrite the matched
+ * text too, turning `C:\Users` into `C:/Users` and `\d+` into `/d+`.
+ */
+export function formatRipgrepLine(line: string, mode: GrepOutputMode): string {
+  const nul = line.indexOf("\0");
+  // In files_with_matches mode the NUL is the separator between paths, so a split has already
+  // removed it and the whole entry is the path.
+  const path = (nul === -1 ? line : line.slice(0, nul)).replace(/\\/g, "/").replace(/^\.\//, "");
+  if (mode === "files_with_matches") return path;
+  if (nul === -1) return line;
+  const rest = line.slice(nul + 1);
+  if (mode === "count") return `${path}: ${rest}`;
+  // A match line is "<line>:<text>"; a context line uses "-" instead.
+  const parts = /^(\d+)([:-])(.*)$/.exec(rest);
+  return parts ? `${path}:${parts[1]}${parts[2]} ${parts[3]}` : `${path}:${rest}`;
+}
+
+/**
+ * Splits ripgrep's `--null` output into result lines. In files_with_matches mode ripgrep writes
+ * "path\0path\0" with no newlines at all, so splitting that on newlines would collapse every match
+ * into one entry and lose all but the first file. The other modes still end each line with one.
+ */
+export function parseRipgrepOutput(stdout: string, mode: GrepOutputMode): string[] {
+  if (mode === "files_with_matches") return stdout.split("\0").filter(Boolean).map(part => formatRipgrepLine(part, mode));
+  // Every real result carries the NUL that ends its path. Anything else is ripgrep's "--" separator
+  // between context blocks, which the built-in search does not emit and which would otherwise count
+  // against max_results and offset.
+  return stdout
+    .split(/\r?\n/)
+    .filter(line => line.includes("\0"))
+    .map(line => formatRipgrepLine(line, mode));
+}
+
 export interface GrepOptions {
   root: string;
   searchPath: string;

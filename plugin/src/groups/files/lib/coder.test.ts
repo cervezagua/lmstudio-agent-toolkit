@@ -3,7 +3,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { findBlockedPattern, parsePatterns } from "./blocklist";
-import { globFiles, grepFiles } from "./search";
+import { formatRipgrepLine, globFiles, grepFiles, parseRipgrepOutput } from "./search";
 
 describe("blocklist", () => {
   it.each([
@@ -125,5 +125,59 @@ describe("grep output modes", () => {
     const result = await grep({ maxResults: 2 });
     expect(result).toMatchObject({ truncated: true });
     expect(result.matches).toHaveLength(2);
+  });
+});
+
+// ripgrep is used when installed and the built-in search otherwise, so both must produce the same
+// shape. These are the exact lines ripgrep --null emits (NUL ends the path).
+describe("formatRipgrepLine", () => {
+  it("matches the built-in search's shape for each output mode", () => {
+    expect(formatRipgrepLine("src/app.ts\u000012:const x = 1;", "content")).toBe("src/app.ts:12: const x = 1;");
+    expect(formatRipgrepLine("src/app.ts\u000011-before", "content")).toBe("src/app.ts:11- before");
+    expect(formatRipgrepLine("src/app.ts\u00003", "count")).toBe("src/app.ts: 3");
+    expect(formatRipgrepLine("src/app.ts\u0000", "files_with_matches")).toBe("src/app.ts");
+  });
+
+  it("leaves backslashes in the matched text alone", () => {
+    // Rewriting the whole line turned C:\Users into C:/Users and \d+ into /d+.
+    const line = String.raw`.\sub\a.txt` + "\u0000" + String.raw`2:C:\Users\me matched \d+`;
+    expect(formatRipgrepLine(line, "content")).toBe(String.raw`sub/a.txt:2: C:\Users\me matched \d+`);
+  });
+
+  it("drops the ./ that searching the root adds", () => {
+    expect(formatRipgrepLine("./a.txt\u00001:hit", "content")).toBe("a.txt:1: hit");
+  });
+
+  it("keeps a path that contains a dash and digits", () => {
+    expect(formatRipgrepLine("a-1-b.txt\u00005:hit", "content")).toBe("a-1-b.txt:5: hit");
+  });
+});
+
+// Exactly what ripgrep --null writes, byte for byte: in files_with_matches mode the NUL separates
+// the paths and there are no newlines at all, so splitting on newlines kept only the first file.
+describe("parseRipgrepOutput", () => {
+  it("splits files_with_matches on the NUL, not on newlines", () => {
+    expect(parseRipgrepOutput(".\\a.txt\0.\\b.txt\0", "files_with_matches")).toEqual(["a.txt", "b.txt"]);
+    expect(parseRipgrepOutput("./a.txt\0./b.txt\0./c.txt\0", "files_with_matches")).toHaveLength(3);
+  });
+
+  it("splits the line-based modes on newlines", () => {
+    expect(parseRipgrepOutput("./a.txt\u00002\n./b.txt\u00003\n", "count")).toEqual(["a.txt: 2", "b.txt: 3"]);
+    expect(parseRipgrepOutput("./a.txt\u00001:hit\n./b.txt\u00007:hit\n", "content")).toEqual([
+      "a.txt:1: hit",
+      "b.txt:7: hit",
+    ]);
+  });
+
+  it("drops the -- ripgrep puts between context blocks", () => {
+    // They would otherwise count against max_results and offset, and the built-in search emits none.
+    const stdout = "./a.txt\u00001:hit\n--\n./b.txt\u00009:hit\n";
+    expect(parseRipgrepOutput(stdout, "content")).toEqual(["a.txt:1: hit", "b.txt:9: hit"]);
+  });
+
+  it("returns nothing for empty output", () => {
+    for (const mode of ["content", "count", "files_with_matches"] as const) {
+      expect(parseRipgrepOutput("", mode)).toEqual([]);
+    }
   });
 });
