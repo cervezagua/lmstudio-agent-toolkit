@@ -102,6 +102,8 @@ Details and how to report a problem: [SECURITY.md](SECURITY.md).
 - **Edits are exact replacements** that must match once, so a model never rewrites a whole file to change one line. LF text matches CRLF files, and any edit can be previewed as a diff or undone.
 - **Nothing is silently lost.** Long command output is written whole to a file and its path returned; long documents and search results page with `offset`.
 - **Cheap answers first.** `grep` can return only file names or counts, `read_document_text` reads a PDF's text layer without a model, and fetched pages are cached for a few minutes.
+- **The same answers on every machine.** `grep` uses ripgrep when it's installed and a built-in search otherwise, and both return identical lines, so installing ripgrep makes searches faster without changing what the model reads.
+- **Skills are read whole.** A skill description that wraps over several lines, is quoted across lines, or uses YAML's `>` or `|` blocks keeps the part that says when to use it, instead of stopping at the first line.
 - **The model starts informed.** Each chat opens with today's date, your `AGENTS.md`, the memory index, and — in a git repo — the branch, uncommitted changes and recent commits.
 - **Real exit codes.** PowerShell's `-Command` collapses every failure to `1`; `run_command` reports what actually happened.
 - **No shell in the middle of git.** git tools run `git` and `gh` directly, reject refs that look like options, and never open an editor or credential prompt.
