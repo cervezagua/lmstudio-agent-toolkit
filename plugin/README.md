@@ -57,7 +57,7 @@ On the **first message of every chat**, this group adds today's date, your instr
 | `enter_plan_mode` | – | Switches the chat into planning mode: research only. |
 | `exit_plan_mode` | `plan` | Presents the plan and re-enables the tools that make changes. |
 
-Skills use the standard Agent Skills layout — `<skill>/SKILL.md` with `name:` and `description:` frontmatter, or a single `<name>.md`. It's the same layout Claude Code, Codex and LM Studio Bionic use, so point **Skills Directory** at `~/.claude/skills` and your existing skills work unchanged.
+Skills use the standard Agent Skills layout — `<skill>/SKILL.md` with `name:` and `description:` frontmatter, or a single `<name>.md`. It's the same layout Claude Code, Codex and LM Studio Bionic use, so point **Skills Directory** at `~/.lmstudio/skills` (Bionic's folder) or `~/.claude/skills` and your existing skills work unchanged. A description that wraps over several lines, is quoted across lines, or uses YAML's `>` or `|` blocks is read in full.
 
 ## Git & GitHub
 

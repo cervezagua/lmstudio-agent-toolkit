@@ -57,6 +57,78 @@ describe("skills", () => {
     });
   });
 
+  // Real skills wrap their descriptions over several lines. Keeping only the first line dropped most
+  // of what tells a model when to use the skill.
+  describe("multi-line frontmatter", () => {
+    // Assembled with \n and switched to the target line ending in one pass, so \r\n is not doubled.
+    const withEol = (header: string, eol: string) => `---\n${header}\n---\nbody`.replace(/\n/g, eol);
+    const describedBy = (header: string, eol = "\n") =>
+      parseSkillHeader(withEol(header, eol), "fallback").description;
+
+    for (const [label, eol] of [
+      ["unix line endings", "\n"],
+      ["windows line endings", "\r\n"],
+    ] as const) {
+      describe(label, () => {
+        it("joins a plain value that wraps onto indented lines", () => {
+          expect(describedBy("name: a\ndescription: first part,\n  second part,\n  third part.", eol)).toBe(
+            "first part, second part, third part.",
+          );
+        });
+
+        it("reads a quoted value that spans lines, with escaped quotes inside", () => {
+          expect(
+            describedBy('name: a\ndescription: "an app stuck in \\"starting\\",\n  or a path: /home/x,\n  and more."', eol),
+          ).toBe('an app stuck in "starting", or a path: /home/x, and more.');
+        });
+
+        it("folds a > block and a | block", () => {
+          expect(describedBy("name: a\ndescription: >\n  folded one\n  folded two", eol)).toBe("folded one folded two");
+          expect(describedBy("name: a\ndescription: |-\n  literal one\n  literal two", eol)).toBe("literal one literal two");
+        });
+
+        it("still reads the key that follows a long value", () => {
+          const header = 'name: a\ndescription: "wraps on\n  and on."\nlicense: MIT. LICENSE has complete terms';
+          expect(parseSkillHeader(withEol(header, eol), "fallback")).toEqual({ name: "a", description: "wraps on and on." });
+        });
+      });
+    }
+
+    it("does not treat an indented line as a new key", () => {
+      expect(describedBy("name: a\ndescription: symptoms that are specific:\n  an app stuck starting")).toBe(
+        "symptoms that are specific: an app stuck starting",
+      );
+    });
+
+    it("keeps the 300 character cap", () => {
+      const long = describedBy(`name: a\ndescription: ${"word ".repeat(40)}\n  ${"more ".repeat(40)}`);
+      expect(long).toHaveLength(300);
+    });
+
+    it("treats a blank line inside quotes as a line break, not the end of the value", () => {
+      expect(describedBy('name: a\ndescription: "first paragraph,\n\n  second paragraph."')).toBe(
+        "first paragraph, second paragraph.",
+      );
+    });
+
+    it("turns a written \\n or \\t into a space, so the list stays one line per skill", () => {
+      const description = describedBy(String.raw`name: a` + "\n" + String.raw`description: "one\ntwo\tthree"`);
+      expect(description).toBe("one two three");
+      expect(description).not.toContain("\n");
+    });
+
+    it("keeps a written backslash before an n, which is not a line break", () => {
+      // \\n is an escaped backslash followed by n; only \n is a break.
+      expect(describedBy(String.raw`name: a` + "\n" + String.raw`description: "a path\\name here"`)).toBe(
+        String.raw`a path\name here`,
+      );
+    });
+
+    it("reads a single-quoted value, with '' for a quote", () => {
+      expect(describedBy("name: a\ndescription: 'it''s fine,\n  really'")).toBe("it's fine, really");
+    });
+  });
+
   it("lists folder skills and single-file skills, ignoring README", async () => {
     const skills = await listSkills(skillsDir);
     expect(skills.map(s => s.name)).toEqual(["commit-style", "release-checklist"]);

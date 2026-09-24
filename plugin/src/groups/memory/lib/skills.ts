@@ -17,14 +17,91 @@ export function defaultSkillsDirectory(configured: string): string {
   return resolve(value.replace(/^~(?=$|[\\/])/, homedir()));
 }
 
+/** A key starts a new field only at the left margin; anything indented continues the value above. */
+const KEY_LINE = /^([A-Za-z0-9_.-]+)[ \t]*:[ \t]?(.*)$/;
+
+/** Index of the closing quote, honouring \" inside "..." and '' inside '...'. -1 if unterminated. */
+function closingQuote(body: string, quote: string): number {
+  for (let i = 1; i < body.length; i++) {
+    if (quote === '"' && body[i] === "\\") {
+      i++;
+      continue;
+    }
+    if (body[i] !== quote) continue;
+    if (quote === "'" && body[i + 1] === "'") {
+      i++;
+      continue;
+    }
+    return i;
+  }
+  return -1;
+}
+
+function unquote(body: string, quote: string): string {
+  if (quote === "'") return body.replace(/''/g, "'");
+  // One pass, so an escaped backslash is not re-read as the start of the next escape: \\n is a
+  // backslash followed by n, while \n is a break, which becomes a space because the skill list
+  // shows one line per skill.
+  return body.replace(/\\(.)/g, (_, char) => (char === "n" || char === "t" ? " " : char));
+}
+
+/** Collapses whatever whitespace folding left behind into single spaces. */
+const fold = (value: string) => value.replace(/\s+/g, " ").trim();
+
+/**
+ * Reads one field's value, which may run past its own line: a plain value can wrap onto indented
+ * lines, a quoted one can span lines until its closing quote, and `>` or `|` start a block of
+ * indented lines. Everything is folded into one line, because the skill list shows one line each.
+ */
+function readValue(lines: string[], start: number): { value: string; next: number } {
+  const first = KEY_LINE.exec(lines[start])![2].trim();
+  let index = start + 1;
+  const indented = (line: string) => /^[ \t]+\S/.test(line);
+  const followingLines = () => {
+    const parts: string[] = [];
+    while (index < lines.length && (lines[index].trim() === "" || indented(lines[index]))) {
+      const line = lines[index].trim();
+      if (line) parts.push(line);
+      index++;
+    }
+    return parts;
+  };
+
+  // "|" keeps line breaks and ">" folds them; both are joined here. "-" and "+" only decide what
+  // happens to trailing newlines, which do not survive folding either way.
+  if (/^[|>][-+]?$/.test(first)) return { value: followingLines().join(" "), next: index };
+
+  const quote = first[0];
+  if (quote === '"' || quote === "'") {
+    let body = first;
+    // A blank line inside quotes is a line break in the value, not the end of it, so keep going to
+    // the closing quote. The frontmatter block bounds this either way.
+    while (closingQuote(body, quote) === -1 && index < lines.length) {
+      body += " " + lines[index].trim();
+      index++;
+    }
+    const end = closingQuote(body, quote);
+    return { value: fold(unquote(end === -1 ? body.slice(1) : body.slice(1, end), quote)), next: index };
+  }
+
+  return { value: fold([first, ...followingLines()].join(" ")), next: index };
+}
+
 /** Reads `name:` and `description:` from a leading YAML frontmatter block, if there is one. */
 export function parseSkillHeader(text: string, fallbackName: string): { name: string; description: string } {
   const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
   const fields: Record<string, string> = {};
   if (match) {
-    for (const line of match[1].split(/\r?\n/)) {
-      const colon = line.indexOf(":");
-      if (colon > 0) fields[line.slice(0, colon).trim().toLowerCase()] = line.slice(colon + 1).trim().replace(/^["']|["']$/g, "");
+    const lines = match[1].split(/\r?\n/);
+    for (let i = 0; i < lines.length; ) {
+      const key = KEY_LINE.exec(lines[i]);
+      if (!key) {
+        i++;
+        continue;
+      }
+      const { value, next } = readValue(lines, i);
+      fields[key[1].toLowerCase()] = value;
+      i = next;
     }
   }
   let description = fields.description ?? "";

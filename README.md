@@ -40,7 +40,7 @@ Install one plugin, point it at a folder, and switch on what you need. Each grou
 Full tool and settings reference: [plugin/README.md](plugin/README.md).
 
 > [!TIP]
-> **Skills you already wrote work here.** The toolkit reads the standard Agent Skills layout — `<skill>/SKILL.md` with `name:` and `description:` frontmatter — so pointing **Skills Directory** at `~/.claude/skills` hands your local model the same skills you use with Claude Code, Codex or LM Studio Bionic.
+> **Skills you already wrote work here.** The toolkit reads the standard Agent Skills layout — `<skill>/SKILL.md` with `name:` and `description:` frontmatter — so pointing **Skills Directory** at `~/.lmstudio/skills` (where LM Studio Bionic keeps them) or `~/.claude/skills` hands your local model the same skills you already use.
 
 ## Quickstart
 
