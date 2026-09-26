@@ -26,7 +26,10 @@ export function modeFile(workingDirectory: string): string {
 export function isChatStateFile(workingDirectory: string, file: string): boolean {
   const a = resolve(file);
   const b = resolve(modeFile(workingDirectory));
-  return process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+  // Windows and macOS filesystems ignore case by default, so ".Agent-Mode.json" is the same file
+  // there. On a case-sensitive volume this only errs towards refusing, which is the safe side.
+  const ignoreCase = process.platform === "win32" || process.platform === "darwin";
+  return ignoreCase ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
 export async function readMode(workingDirectory: string): Promise<ChatMode> {

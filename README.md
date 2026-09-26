@@ -9,8 +9,8 @@
 <p align="center">
   <a href="https://github.com/cervezagua/lmstudio-agent-toolkit/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/cervezagua/lmstudio-agent-toolkit/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <img alt="Tests" src="https://img.shields.io/badge/tests-208%20passing-brightgreen">
-  <img alt="Tested on Windows and Linux" src="https://img.shields.io/badge/tested%20on-Windows%20%7C%20Linux-informational">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-211%20passing-brightgreen">
+  <img alt="Tested on Windows, macOS and Linux" src="https://img.shields.io/badge/tested%20on-Windows%20%7C%20macOS%20%7C%20Linux-informational">
 </p>
 
 ---
@@ -124,7 +124,7 @@ The Web group uses [SearXNG](https://github.com/searxng/searxng) at `http://loca
 
 ## Contributing
 
-Issues and pull requests welcome — [CONTRIBUTING.md](CONTRIBUTING.md) covers the layout, the tests and how to add a tool. Tests run on Windows and Linux in CI.
+Issues and pull requests welcome — [CONTRIBUTING.md](CONTRIBUTING.md) covers the layout, the tests and how to add a tool. Tests run on Windows, macOS and Linux in CI.
 
 ## License
 

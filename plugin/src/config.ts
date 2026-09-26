@@ -350,7 +350,8 @@ export const configSchematics = createConfigSchematics()
       options: ["msedge", "chrome", "chromium"],
       dependencies: onlyWhen("enableWeb", "enableBrowser"),
     },
-    "msedge",
+    // Every Windows machine has Edge; on macOS and Linux Chrome is far more likely to be installed.
+    process.platform === "win32" ? "msedge" : "chrome",
   )
   .field(
     "headless",

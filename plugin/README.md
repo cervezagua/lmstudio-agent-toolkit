@@ -144,7 +144,7 @@ Search uses [SearXNG](https://github.com/searxng/searxng) at `http://localhost:8
 | → Max Page Characters | 15000 | Cap on fetched pages and snapshots. |
 | → Browser Fallback for fetch_url | on | Renders JavaScript-only pages in the browser. |
 | → Enable Browser Tools | on | Exposes `browser_*`. |
-| → Browser | msedge | `msedge`, `chrome` or `chromium`. |
+| → Browser | msedge on Windows, chrome elsewhere | `msedge`, `chrome` or `chromium`. |
 | → Headless Browser | on | Turn off to watch it work. |
 | **Documents** | off | The group above. |
 | → Vision Model | empty | Model key for OCR. Empty = the first loaded vision model. |

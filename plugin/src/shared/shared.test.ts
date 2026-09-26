@@ -1,4 +1,8 @@
+import { existsSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { describe, expect, it } from "vitest";
+import { isChatStateFile } from "./mode";
 import { commandEnv, findExecutable, formatRunResult, runProcess } from "./process";
 import { truncate } from "./truncate";
 
@@ -147,5 +151,57 @@ describe("findExecutable", () => {
 
   it("returns null for a program that is not installed", () => {
     expect(findExecutable("definitely-not-a-real-binary-xyz")).toBeNull();
+  });
+});
+
+// An app started from the macOS Dock gets launchd's PATH, without Homebrew's folders. These run only
+// on macOS, and recreate that PATH deliberately: a CI shell already has Homebrew on it, so it cannot
+// show the problem by itself.
+describe("macOS PATH", () => {
+  const LAUNCHD_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
+  const brewDir = ["/opt/homebrew/bin", "/usr/local/bin"].find(dir => existsSync(join(dir, "brew")));
+  const pathOf = (env: NodeJS.ProcessEnv) => Object.entries(env).find(([key]) => key.toUpperCase() === "PATH")?.[1];
+
+  const withPath = <T>(path: string, run: () => T): T => {
+    const original = process.env.PATH;
+    process.env.PATH = path;
+    try {
+      return run();
+    } finally {
+      process.env.PATH = original;
+    }
+  };
+
+  it.runIf(process.platform === "darwin" && brewDir !== undefined)("puts Homebrew back on launchd's PATH", () => {
+    withPath(LAUNCHD_PATH, () => {
+      const path = pathOf(commandEnv())!.split(":");
+      expect(path).toContain(brewDir);
+      // What the host gave stays, in its order, after the added folders.
+      expect(path.slice(-4)).toEqual(LAUNCHD_PATH.split(":"));
+      expect(findExecutable("brew")).toBe(join(brewDir!, "brew"));
+    });
+  });
+
+  it.runIf(process.platform === "darwin")("does not add a folder that is already there", () => {
+    const full = `/opt/homebrew/bin:/usr/local/bin:${LAUNCHD_PATH}`;
+    withPath(full, () => expect(pathOf(commandEnv())).toBe(full));
+  });
+
+  it.runIf(process.platform !== "darwin")("leaves PATH alone elsewhere", () => {
+    expect(pathOf(commandEnv())).toBe(process.env.PATH);
+  });
+});
+
+describe("isChatStateFile", () => {
+  const dir = join(tmpdir(), "chat");
+
+  it("recognises the mode file", () => {
+    expect(isChatStateFile(dir, join(dir, ".agent-mode.json"))).toBe(true);
+    expect(isChatStateFile(dir, join(dir, "notes.json"))).toBe(false);
+  });
+
+  // Windows and macOS ignore case by default, so a differently-cased name is the same file there.
+  it.runIf(process.platform === "win32" || process.platform === "darwin")("ignores case where the filesystem does", () => {
+    expect(isChatStateFile(dir, join(dir, ".Agent-Mode.JSON"))).toBe(true);
   });
 });

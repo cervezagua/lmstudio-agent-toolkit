@@ -29,10 +29,28 @@ export interface RunResult {
 // to the script host.
 const FALLBACK_PATHEXT = ".COM;.EXE;.BAT;.CMD";
 
-/** The environment to give a spawned command: the plugin's own, with a usable PATHEXT on Windows. */
+// The macOS version of the same problem: an app started from the Dock or Finder gets its PATH from
+// launchd, usually just /usr/bin:/bin:/usr/sbin:/sbin. Homebrew installs to /opt/homebrew/bin
+// (Apple Silicon) or /usr/local/bin (Intel), so gh, rg, node and the project checkers would all look
+// missing: the gh_* tools would silently disappear and the diagnostics would find nothing. Put back
+// the ones that exist and are not already listed, ahead of the rest as the user's own terminal has
+// them (brew shellenv and /etc/paths both do), without removing or reordering anything the host gave.
+const MACOS_EXTRA_PATH = ["/opt/homebrew/bin", "/opt/homebrew/sbin", "/usr/local/bin"];
+
+function withMacosPath(path: string | undefined): string | undefined {
+  const dirs = (path ?? "").split(delimiter).filter(Boolean);
+  const missing = MACOS_EXTRA_PATH.filter(dir => !dirs.includes(dir) && existsSync(dir));
+  return missing.length ? [...missing, ...dirs].join(delimiter) : path;
+}
+
+/**
+ * The environment to give a spawned command: the plugin's own, with a usable PATHEXT on Windows and
+ * Homebrew's folders on the PATH on macOS.
+ */
 export function commandEnv(extra?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = { ...process.env, ...extra };
   if (process.platform === "win32" && !env.PATHEXT?.trim()) env.PATHEXT = FALLBACK_PATHEXT;
+  if (process.platform === "darwin") env.PATH = withMacosPath(env.PATH);
   return env;
 }
 
@@ -44,12 +62,18 @@ export function findExecutable(name: string): string | null {
   // Through commandEnv, so a host that supplies no PATHEXT (or an empty one) does not leave us with
   // an empty extension list, which would report every executable as missing — git-tools would then
   // quietly drop its gh_* tools because it could not find gh.
+  // The PATH comes from commandEnv too, so a lookup sees the same folders a command will run with.
+  // process.env is case-insensitive on Windows, but a copy of it is not, and there the variable is
+  // usually "Path": reading env.PATH from the copy would find nothing and report every program
+  // missing.
+  const env = commandEnv();
+  const path = Object.entries(env).find(([key]) => key.toUpperCase() === "PATH")?.[1] ?? "";
   const extensions =
     process.platform === "win32"
-      ? ["", ...(commandEnv().PATHEXT ?? "").split(";").filter(Boolean).map(e => e.toLowerCase())]
+      ? ["", ...(env.PATHEXT ?? "").split(";").filter(Boolean).map(e => e.toLowerCase())]
       : [""];
   let found: string | null = null;
-  outer: for (const dir of (process.env.PATH ?? "").split(delimiter).filter(Boolean)) {
+  outer: for (const dir of path.split(delimiter).filter(Boolean)) {
     for (const ext of extensions) {
       const candidate = join(dir, name + ext);
       if (existsSync(candidate) && (ext !== "" || process.platform !== "win32")) {

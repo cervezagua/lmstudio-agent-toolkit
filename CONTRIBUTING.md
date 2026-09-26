@@ -91,4 +91,4 @@ It publishes from a clean staging copy, the same way the installer does. Add `--
 
 ## Commits and pull requests
 
-Keep changes focused, include tests for new behavior, and describe what you checked. CI runs the tests and typecheck on Windows and Linux.
+Keep changes focused, include tests for new behavior, and describe what you checked. CI runs the tests and typecheck on Windows, macOS and Linux.
