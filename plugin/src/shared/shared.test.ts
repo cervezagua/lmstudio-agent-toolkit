@@ -183,7 +183,8 @@ describe("macOS PATH", () => {
   });
 
   it.runIf(process.platform === "darwin")("does not add a folder that is already there", () => {
-    const full = `/opt/homebrew/bin:/usr/local/bin:${LAUNCHD_PATH}`;
+    // Every folder the repair knows about, so there is nothing left for it to add.
+    const full = `/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:${LAUNCHD_PATH}`;
     withPath(full, () => expect(pathOf(commandEnv())).toBe(full));
   });
 
