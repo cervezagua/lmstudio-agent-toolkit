@@ -1,5 +1,6 @@
 import { type ChatMessage, type PluginContext, type PromptPreprocessorController } from "@lmstudio/sdk";
-import { configSchematics, globalConfigSchematics } from "./config";
+import { configSchematics, globalConfigSchematics, makeConfigSchematics } from "./config";
+import { listModelChoices } from "./shared/models";
 import { preprocess } from "./groups/memory/promptPreprocessor";
 import { toolsProvider } from "./toolsProvider";
 
@@ -10,7 +11,10 @@ async function promptPreprocessor(ctl: PromptPreprocessorController, userMessage
 }
 
 export async function main(context: PluginContext) {
-  context.withConfigSchematics(configSchematics);
+  // LM Studio waits for main() before finishing startup, so the model settings can be built as
+  // dropdowns of the downloaded models. If the models cannot be listed they stay text fields.
+  const choices = await listModelChoices();
+  context.withConfigSchematics(choices ? makeConfigSchematics(choices) : configSchematics);
   context.withGlobalConfigSchematics(globalConfigSchematics);
   context.withPromptPreprocessor(promptPreprocessor);
   context.withToolsProvider(toolsProvider);

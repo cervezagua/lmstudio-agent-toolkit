@@ -1,5 +1,6 @@
 import { type LLM, type LMStudioClient } from "@lmstudio/sdk";
 import { ToolError } from "../../../shared/errors";
+import { configuredModelKey } from "../../../shared/models";
 
 export const DEFAULT_OCR_PROMPT = [
   "Transcribe everything written in this image, exactly as it appears.",
@@ -11,7 +12,7 @@ export const DEFAULT_OCR_PROMPT = [
 
 /** Finds a vision-capable model: the configured one, a loaded one, or a clear error. */
 export async function pickVisionModel(client: LMStudioClient, configuredKey: string): Promise<LLM> {
-  const key = configuredKey.trim();
+  const key = configuredModelKey(configuredKey);
   if (key) {
     try {
       return await client.llm.model(key);

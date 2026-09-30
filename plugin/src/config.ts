@@ -1,10 +1,50 @@
 import { createConfigSchematics } from "@lmstudio/sdk";
+import { AUTO_MODEL, type ModelChoices, type ModelOption } from "./shared/models";
 
 /** Shows a field only while its group (and any sub-switch) is on, so the panel stays short. */
 const onlyWhen = (...keys: string[]) =>
   keys.map(key => ({ key, condition: { type: "equals" as const, value: true } }));
 
-export const configSchematics = createConfigSchematics()
+type TextFieldParams = {
+  displayName: string;
+  subtitle: string;
+  placeholder?: string;
+  dependencies?: ReturnType<typeof onlyWhen>;
+};
+
+/**
+ * A model setting: a dropdown of the downloaded models when the plugin could list them at startup,
+ * otherwise a text field for a model key. Typed as a text field either way, on purpose: the tools
+ * read settings with the text version of the schema, and a dropdown's value is a string too.
+ */
+function modelField<K extends string>(
+  key: K,
+  field: { displayName: string; purpose: string; auto: string; dependencies: ReturnType<typeof onlyWhen> },
+  options?: ModelOption[],
+) {
+  if (!options) {
+    const params: TextFieldParams = {
+      displayName: field.displayName,
+      subtitle: `Model key ${field.purpose}. Empty = ${field.auto}.`,
+      placeholder: "qwen/qwen3.8-27b",
+      dependencies: field.dependencies,
+    };
+    return [key, "string", params, ""] as [K, "string", TextFieldParams, string];
+  }
+  const dropdown = {
+    displayName: field.displayName,
+    subtitle:
+      `The model ${field.purpose}. Auto = ${field.auto}. ` +
+      "Lists the models downloaded when the plugin started; turn the plugin off and on to refresh it.",
+    dependencies: field.dependencies,
+    options: [{ value: AUTO_MODEL, displayName: `Auto (${field.auto})` }, ...options],
+  };
+  return [key, "select", dropdown, AUTO_MODEL] as unknown as [K, "string", TextFieldParams, string];
+}
+
+/** Every chat setting. Given the downloaded models, the two model settings become dropdowns. */
+export function makeConfigSchematics(choices?: ModelChoices) {
+  return createConfigSchematics()
   .field(
     "projectFolder",
     "string",
@@ -150,15 +190,16 @@ export const configSchematics = createConfigSchematics()
     false,
   )
   .field(
-    "subagentModel",
-    "string",
-    {
-      displayName: "Sub-agent Model",
-      subtitle: "Model key for the sub-agent. Empty = the first loaded model.",
-      placeholder: "qwen/qwen3.8-27b",
-      dependencies: onlyWhen("enableFiles", "enableSubagent"),
-    },
-    "",
+    ...modelField(
+      "subagentModel",
+      {
+        displayName: "Sub-agent Model",
+        purpose: "for the sub-agent",
+        auto: "the first loaded model",
+        dependencies: onlyWhen("enableFiles", "enableSubagent"),
+      },
+      choices?.subagent,
+    ),
   )
 
   // ── Memory & context ─────────────────────────────────────────────────────────────────────────
@@ -376,15 +417,16 @@ export const configSchematics = createConfigSchematics()
     false,
   )
   .field(
-    "visionModel",
-    "string",
-    {
-      displayName: "Vision Model",
-      subtitle: "Model key used for OCR. Empty = the first loaded vision-capable model.",
-      placeholder: "qwen/qwen3.8-27b",
-      dependencies: onlyWhen("enableDocuments"),
-    },
-    "",
+    ...modelField(
+      "visionModel",
+      {
+        displayName: "Vision Model",
+        purpose: "used for OCR",
+        auto: "the first loaded vision model",
+        dependencies: onlyWhen("enableDocuments"),
+      },
+      choices?.vision,
+    ),
   )
   .field(
     "renderScale",
@@ -414,6 +456,13 @@ export const configSchematics = createConfigSchematics()
     10,
   )
   .build();
+}
+
+/**
+ * The settings as the tools read them. The model settings are text fields here even when the panel
+ * shows them as dropdowns: a dropdown's value is a string, so it reads the same.
+ */
+export const configSchematics = makeConfigSchematics();
 
 export const globalConfigSchematics = createConfigSchematics()
   .field(

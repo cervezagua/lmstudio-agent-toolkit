@@ -5,16 +5,23 @@ import { assertNotOption, repoPath, runCli } from "./lib/cli";
 import { safe, ToolError } from "../../shared/errors";
 import { readMode } from "../../shared/mode";
 import { findExecutable } from "../../shared/process";
+import { NO_PROJECT_FOLDER_NOTE } from "../../shared/projectFolder";
 
 export async function toolsProvider(ctl: ToolsProviderController) {
   const config = ctl.getPluginConfig(configSchematics);
+  const projectFolderSet = config.get("projectFolder").trim() !== "";
   const repo = config.get("projectFolder").trim() || ctl.getWorkingDirectory();
   const maxOutputChars = config.get("maxOutputChars");
   const git = (args: string[], extra: { signal?: AbortSignal; stdin?: string } = {}) =>
     runCli("git", ["-c", "core.quotepath=false", "-c", "color.ui=never", ...args], { cwd: repo, maxOutputChars, ...extra }).catch(
       error => {
         if (error instanceof ToolError && /not a git repository/i.test(error.message)) {
-          throw new ToolError(`"${repo}" is not a git repository. Run git_init or set the plugin's Repository Directory.`);
+          // Without a Project Folder, git_init would make a repository in the scratch folder, which is
+          // rarely what anyone wants; point at the setting instead.
+          const next = projectFolderSet
+            ? "Run git_init to create one, or point Project Folder at a repository."
+            : NO_PROJECT_FOLDER_NOTE;
+          throw new ToolError(`"${repo}" is not a git repository. ${next}`);
         }
         throw error;
       },
