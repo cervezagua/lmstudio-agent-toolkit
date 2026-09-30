@@ -105,17 +105,20 @@ describe("project folder", () => {
   // That fallback is LM Studio's empty per-chat folder. A model not told so decides the project is
   // empty, so it is said in list_dir's description, when listing the root, and in git's error.
   it("tells the model when no Project Folder is set", async () => {
-    const tools = await build({ projectFolder: "", enableGit: true });
+    const tools = await build({ projectFolder: "", enableGit: true, allowShell: true });
     const listDir = tools.find(t => t.name === "list_dir");
     expect(listDir.description).toContain("No Project Folder is set");
+    // A model that explores with `dir` or `ls` would otherwise meet the same empty folder unwarned.
+    expect(tools.find(t => t.name === "run_command").description).toContain("No Project Folder is set");
     expect(await callTool(tools, "list_dir", {})).toContain("No Project Folder is set");
     expect(String(await callTool(tools, "git_status", {}))).toMatch(/not a git repository\. No Project Folder is set/);
   });
 
   it("says nothing about it when a Project Folder is set", async () => {
-    const tools = await build({ projectFolder: project, enableGit: true });
+    const tools = await build({ projectFolder: project, enableGit: true, allowShell: true });
     const listDir = tools.find(t => t.name === "list_dir");
     expect(listDir.description).not.toContain("No Project Folder");
+    expect(tools.find(t => t.name === "run_command").description).not.toContain("No Project Folder");
     expect(await callTool(tools, "list_dir", {})).not.toContain("No Project Folder");
     expect(String(await callTool(tools, "git_status", {}))).toMatch(/Run git_init to create one, or point Project Folder/);
   });

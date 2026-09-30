@@ -21,7 +21,7 @@ import { safe, ToolError } from "../../shared/errors";
 import { isChatStateFile, PLANNING_NOTE, readMode } from "../../shared/mode";
 import { displayPath, resolveSafe } from "../../shared/paths";
 import { findExecutable, formatRunResult, runProcess } from "../../shared/process";
-import { NO_PROJECT_FOLDER_NOTE } from "../../shared/projectFolder";
+import { NO_PROJECT_FOLDER_NOTE, projectRoot } from "../../shared/projectFolder";
 import { truncate } from "../../shared/truncate";
 
 const MAX_LINE_CHARS = 2000;
@@ -63,8 +63,7 @@ function quoteForShell(path: string, kind: ShellSpec["kind"]): string {
 
 export async function toolsProvider(ctl: ToolsProviderController) {
   const config = ctl.getPluginConfig(configSchematics);
-  const projectFolderSet = config.get("projectFolder").trim() !== "";
-  const root = config.get("projectFolder").trim() || ctl.getWorkingDirectory();
+  const { root, isSet: projectFolderSet } = projectRoot(config.get("projectFolder"), () => ctl.getWorkingDirectory());
   const maxOutputChars = config.get("maxOutputChars");
   const maxReadBytes = config.get("maxReadBytes");
   const rootStat = await stat(root).catch(() => null);
@@ -479,6 +478,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
               : "Each call runs in a fresh shell."
           }
           Starts in the project root; pass cwd (relative to the root) to run elsewhere.
+          ${projectFolderSet ? "" : NO_PROJECT_FOLDER_NOTE}
           Pass description: one short line saying what the command does, shown to the person who
           approves it. Very long output is saved to a file and its path returned, so nothing is lost.
           Non-interactive only: commands that wait for input hang until the timeout.

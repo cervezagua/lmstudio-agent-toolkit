@@ -8,7 +8,7 @@ describe("configuredModelKey", () => {
     expect(configuredModelKey("  ")).toBe("");
     expect(configuredModelKey(AUTO_MODEL)).toBe("");
     expect(configuredModelKey(" auto ")).toBe("");
-    expect(configuredModelKey(" qwen/qwen3.8-27b ")).toBe("qwen/qwen3.8-27b");
+    expect(configuredModelKey(" publisher/model-name ")).toBe("publisher/model-name");
   });
 });
 
@@ -62,8 +62,51 @@ describe("toModelChoices", () => {
 });
 
 describe("listModelChoices", () => {
+  const env = { LMS_PLUGIN_CLIENT_IDENTIFIER: "id", LMS_PLUGIN_CLIENT_PASSKEY: "key" };
+  const never = () => new Promise<never>(() => {});
+  const fakeClient = (overrides: { downloaded?: () => Promise<unknown>; loaded?: () => Promise<unknown>; dispose?: () => Promise<void> }) =>
+    (() =>
+      ({
+        system: { listDownloadedModels: overrides.downloaded ?? (async () => []) },
+        llm: { listLoaded: overrides.loaded ?? (async () => []) },
+        [Symbol.asyncDispose]: overrides.dispose ?? (async () => {}),
+      }) as any) as any;
+
   it("returns nothing without LM Studio's plugin credentials, so the settings stay text fields", async () => {
     expect(await listModelChoices({})).toBeNull();
+  });
+
+  it("offers loaded models too, so one that is not a local download can be chosen", async () => {
+    const choices = await listModelChoices(
+      env,
+      1000,
+      fakeClient({
+        downloaded: async () => [{ modelKey: "local/model", displayName: "Local" }],
+        loaded: async () => [{ modelKey: "linked/model", displayName: "Linked", vision: true }],
+      }),
+    );
+    expect(choices!.vision.map(o => o.value)).toEqual(["linked/model", "local/model"]);
+  });
+
+  // Disposing waits for calls still in flight, so awaiting it after a timeout could hold up the
+  // plugin's startup forever. The listing must give up on time even when disposal never finishes.
+  it("gives up on time even when the server never answers and disposal never finishes", async () => {
+    const started = Date.now();
+    const choices = await listModelChoices(env, 50, fakeClient({ downloaded: never, loaded: never, dispose: never }));
+    expect(choices).toBeNull();
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it("still lists downloaded models when listing the loaded ones fails", async () => {
+    const choices = await listModelChoices(
+      env,
+      1000,
+      fakeClient({
+        downloaded: async () => [{ modelKey: "local/model" }],
+        loaded: async () => Promise.reject(new Error("not allowed")),
+      }),
+    );
+    expect(choices!.subagent.map(o => o.value)).toEqual(["local/model"]);
   });
 });
 

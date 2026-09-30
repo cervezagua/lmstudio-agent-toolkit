@@ -5,6 +5,7 @@ import { defaultMemoryDirectory, INDEX_FILE, MemoryStore } from "./lib/memorySto
 import { gitSnapshot } from "./lib/gitSnapshot";
 import { defaultSkillsDirectory, listSkills, renderSkillList } from "./lib/skills";
 import { PLANNING_NOTE, readMode } from "../../shared/mode";
+import { projectRoot } from "../../shared/projectFolder";
 
 /**
  * On the first user message of a chat, prepends project instructions (AGENTS.md etc.) and the
@@ -23,7 +24,7 @@ export async function preprocess(ctl: PromptPreprocessorController, userMessage:
     return userMessage;
   }
 
-  const projectFolder = config.get("projectFolder").trim() || ctl.getWorkingDirectory();
+  const { root: projectFolder } = projectRoot(config.get("projectFolder"), () => ctl.getWorkingDirectory());
   const instructions = await loadInstructionFiles(projectFolder, config.get("instructionFiles"));
 
   let memoryIndex: string | null = null;

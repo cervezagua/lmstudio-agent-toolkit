@@ -6,3 +6,12 @@
 export const NO_PROJECT_FOLDER_NOTE =
   "No Project Folder is set, so this is the chat's own empty scratch folder, not the user's project. " +
   "To work on their files, ask the user to set Project Folder in agent-toolkit's settings.";
+
+/**
+ * Where every group works: the Project Folder setting, or the chat's working directory when it is
+ * empty. `isSet` says which, so a group can tell the model it is in the scratch folder.
+ */
+export function projectRoot(configured: string, workingDirectory: () => string): { root: string; isSet: boolean } {
+  const folder = configured.trim();
+  return { root: folder || workingDirectory(), isSet: folder !== "" };
+}

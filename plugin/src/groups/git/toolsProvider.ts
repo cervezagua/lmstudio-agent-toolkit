@@ -5,12 +5,11 @@ import { assertNotOption, repoPath, runCli } from "./lib/cli";
 import { safe, ToolError } from "../../shared/errors";
 import { readMode } from "../../shared/mode";
 import { findExecutable } from "../../shared/process";
-import { NO_PROJECT_FOLDER_NOTE } from "../../shared/projectFolder";
+import { NO_PROJECT_FOLDER_NOTE, projectRoot } from "../../shared/projectFolder";
 
 export async function toolsProvider(ctl: ToolsProviderController) {
   const config = ctl.getPluginConfig(configSchematics);
-  const projectFolderSet = config.get("projectFolder").trim() !== "";
-  const repo = config.get("projectFolder").trim() || ctl.getWorkingDirectory();
+  const { root: repo, isSet: projectFolderSet } = projectRoot(config.get("projectFolder"), () => ctl.getWorkingDirectory());
   const maxOutputChars = config.get("maxOutputChars");
   const git = (args: string[], extra: { signal?: AbortSignal; stdin?: string } = {}) =>
     runCli("git", ["-c", "core.quotepath=false", "-c", "color.ui=never", ...args], { cwd: repo, maxOutputChars, ...extra }).catch(

@@ -25,8 +25,9 @@ function modelField<K extends string>(
   if (!options) {
     const params: TextFieldParams = {
       displayName: field.displayName,
-      subtitle: `Model key ${field.purpose}. Empty = ${field.auto}.`,
-      placeholder: "qwen/qwen3.8-27b",
+      // "auto" too: it is what the dropdown saves, and shows up here if a later start cannot list models.
+      subtitle: `Model key ${field.purpose}. Empty or auto = ${field.auto}.`,
+      placeholder: "publisher/model-name",
       dependencies: field.dependencies,
     };
     return [key, "string", params, ""] as [K, "string", TextFieldParams, string];
