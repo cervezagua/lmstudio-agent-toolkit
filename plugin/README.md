@@ -114,7 +114,7 @@ Search uses [SearXNG](https://github.com/searxng/searxng) at `http://localhost:8
 
 | Setting | Default | What it does |
 |---|---|---|
-| **Project Folder** | empty | The folder every group works in. Empty = the chat's working directory. |
+| **Project Folder** | empty | The folder every group works in. Empty = the chat's own empty working directory, and the model is told so. |
 | **Max Output Characters** | 20000 | Longer tool results are truncated, keeping head and tail. |
 | **Files & Shell** | on | The group above. |
 | → Allow Shell Commands | on | Exposes `run_command`. |
@@ -126,7 +126,8 @@ Search uses [SearXNG](https://github.com/searxng/searxng) at `http://localhost:8
 | → Background Tasks | on | Adds the `task_*` tools. |
 | → Diagnostics | on | Adds the `diagnostics` tool. |
 | → Jupyter Notebook Tools | off | Adds `notebook_read` / `notebook_edit`. |
-| → Research Sub-agent | off | Adds `run_subagent`, and a model to run it. |
+| → Research Sub-agent | off | Adds `run_subagent`. |
+| → Sub-agent Model | Auto | Dropdown of your models; Auto = the first loaded model. |
 | **Memory & Context** | on | The group above. |
 | → Instruction Files | `AGENTS.md`, `CLAUDE.md`, `.lmstudio/instructions.md` | Loaded from the Project Folder into each new chat. |
 | → Inject Memory Index | on | Also lists saved memories. |
@@ -147,7 +148,7 @@ Search uses [SearXNG](https://github.com/searxng/searxng) at `http://localhost:8
 | → Browser | msedge on Windows, chrome elsewhere | `msedge`, `chrome` or `chromium`. |
 | → Headless Browser | on | Turn off to watch it work. |
 | **Documents** | off | The group above. |
-| → Vision Model | empty | Model key for OCR. Empty = the first loaded vision model. |
+| → Vision Model | Auto | Dropdown of your models, vision models first; Auto = the first loaded vision model. |
 | → PDF Render Scale | 2 | Larger reads small print better and costs more tokens. |
 | → Max Pages Per Call | 10 | |
 

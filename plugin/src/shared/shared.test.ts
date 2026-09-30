@@ -3,6 +3,7 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { describe, expect, it } from "vitest";
 import { isChatStateFile } from "./mode";
+import { projectRoot } from "./projectFolder";
 import { commandEnv, findExecutable, formatRunResult, runProcess } from "./process";
 import { truncate } from "./truncate";
 
@@ -204,5 +205,17 @@ describe("isChatStateFile", () => {
   // Windows and macOS ignore case by default, so a differently-cased name is the same file there.
   it.runIf(process.platform === "win32" || process.platform === "darwin")("ignores case where the filesystem does", () => {
     expect(isChatStateFile(dir, join(dir, ".Agent-Mode.JSON"))).toBe(true);
+  });
+});
+
+describe("projectRoot", () => {
+  it("uses the Project Folder when it is set, and the chat's working directory when it is not", () => {
+    expect(projectRoot("  D:/work/app  ", () => "chat-dir")).toEqual({ root: "D:/work/app", isSet: true });
+    expect(projectRoot("   ", () => "chat-dir")).toEqual({ root: "chat-dir", isSet: false });
+  });
+
+  it("does not ask for the working directory when a folder is set", () => {
+    // Outside a chat there is none, and asking throws.
+    expect(() => projectRoot("D:/work/app", () => { throw new Error("no chat"); })).not.toThrow();
   });
 });

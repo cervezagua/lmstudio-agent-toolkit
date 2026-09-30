@@ -1,5 +1,6 @@
 import { type LLM, type LMStudioClient, type Tool } from "@lmstudio/sdk";
 import { ToolError } from "../../../shared/errors";
+import { configuredModelKey } from "../../../shared/models";
 
 export const SUBAGENT_SYSTEM_PROMPT = [
   "You are a research sub-agent working inside a larger task.",
@@ -10,7 +11,7 @@ export const SUBAGENT_SYSTEM_PROMPT = [
 
 /** Picks the model to run the sub-agent on: the configured one, or the first loaded model. */
 export async function pickSubagentModel(client: LMStudioClient, configuredKey: string): Promise<LLM> {
-  const key = configuredKey.trim();
+  const key = configuredModelKey(configuredKey);
   if (key) {
     try {
       return await client.llm.model(key);
@@ -20,7 +21,7 @@ export async function pickSubagentModel(client: LMStudioClient, configuredKey: s
   }
   const loaded = await client.llm.listLoaded();
   if (loaded.length === 0) {
-    throw new ToolError("No model is loaded for the sub-agent. Load one, or set a model in the coder-tools settings.");
+    throw new ToolError("No model is loaded for the sub-agent. Load one, or choose a Sub-agent Model in agent-toolkit's settings.");
   }
   return loaded[0] as LLM;
 }

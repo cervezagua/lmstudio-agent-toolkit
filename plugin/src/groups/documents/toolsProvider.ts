@@ -8,13 +8,14 @@ import { extractPdfText, renderPdfPages } from "./lib/pdf";
 import { DEFAULT_OCR_PROMPT, ocrImageFile, pickVisionModel } from "./lib/vision";
 import { safe, ToolError } from "../../shared/errors";
 import { displayPath, resolveSafe } from "../../shared/paths";
+import { projectRoot } from "../../shared/projectFolder";
 import { truncate } from "../../shared/truncate";
 
 const IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"];
 
 export async function toolsProvider(ctl: ToolsProviderController) {
   const config = ctl.getPluginConfig(configSchematics);
-  const root = config.get("projectFolder").trim() || ctl.getWorkingDirectory();
+  const { root } = projectRoot(config.get("projectFolder"), () => ctl.getWorkingDirectory());
   const maxOutputChars = config.get("maxOutputChars");
   const show = (path: string) => displayPath(root, path);
 

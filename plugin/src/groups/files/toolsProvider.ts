@@ -21,6 +21,7 @@ import { safe, ToolError } from "../../shared/errors";
 import { isChatStateFile, PLANNING_NOTE, readMode } from "../../shared/mode";
 import { displayPath, resolveSafe } from "../../shared/paths";
 import { findExecutable, formatRunResult, runProcess } from "../../shared/process";
+import { NO_PROJECT_FOLDER_NOTE, projectRoot } from "../../shared/projectFolder";
 import { truncate } from "../../shared/truncate";
 
 const MAX_LINE_CHARS = 2000;
@@ -62,7 +63,7 @@ function quoteForShell(path: string, kind: ShellSpec["kind"]): string {
 
 export async function toolsProvider(ctl: ToolsProviderController) {
   const config = ctl.getPluginConfig(configSchematics);
-  const root = config.get("projectFolder").trim() || ctl.getWorkingDirectory();
+  const { root, isSet: projectFolderSet } = projectRoot(config.get("projectFolder"), () => ctl.getWorkingDirectory());
   const maxOutputChars = config.get("maxOutputChars");
   const maxReadBytes = config.get("maxReadBytes");
   const rootStat = await stat(root).catch(() => null);
@@ -286,7 +287,9 @@ export async function toolsProvider(ctl: ToolsProviderController) {
   tools.push(
     tool({
       name: "list_dir",
-      description: "List the entries of a directory (default: project root). Folders end with '/'.",
+      description:
+        "List the entries of a directory (default: project root). Folders end with '/'." +
+        (projectFolderSet ? "" : ` ${NO_PROJECT_FOLDER_NOTE}`),
       parameters: { path: z.string().optional() },
       implementation: safe(async ({ path }) => {
         const dir = await resolveSafe(root, path ?? ".");
@@ -294,7 +297,9 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         entries.sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name));
         const shown = entries.slice(0, 500).map(e => (e.isDirectory() ? `${e.name}/` : e.name));
         const more = entries.length > 500 ? `\n[${entries.length - 500} more entries not shown]` : "";
-        return `${show(dir)}:\n${shown.join("\n") || "(empty)"}${more}`;
+        // Said again where it matters: an "empty project" is the conclusion this listing invites.
+        const scratch = !projectFolderSet && dir === root ? `\n\n[${NO_PROJECT_FOLDER_NOTE}]` : "";
+        return `${show(dir)}:\n${shown.join("\n") || "(empty)"}${more}${scratch}`;
       }),
     }),
   );
@@ -473,6 +478,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
               : "Each call runs in a fresh shell."
           }
           Starts in the project root; pass cwd (relative to the root) to run elsewhere.
+          ${projectFolderSet ? "" : NO_PROJECT_FOLDER_NOTE}
           Pass description: one short line saying what the command does, shown to the person who
           approves it. Very long output is saved to a file and its path returned, so nothing is lost.
           Non-interactive only: commands that wait for input hang until the timeout.
