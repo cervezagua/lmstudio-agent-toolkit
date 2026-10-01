@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/cervezagua/lmstudio-agent-toolkit/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/cervezagua/lmstudio-agent-toolkit/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <img alt="Tests" src="https://img.shields.io/badge/tests-228%20passing-brightgreen">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-271%20passing-brightgreen">
   <img alt="Tested on Windows, macOS and Linux" src="https://img.shields.io/badge/tested%20on-Windows%20%7C%20macOS%20%7C%20Linux-informational">
   <a href="https://lmstudio.ai/cervezagua/agent-toolkit"><img alt="LM Studio Hub" src="https://img.shields.io/badge/LM%20Studio%20Hub-cervezagua%2Fagent--toolkit-7c3aed"></a>
 </p>
@@ -70,7 +70,7 @@ One plugin, five groups. Each group is a switch in the plugin's settings, becaus
 | | Group | Default | What the model can do | Highlights |
 |---|---|:---:|---|---|
 | 📁 | **Files & Shell** | on | Read, write and edit files, search, run commands | Locked to your project folder · read-before-edit · undo · background tasks · project diagnostics |
-| 🧠 | **Memory & Context** | on | Remember things between chats, keep a todo list, follow skills | Opens each chat with your `AGENTS.md`, today's date and git status · plan mode |
+| 🧠 | **Memory & Context** | on | Remember things between chats, keep a todo list, follow skills | Opens each chat with your `AGENTS.md`, today's date and git status · plan mode · can save its own skills and search past chats, if you switch those on |
 | 🌿 | **Git & GitHub** | on | Status, diff, commit, branch, pull requests and issues | Runs `git`/`gh` directly, never through a shell · push is opt-in, never forced |
 | 🌐 | **Web** | off | Search, read pages as markdown, drive a real browser | Private SearXNG search · reads PDFs · Edge or Chrome via Playwright |
 | 📄 | **Documents** | off | Read PDFs, scans and images from your folder | Text layer first, free and exact · OCR only when needed · **your chat model needs no vision** |
@@ -93,6 +93,8 @@ Every tool and setting is in the [full reference](plugin/README.md).
 
 - **When a chat gets long, have the model call `save_session_summary`**, then start a new chat. The summary is saved as a memory, and the next chat sees it in its memory index. LM Studio plugins can't shorten the history of a running chat.
 - **Tell it what to remember.** *"Remember that we deploy from the `release` branch"* saves a memory, which every future chat sees in its memory index and can read in full.
+- **Let it search your earlier chats.** Switch on **Search Past Chats** and ask *"what was the command we used to deploy last week?"*. It's off by default, because those chats hold everything you've typed in LM Studio.
+- **Turn a solved problem into a skill.** Switch on **Let the Model Save Skills**, and after a task say *"save what you just did as a skill"*. You see the whole skill before it's written, and future chats can load it.
 
 ### Choose and tune the model
 
@@ -117,6 +119,7 @@ Every tool and setting is in the [full reference](plugin/README.md).
 | *"Read the file first"* on a file the model already read | Changing settings restarts the plugin, which forgets what was read. It's a safety check, not an error | Let the model read it again |
 | *"is not a git repository"* | Project Folder isn't a git repo, or isn't set | Point Project Folder at the repo, or ask for `git_init` |
 | *"SearXNG unavailable, used DuckDuckGo"* | Your SearXNG isn't running | Start it (`searxng/start-searxng.cmd` on Windows) |
+| *"agent-toolkit did not load AGENTS.md…"* | The file contains a line that looks written to steer the model, such as "ignore previous instructions" | Read the quoted line. Fix the file, or switch off **Scan Loaded Files** if it's a false alarm |
 | A model you just downloaded is missing from a dropdown | The list is read when the plugin starts | Turn the plugin off and on |
 
 ### Platform notes
@@ -138,6 +141,7 @@ Every tool and setting is in the [full reference](plugin/README.md).
 | **Blocked commands** | Catastrophic ones (`rm -rf /`, `format C:`, `diskpart`…) are refused. A seatbelt, not a sandbox: a shell command can still do anything your account can. |
 | **Opt-in danger** | `git_push` is off by default and never force-pushes; the shell can be switched off entirely. |
 | **Plan mode** | While planning, every tool that changes a file is withheld until the model presents a plan. `run_command` stays, so it can still look around, with a reminder that planning is on. |
+| **Scan loaded files** | An `AGENTS.md` or skill that tells the model to ignore its instructions, hides text in invisible characters, or sends your keys somewhere is not loaded. You're shown the line that tripped it. Simple pattern checks: they catch blunt attempts, not subtle ones. |
 
 For untrusted projects, switch off **Allow Shell Commands** or run LM Studio in a virtual machine. More in [SECURITY.md](SECURITY.md).
 

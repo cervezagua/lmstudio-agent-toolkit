@@ -3,7 +3,8 @@ import { configSchematics, globalConfigSchematics } from "../../config";
 import { buildContextBlock, loadInstructionFiles } from "./lib/instructions";
 import { defaultMemoryDirectory, INDEX_FILE, MemoryStore } from "./lib/memoryStore";
 import { gitSnapshot } from "./lib/gitSnapshot";
-import { defaultSkillsDirectory, listSkills, renderSkillList } from "./lib/skills";
+import { defaultSkillsDirectory, listSkills, partitionSkills, renderSkillList } from "./lib/skills";
+import { describeFinding, locateFinding, scanForInjection } from "../../shared/injectionScan";
 import { PLANNING_NOTE, readMode } from "../../shared/mode";
 import { projectRoot } from "../../shared/projectFolder";
 
@@ -25,7 +26,19 @@ export async function preprocess(ctl: PromptPreprocessorController, userMessage:
   }
 
   const { root: projectFolder } = projectRoot(config.get("projectFolder"), () => ctl.getWorkingDirectory());
-  const instructions = await loadInstructionFiles(projectFolder, config.get("instructionFiles"));
+  const scan = config.get("scanLoadedFiles");
+  // What the model is told (where and why, never the text) and what the user is shown (with the text).
+  const withheld: string[] = [];
+  const notices: string[] = [];
+  // An instruction file is text the model is told to follow, and in a cloned repository it is
+  // someone else's text. One that looks written to steer the model is left out, and said so.
+  const instructions = (await loadInstructionFiles(projectFolder, config.get("instructionFiles"))).filter(file => {
+    const [finding] = scan ? scanForInjection(file.content) : [];
+    if (!finding) return true;
+    withheld.push(`${file.name}: ${locateFinding(finding)}`);
+    notices.push(`${file.name}: ${describeFinding(finding)}`);
+    return false;
+  });
 
   let memoryIndex: string | null = null;
   if (config.get("injectMemoryIndex")) {
@@ -36,7 +49,12 @@ export async function preprocess(ctl: PromptPreprocessorController, userMessage:
 
   let skillList: string | null = null;
   if (config.get("enableSkills")) {
-    const skills = await listSkills(defaultSkillsDirectory(ctl.getGlobalPluginConfig(globalConfigSchematics).get("skillsDirectory")));
+    const all = await listSkills(defaultSkillsDirectory(ctl.getGlobalPluginConfig(globalConfigSchematics).get("skillsDirectory")));
+    const { safe: skills, flagged } = scan ? await partitionSkills(all) : { safe: all, flagged: [] };
+    for (const { skill, finding } of flagged) {
+      withheld.push(`skill "${skill.name}": ${locateFinding(finding)}`);
+      notices.push(`skill "${skill.name}": ${describeFinding(finding)}`);
+    }
     if (skills.length > 0) skillList = renderSkillList(skills);
   }
 
@@ -48,8 +66,10 @@ export async function preprocess(ctl: PromptPreprocessorController, userMessage:
     memoryIndex,
     skillList,
     gitSnapshot: snapshot,
+    withheld,
     maxChars: config.get("maxInjectedChars"),
   });
+  for (const notice of notices) ctl.createStatus({ status: "error", text: `agent-toolkit did not load ${notice}` });
   if (!block) return userMessage;
 
   const loaded = [

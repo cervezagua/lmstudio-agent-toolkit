@@ -31,6 +31,8 @@ export function buildContextBlock(options: {
   memoryIndex: string | null;
   skillList?: string | null;
   gitSnapshot?: string | null;
+  /** Files and skills the injection scan held back, each with its reason. */
+  withheld?: string[];
   /** Overridable so tests do not depend on the clock. */
   today?: Date;
   maxChars: number;
@@ -61,6 +63,15 @@ export function buildContextBlock(options: {
   if (options.gitSnapshot) {
     const body = truncate(options.gitSnapshot, Math.max(500, Math.floor(options.maxChars / 4)));
     sections.push(`## Repository\n\n${body}`);
+  }
+
+  if (options.withheld?.length) {
+    sections.push(
+      "## Not loaded\n\n" +
+        "These looked written to steer the assistant rather than describe the project, so they were left out. " +
+        "Tell the user which ones and why:\n" +
+        options.withheld.map(item => `- ${item}`).join("\n"),
+    );
   }
 
   if (sections.length === 0) return null;

@@ -54,6 +54,8 @@ On the **first message of every chat**, this group adds today's date, your instr
 | `todo_read` | – | Shows the current list. |
 | `skill_list` | – | Lists the skills installed on your computer (name and one-line description). |
 | `skill_read` | `name` | Loads a skill's full instructions to follow for the task at hand. |
+| `skill_save` | `name`, `description`, `content`, `overwrite?` | Writes a new skill for future chats to load. Only with **Let the Model Save Skills** on, and not while planning. |
+| `chat_search` | `query`, `limit?` | Searches your earlier LM Studio chats and returns short excerpts with the chat's title and date. Only with **Search Past Chats** on. |
 | `enter_plan_mode` | – | Switches the chat into planning mode: research only. |
 | `exit_plan_mode` | `plan` | Presents the plan and re-enables the tools that make changes. |
 
@@ -133,6 +135,9 @@ Search uses [SearXNG](https://github.com/searxng/searxng) at `http://localhost:8
 | → Inject Memory Index | on | Also lists saved memories. |
 | → Git Snapshot | on | Adds branch, changes and recent commits. |
 | → Skills | on | Adds `skill_list` / `skill_read`. |
+| → Let the Model Save Skills | off | Adds `skill_save`. A saved skill is loaded into every future chat. |
+| → Scan Loaded Files | on | Leaves out instruction files and skills that look written to steer the model. |
+| → Search Past Chats | off | Adds `chat_search` over your earlier chats. |
 | → Plan Mode | on | Adds `enter_plan_mode` / `exit_plan_mode`. |
 | → Max Injected Characters | 12000 | Cap on what's added to the first message. |
 | **Git & GitHub** | on | The group above. |
@@ -162,5 +167,6 @@ Approving a tool call is the same as running that command yourself.
 - **Read before edit** — a file must have been read in this chat before it can be edited, and the edit is refused if it changed since.
 - **Atomic writes** — files are written to a temp file and renamed, so an interrupted write can't truncate your work.
 - **Blocked commands** — catastrophic ones (`rm -rf /`, `format C:`, `diskpart`) are refused. A seatbelt, not a sandbox: a shell command can still do anything your account can.
-- **Opt-in danger** — `git_push` is off by default and never force-pushes; the shell can be switched off entirely.
+- **Opt-in danger** — `git_push` is off by default and never force-pushes; the shell can be switched off entirely. Saving skills and searching past chats are off until you switch them on.
+- **Scan loaded files** — an `AGENTS.md` or a skill that tells the model to ignore its instructions, hides text in invisible characters, or sends secrets away is not loaded. You see the line that tripped it; the model is told only which file and why.
 - **Plan mode** — while planning, every tool that changes a file is withheld. `run_command` stays available for read-only checks, with a reminder that planning is on.

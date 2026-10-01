@@ -256,6 +256,39 @@ export function makeConfigSchematics(choices?: ModelChoices) {
     true,
   )
   .field(
+    "allowSkillSave",
+    "boolean",
+    {
+      displayName: "Let the Model Save Skills",
+      subtitle:
+        "Adds skill_save, so the model can write a new skill after a task. Off by default: a saved skill is loaded into every future chat, and the skills folder may be shared with other apps.",
+      dependencies: onlyWhen("enableMemory", "enableSkills"),
+    },
+    false,
+  )
+  .field(
+    "scanLoadedFiles",
+    "boolean",
+    {
+      displayName: "Scan Loaded Files",
+      subtitle:
+        "Check instruction files and skills for text aimed at steering the model (\"ignore previous instructions\", hidden characters, commands that send secrets away) and leave out any that match.",
+      dependencies: onlyWhen("enableMemory"),
+    },
+    true,
+  )
+  .field(
+    "enableChatSearch",
+    "boolean",
+    {
+      displayName: "Search Past Chats",
+      subtitle:
+        "Adds chat_search, which looks through your earlier LM Studio chats. Off by default: those chats hold everything you have typed here.",
+      dependencies: onlyWhen("enableMemory"),
+    },
+    false,
+  )
+  .field(
     "enablePlanMode",
     "boolean",
     {
