@@ -1,7 +1,10 @@
-import { readdir, readFile, stat } from "fs/promises";
+import { mkdir, readdir, readFile, stat } from "fs/promises";
 import { homedir } from "os";
 import { basename, join, resolve } from "path";
+import { slugify } from "./memoryStore";
 import { ToolError } from "../../../shared/errors";
+import { locateFinding, scanForInjection, type InjectionFinding } from "../../../shared/injectionScan";
+import { writeFileAtomic } from "../../../shared/safeWrite";
 
 export interface Skill {
   name: string;
@@ -155,6 +158,76 @@ export async function readSkill(directory: string, name: string): Promise<{ skil
     throw new ToolError(`No skill named "${name}". Available skills: ${available}.`);
   }
   return { skill, content: await readFile(skill.file, "utf-8") };
+}
+
+export interface FlaggedSkill {
+  skill: Skill;
+  finding: InjectionFinding;
+}
+
+/**
+ * Separates skills whose text looks written to steer the model from the rest. A skill folder can be
+ * shared with other apps or copied from anywhere, and its text reaches the model as instructions.
+ */
+export async function partitionSkills(skills: Skill[]): Promise<{ safe: Skill[]; flagged: FlaggedSkill[] }> {
+  const safe: Skill[] = [];
+  const flagged: FlaggedSkill[] = [];
+  for (const skill of skills) {
+    const text = await readFile(skill.file, "utf-8").catch(() => "");
+    const [finding] = scanForInjection(text);
+    if (finding) flagged.push({ skill, finding });
+    else safe.push(skill);
+  }
+  return { safe, flagged };
+}
+
+export const MAX_SKILL_CHARS = 20_000;
+
+/**
+ * Writes `<directory>/<slug>/SKILL.md`. The description is always written as a quoted value, so one
+ * that contains a colon, a quote or a leading `>` reads back exactly as given.
+ */
+export async function saveSkill(
+  directory: string,
+  input: { name: string; description: string; content: string; overwrite?: boolean },
+  options: { scan: boolean },
+): Promise<{ name: string; file: string; replaced: boolean }> {
+  const name = slugify(input.name);
+  const description = input.description.replace(/\s+/g, " ").trim();
+  if (!description) throw new ToolError("A skill needs a description: one or two sentences saying when to use it.");
+  if (description.length > 300) throw new ToolError(`The description is ${description.length} characters; keep it to 300.`);
+
+  // The name and description have their own parameters; a header pasted into the body would end up
+  // in the file twice.
+  const body = input.content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "").trim();
+  if (!body) throw new ToolError("A skill needs content: the instructions to follow.");
+  if (body.length > MAX_SKILL_CHARS) {
+    throw new ToolError(`The skill is ${body.length} characters; keep it under ${MAX_SKILL_CHARS}, and put long reference material in separate files.`);
+  }
+
+  if (options.scan) {
+    const [finding] = scanForInjection(`${description}\n${body}`);
+    if (finding) throw new ToolError(`Not saved: the skill ${finding.reason} ("${finding.excerpt}"). Rewrite that part as plain instructions for the task.`);
+  }
+
+  const file = join(directory, name, "SKILL.md");
+  const existing = (await listSkills(directory)).find(skill => skill.name.toLowerCase() === name || skill.file === file);
+  if (existing && existing.file !== file) {
+    throw new ToolError(`A skill named "${existing.name}" already exists at ${existing.file}, which this tool does not replace.`);
+  }
+  if (existing && !input.overwrite) {
+    throw new ToolError(`A skill named "${name}" already exists. Read it with skill_read, then pass overwrite: true to replace it.`);
+  }
+
+  const quoted = description.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  await mkdir(join(directory, name), { recursive: true });
+  await writeFileAtomic(file, `---\nname: ${name}\ndescription: "${quoted}"\n---\n\n${body}\n`);
+  return { name, file, replaced: Boolean(existing) };
+}
+
+/** What to tell the model about a skill that was held back: where and why, never the text itself. */
+export function flaggedSkillMessage(flagged: FlaggedSkill): string {
+  return `The skill "${flagged.skill.name}" was not loaded: ${locateFinding(flagged.finding)}. Tell the user; they can fix ${flagged.skill.file} or turn off Scan Loaded Files.`;
 }
 
 export function renderSkillList(skills: Skill[]): string {

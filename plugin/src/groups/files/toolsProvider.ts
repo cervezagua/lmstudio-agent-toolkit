@@ -8,7 +8,7 @@ import { findBlockedPattern, parsePatterns } from "./lib/blocklist";
 import { applyEdit, applyEdits, insertLines, previewDiff } from "./lib/edit";
 import { assertFresh, forget, recordRead, recordWrite } from "./lib/fileState";
 import { assertReadableSize, looksBinary, readTextSlice } from "./lib/readText";
-import { writeFileAtomic } from "./lib/safeWrite";
+import { writeFileAtomic } from "../../shared/safeWrite";
 import { overflowNote, storeOverflow } from "./lib/overflow";
 import { notFoundMessage } from "./lib/suggest";
 import { availableCheckers, runChecker } from "./lib/diagnostics";

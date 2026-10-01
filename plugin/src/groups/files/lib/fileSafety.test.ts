@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { applyEdit, applyEdits } from "./edit";
 import { assertFresh, clearFileState, forget, recordRead, recordWrite } from "./fileState";
 import { assertReadableSize, looksBinary, readTextSlice } from "./readText";
-import { writeFileAtomic } from "./safeWrite";
+import { writeFileAtomic } from "../../../shared/safeWrite";
 import { suggestPaths } from "./suggest";
 import { ToolError } from "../../../shared/errors";
 

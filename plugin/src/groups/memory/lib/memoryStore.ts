@@ -31,7 +31,7 @@ export function slugify(name: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 80);
-  if (!slug) throw new ToolError(`"${name}" is not a usable memory name; use letters or digits.`);
+  if (!slug) throw new ToolError(`"${name}" is not a usable name; use letters or digits.`);
   return slug;
 }
 
