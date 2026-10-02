@@ -6,6 +6,7 @@ Instructions for anyone — person or model — changing this toolkit. The Memor
 
 - `plugin/` — the one LM Studio plugin. `src/groups/<name>/` holds each group (files, memory, git, web, documents); `src/config.ts` has every setting, including the group toggles; `src/toolsProvider.ts` offers the groups that are on.
 - `plugin/src/shared/` — helpers used by several groups.
+- `standalone/<name>/` — small plugins that each ship one tool. Their code is copied from `plugin/src/` by `npm run sync-standalone`; edit it there, never in `standalone/`.
 - `scripts/` — install, publish and end-to-end helpers.
 - `searxng/` — optional local search setup (Windows + WSL).
 

@@ -91,7 +91,7 @@ The `gh_*` tools appear only when the [GitHub CLI](https://cli.github.com) is in
 | Tool | Parameters | What it does |
 |---|---|---|
 | `web_search` | `query`, `count?` | Titles, URLs and snippets from the configured search backend |
-| `fetch_url` | `url`, `max_chars?`, `offset?`, `refresh?` | Downloads a page and returns its main content as markdown (Readability + Turndown), with absolute links. Also reads PDFs page by page; plain text and JSON come back as-is. `offset` continues a long document where the last call stopped. Results are cached for ten minutes unless `refresh` is set, and a redirect to another host is reported in the result. Downloads are capped at 5 MB with a 30 s timeout, and retried on temporary failures. |
+| `fetch_url` | `url`, `selector?`, `max_chars?`, `offset?`, `refresh?` | Downloads a page and returns its main content as markdown (Readability + Turndown), with absolute links. Also reads PDFs page by page; plain text and JSON come back as-is. `offset` continues a long document where the last call stopped. Results are cached for ten minutes unless `refresh` is set, and a redirect to another host is reported in the result. Downloads are capped at 5 MB with a 30 s timeout, and retried on temporary failures. `selector` takes a CSS selector (`main`, `article`, `table#prices`) and returns only the matching elements, which uses far less context. |
 | `browser_open` | `url` | Opens the URL in a real browser (runs JavaScript) and returns a snapshot |
 | `browser_snapshot` | – | A fresh snapshot of the current page |
 | `browser_click` | `ref` | Clicks element `[ref]` from the latest snapshot, then returns the new snapshot |
@@ -99,8 +99,13 @@ The `gh_*` tools appear only when the [GitHub CLI](https://cli.github.com) is in
 | `browser_back` | – | Goes back in history |
 | `browser_screenshot` | `full_page?` | Saves a PNG to `<chat working directory>/screenshots/` and returns its path |
 | `browser_close` | – | Closes the browser |
+| `read_feed` | `url`, `limit?` | Lists an RSS or Atom feed's latest items: title, date, link and a short summary. Accepts a site's page that links to its feed. |
+| `video_transcript` | `url`, `language?`, `offset?`, `max_chars?` | Title, channel, length and transcript of a YouTube (or other) video, through [yt-dlp](https://github.com/yt-dlp/yt-dlp). Only offered when yt-dlp is installed. |
+| `web_doctor` | – | Says what the web tools can use here: whether SearXNG answers, which browser is installed, whether yt-dlp is there, and how to fix what's missing. |
 
 Search uses [SearXNG](https://github.com/searxng/searxng) at `http://localhost:8888` when it's running and falls back to DuckDuckGo, which often answers automated requests with a bot check. A Brave Search API key is the third option. The browser drives your installed Edge or Chrome through Playwright; all chats share one browser.
+
+`read_feed` and `video_transcript` are also published on their own, as the [feed-reader](https://github.com/cervezagua/lmstudio-agent-toolkit/tree/main/standalone/feed-reader) and [video-transcripts](https://github.com/cervezagua/lmstudio-agent-toolkit/tree/main/standalone/video-transcripts) plugins, for anyone who wants just that one tool.
 
 ## Documents
 

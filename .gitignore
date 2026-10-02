@@ -2,3 +2,7 @@ node_modules
 .lmstudio
 dist
 *.log
+
+# Copied from plugin/src by scripts/sync-standalone.mjs; edit the originals there.
+standalone/*/src/groups/
+standalone/*/src/shared/

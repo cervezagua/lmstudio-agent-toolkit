@@ -4,8 +4,12 @@ import { join } from "path";
 import { z } from "zod";
 import { configSchematics, globalConfigSchematics } from "../../config";
 import { browserSession, type BrowserChannel } from "./lib/browser";
-import { fetchPage } from "./lib/fetchPage";
+import { fetchPage, selectToMarkdown } from "./lib/fetchPage";
 import { formatResults, runSearch, type SearchBackend } from "./lib/search";
+import { runWebDoctor } from "./lib/doctor";
+import { makeReadFeedTools } from "./lib/feeds";
+import { makeVideoTranscriptTools } from "./lib/transcript";
+import { findExecutable } from "../../shared/process";
 import { safe, ToolError } from "../../shared/errors";
 import { truncate } from "../../shared/truncate";
 
@@ -50,21 +54,37 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         the previous call stopped, or a bigger max_chars.
         Pages that only render through JavaScript are retried automatically in the browser.
         Recent pages are cached for a few minutes; pass refresh to fetch again.
+        To read only part of a page, pass selector, a CSS selector such as "main", "article" or
+        "table#prices": much shorter than the whole page. It applies to the page as downloaded,
+        before any JavaScript runs.
       `,
       parameters: {
         url: z.string(),
+        selector: z.string().optional(),
         max_chars: z.number().int().min(500).max(200000).optional(),
         offset: z.number().int().min(0).optional(),
         refresh: z.boolean().optional(),
       },
-      implementation: safe(async ({ url, max_chars, offset, refresh }, ctx) => {
+      implementation: safe(async ({ url, selector, max_chars, offset, refresh }, ctx) => {
         ctx.status(`Fetching ${url}`);
         const page = await fetchPage(url, { signal: ctx.signal, refresh });
         let body = page.markdown.trim();
         let note = "";
 
+        if (selector !== undefined && selector.trim()) {
+          if (page.kind !== "html" || !page.html) {
+            throw new ToolError(`selector only works on web pages; ${page.url} is ${page.kind === "pdf" ? "a PDF" : "plain text"}.`);
+          }
+          const selected = selectToMarkdown(page.html, page.url, selector.trim());
+          if (selected.matches === 0) {
+            throw new ToolError(`Nothing on ${page.url} matches "${selector}". Call without selector to see the whole page.`);
+          }
+          body = selected.markdown.trim();
+          note = `\n(${selected.matches} element${selected.matches === 1 ? "" : "s"} matching "${selector}")`;
+        }
+
         // A page that renders only through JavaScript arrives nearly empty; the browser can run it.
-        if (body.length < 200 && page.kind === "html" && config.get("enableBrowser") && config.get("browserFallback")) {
+        if (!selector?.trim() && body.length < 200 && page.kind === "html" && config.get("enableBrowser") && config.get("browserFallback")) {
           ctx.status("Page looks empty, retrying in the browser");
           try {
             const browserPage = await browserSession.getPage(config.get("browserChannel") as BrowserChannel, config.get("headless"));
@@ -196,6 +216,31 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       }),
     );
   }
+
+  // Also published on their own as the feed-reader and video-transcripts plugins.
+  tools.push(...makeReadFeedTools(), ...makeVideoTranscriptTools({ maxChars: maxPageChars }));
+
+  tools.push(
+    tool({
+      name: "web_doctor",
+      description: text`
+        Check what the web tools can use on this machine: whether SearXNG answers, which browser is
+        installed, whether yt-dlp is there for video transcripts. Run it when a web tool fails or
+        is missing, and tell the user what it says to fix.
+      `,
+      parameters: {},
+      implementation: safe(async () =>
+        runWebDoctor({
+          backend,
+          searxngUrl: config.get("searxngUrl"),
+          braveKeySet: ctl.getGlobalPluginConfig(globalConfigSchematics).get("braveApiKey").trim() !== "",
+          browserEnabled: config.get("enableBrowser"),
+          channel: config.get("browserChannel"),
+          ytDlp: findExecutable("yt-dlp"),
+        }),
+      ),
+    }),
+  );
 
   return tools;
 }

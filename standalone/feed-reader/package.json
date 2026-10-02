@@ -1,0 +1,19 @@
+{
+  "name": "lms-plugin-feed-reader",
+  "version": "1.0.0",
+  "description": "Lets LM Studio models read RSS and Atom feeds",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@lmstudio/sdk": "1.5.0",
+    "linkedom": "^0.18.13",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.9.0"
+  }
+}

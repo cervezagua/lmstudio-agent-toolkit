@@ -18,6 +18,8 @@ export interface FetchedPage {
   /** Set when the server redirected to a different host, which is worth showing to a person. */
   redirectedFrom?: string;
   fromCache?: boolean;
+  /** The page as downloaded, so part of it can be selected later without fetching it again. */
+  html?: string;
 }
 
 function absolutize(href: string | null, base: string): string {
@@ -78,6 +80,29 @@ export function htmlToMarkdown(html: string, pageUrl: string): { title: string; 
   }
   markdown = markdown.replace(/\n{3,}/g, "\n\n").trim();
   return { title: article?.title?.trim() || fallbackTitle, markdown };
+}
+
+/**
+ * Markdown for just the elements a CSS selector matches, for when a model needs one table or one
+ * section of a long page rather than all of it.
+ */
+export function selectToMarkdown(html: string, pageUrl: string, selector: string): { matches: number; markdown: string } {
+  const { document } = parseHTML(html);
+  let elements: Element[];
+  try {
+    elements = Array.from(document.querySelectorAll(selector)) as unknown as Element[];
+  } catch (error) {
+    throw new ToolError(`"${selector}" is not a valid CSS selector: ${(error as Error).message}`);
+  }
+  if (elements.length === 0) return { matches: 0, markdown: "" };
+  const turndown = createTurndown(pageUrl);
+  const parts = elements.map(element =>
+    turndown
+      .turndown((element as any).outerHTML ?? "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim(),
+  );
+  return { matches: elements.length, markdown: parts.filter(Boolean).join("\n\n---\n\n") };
 }
 
 async function readLimited(response: Response, maxBytes: number): Promise<string> {
@@ -141,7 +166,7 @@ function cacheGet(url: string): FetchedPage | null {
 }
 
 function cacheSet(url: string, page: FetchedPage): void {
-  const bytes = page.markdown.length;
+  const bytes = page.markdown.length + (page.html?.length ?? 0);
   if (bytes > CACHE_MAX_BYTES) return; // one huge page should not evict everything else
   cache.set(url, { page, storedAt: Date.now(), bytes });
   let total = [...cache.values()].reduce((sum, entry) => sum + entry.bytes, 0);
@@ -264,7 +289,7 @@ export async function fetchPage(
   const body = await readLimited(response, MAX_BYTES);
   if (contentType.includes("html") || (contentType === "" && /<html|<body|<!doctype html/i.test(body.slice(0, 2000)))) {
     const { title, markdown } = htmlToMarkdown(body, finalUrl);
-    return remember({ url: finalUrl, title, contentType: contentType || "text/html", markdown, kind: "html", redirectedFrom });
+    return remember({ url: finalUrl, title, contentType: contentType || "text/html", markdown, kind: "html", redirectedFrom, html: body });
   }
   return remember({ url: finalUrl, title: "", contentType, markdown: body, kind: "text", redirectedFrom });
 }

@@ -9,6 +9,7 @@ import { browserSession, formatSnapshot } from "./lib/browser";
 import { clearFetchCache, fetchPage, htmlToMarkdown } from "./lib/fetchPage";
 import { decodeDuckDuckGoUrl, formatResults, parseDuckDuckGoHtml, runSearch, searchSearxng } from "./lib/search";
 import { ToolError } from "../../shared/errors";
+import { findExecutable } from "../../shared/process";
 import { toolsProvider } from "./toolsProvider";
 
 const ARTICLE = `<!doctype html><html><head><title>Fallback Title</title><script>var x = 1;</script></head><body>
@@ -259,6 +260,8 @@ describe("web-tools toolsProvider", () => {
     );
 
   it("registers tools and hides browser tools when disabled", async () => {
+    // video_transcript is only offered where yt-dlp is installed.
+    const transcript = findExecutable("yt-dlp") ? ["video_transcript"] : [];
     expect((await provider()).map(t => t.name)).toEqual([
       "web_search",
       "fetch_url",
@@ -269,8 +272,17 @@ describe("web-tools toolsProvider", () => {
       "browser_back",
       "browser_screenshot",
       "browser_close",
+      "read_feed",
+      ...transcript,
+      "web_doctor",
     ]);
-    expect((await provider({ enableBrowser: false })).map(t => t.name)).toEqual(["web_search", "fetch_url"]);
+    expect((await provider({ enableBrowser: false })).map(t => t.name)).toEqual([
+      "web_search",
+      "fetch_url",
+      "read_feed",
+      ...transcript,
+      "web_doctor",
+    ]);
   });
 
   it("searches and fetches through the tools", async () => {

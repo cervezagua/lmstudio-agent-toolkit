@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/cervezagua/lmstudio-agent-toolkit/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/cervezagua/lmstudio-agent-toolkit/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <img alt="Tests" src="https://img.shields.io/badge/tests-271%20passing-brightgreen">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-290%20passing-brightgreen">
   <img alt="Tested on Windows, macOS and Linux" src="https://img.shields.io/badge/tested%20on-Windows%20%7C%20macOS%20%7C%20Linux-informational">
   <a href="https://lmstudio.ai/cervezagua/agent-toolkit"><img alt="LM Studio Hub" src="https://img.shields.io/badge/LM%20Studio%20Hub-cervezagua%2Fagent--toolkit-7c3aed"></a>
 </p>
@@ -72,10 +72,21 @@ One plugin, five groups. Each group is a switch in the plugin's settings, becaus
 | 📁 | **Files & Shell** | on | Read, write and edit files, search, run commands | Locked to your project folder · read-before-edit · undo · background tasks · project diagnostics |
 | 🧠 | **Memory & Context** | on | Remember things between chats, keep a todo list, follow skills | Opens each chat with your `AGENTS.md`, today's date and git status · plan mode · can save its own skills and search past chats, if you switch those on |
 | 🌿 | **Git & GitHub** | on | Status, diff, commit, branch, pull requests and issues | Runs `git`/`gh` directly, never through a shell · push is opt-in, never forced |
-| 🌐 | **Web** | off | Search, read pages as markdown, drive a real browser | Private SearXNG search · reads PDFs · Edge or Chrome via Playwright |
+| 🌐 | **Web** | off | Search, read pages as markdown, drive a real browser, read feeds and video transcripts | Private SearXNG search · read just part of a page · reads PDFs · RSS/Atom · YouTube transcripts via yt-dlp · Edge or Chrome via Playwright |
 | 📄 | **Documents** | off | Read PDFs, scans and images from your folder | Text layer first, free and exact · OCR only when needed · **your chat model needs no vision** |
 
 Every tool and setting is in the [full reference](plugin/README.md).
+
+### Just one tool?
+
+Two of the Web tools also come as small plugins of their own (install from a clone of this repo for now; Hub listings to follow):
+
+| Plugin | What it adds | Install |
+|---|---|---|
+| [**feed-reader**](standalone/feed-reader/README.md) | `read_feed`: the latest items of any RSS or Atom feed | `npm run setup -- feed-reader` |
+| [**video-transcripts**](standalone/video-transcripts/README.md) | `video_transcript`: what's said in a YouTube or other video (needs [yt-dlp](https://github.com/yt-dlp/yt-dlp)) | `npm run setup -- video-transcripts` |
+
+They're the same code as agent-toolkit's, so don't enable one alongside agent-toolkit with Web on, or the model sees the tool twice.
 
 ## 💡 Tips & tricks
 
@@ -85,6 +96,9 @@ Every tool and setting is in the [full reference](plugin/README.md).
 - **Ask for plan mode on anything big.** *"Enter plan mode and plan how you'd add X"*: while planning, the file-changing tools disappear until the model presents its plan with `exit_plan_mode`.
 - **Point at the file when you know it.** *"The bug is in `src/parse.ts`"* saves a model several searches and a lot of context.
 - **Tell it to prove its work.** *"…and run the tests to show it passes"* turns a guess into a checked result.
+- **Read only the part of a page you need.** *"Fetch the pricing page, just the table"* lets the model pass a CSS selector to `fetch_url` instead of reading the whole page into its context.
+- **Summarise a video instead of watching it.** With yt-dlp installed: *"What does this talk say about caching? <YouTube link>"*.
+- **Follow a blog or a project's releases.** *"What's new on https://example.com/blog?"* reads its feed, even from the home page.
 - **Ask for file names before contents.** A model can `grep` for just the files that match, or just the counts, which costs a fraction of the context of full results.
 - **Made a mistake? Ask for `undo_edit`.** It restores a file to how it was before the chat's last change to it.
 - **Start dev servers in the background.** *"Start the dev server in the background and check it came up"* uses the task tools, so the chat isn't stuck waiting on a process that never exits.
@@ -119,6 +133,7 @@ Every tool and setting is in the [full reference](plugin/README.md).
 | *"Read the file first"* on a file the model already read | Changing settings restarts the plugin, which forgets what was read. It's a safety check, not an error | Let the model read it again |
 | *"is not a git repository"* | Project Folder isn't a git repo, or isn't set | Point Project Folder at the repo, or ask for `git_init` |
 | *"SearXNG unavailable, used DuckDuckGo"* | Your SearXNG isn't running | Start it (`searxng/start-searxng.cmd` on Windows) |
+| A web tool fails, or `video_transcript` is missing | Something the Web group needs isn't set up | Ask the model to run `web_doctor`: it checks SearXNG, the browser and yt-dlp, and says how to fix each |
 | *"agent-toolkit did not load AGENTS.md…"* | The file contains a line that looks written to steer the model, such as "ignore previous instructions" | Read the quoted line. Fix the file, or switch off **Scan Loaded Files** if it's a false alarm |
 | A model you just downloaded is missing from a dropdown | The list is read when the plugin starts | Turn the plugin off and on |
 
