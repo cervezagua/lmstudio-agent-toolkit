@@ -1,0 +1,7 @@
+{
+  "type": "plugin",
+  "runner": "node",
+  "owner": "local",
+  "name": "feed-reader",
+  "revision": 1
+}

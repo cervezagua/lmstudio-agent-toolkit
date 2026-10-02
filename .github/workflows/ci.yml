@@ -36,7 +36,7 @@ jobs:
         run: npm ci
 
       - name: Install plugin dependencies
-        run: npm --prefix plugin ci
+        run: npm --prefix plugin ci && npm --prefix standalone/feed-reader ci && npm --prefix standalone/video-transcripts ci
 
       - name: Typecheck
         run: npm run typecheck

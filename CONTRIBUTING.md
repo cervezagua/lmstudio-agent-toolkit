@@ -18,7 +18,8 @@ plugin/              the LM Studio plugin (this is what gets installed and publi
   src/groups/documents/  PDFs, scans and images
   src/shared/          helpers used by several groups, plus their tests
   src/shared/testing/  fake LM Studio controller for tests
-scripts/             install, publish and end-to-end helpers
+standalone/<name>/   small plugins that each ship one tool from plugin/src (see below)
+scripts/             install, publish, sync and end-to-end helpers
 searxng/             optional SearXNG setup for Windows + WSL
 ```
 
@@ -80,6 +81,20 @@ It publishes from a clean staging copy, the same way the installer does. Add `--
 - The plugin host's environment is not your terminal's. LM Studio runs plugins in an Electron utility process, which on Windows has been seen to supply no `PATHEXT` — enough to make every shell command fail with "is not recognized". Spawn with `commandEnv()` from `src/shared/process.ts` instead of `process.env`, and don't assume a variable exists just because your shell has it. Tests call tool code directly in a normal environment, so they cannot catch this class of bug; it only shows up inside LM Studio.
 - PDF work goes through `src/groups/documents/lib/pdf-worker.mjs` in a separate process; PDF.js doesn't work when bundled as CommonJS.
 - Keep heavy dependencies behind `await import(...)` inside the code that needs them, so a group that is switched off costs nothing at startup.
+
+## Standalone plugins
+
+Some tools are also published as small plugins of their own, in `standalone/<name>/`. Each has its own `manifest.json`, `package.json`, README and a few lines of `src/` that register the tool, but **no copy of the tool's code in git**. `standalone/<name>/files.json` lists the files it needs from `plugin/src/`, and `npm run sync-standalone` copies them in at the same relative paths, so their imports work unchanged. The copies are gitignored; `npm test`, `npm run typecheck`, `npm run setup` and `npm run hub:push` all sync first.
+
+So edit the tool in `plugin/src/`, never in `standalone/`. To ship a tool on its own, keep its module free of agent-toolkit's config (pass settings in, as `makeReadFeedTools` and `makeVideoTranscriptTools` do), list its files in a new `files.json`, and add the plugin to the `deps` and `typecheck` scripts and to CI.
+
+```bash
+npm run setup -- feed-reader
+```
+
+```bash
+npm run hub:push -- feed-reader --owner <your-hub-account>
+```
 
 ## Adding a group
 
