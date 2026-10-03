@@ -79,12 +79,12 @@ Every tool and setting is in the [full reference](plugin/README.md).
 
 ### Just one tool?
 
-Two of the Web tools also come as small plugins of their own (install from a clone of this repo for now; Hub listings to follow):
+Two of the Web tools also come as small plugins of their own:
 
 | Plugin | What it adds | Install |
 |---|---|---|
-| [**feed-reader**](standalone/feed-reader/README.md) | `read_feed`: the latest items of any RSS or Atom feed | `npm run setup -- feed-reader` |
-| [**video-transcripts**](standalone/video-transcripts/README.md) | `video_transcript`: what's said in a YouTube or other video (needs [yt-dlp](https://github.com/yt-dlp/yt-dlp)) | `npm run setup -- video-transcripts` |
+| [**feed-reader**](standalone/feed-reader/README.md) | `read_feed`: the latest items of any RSS or Atom feed | `lms get cervezagua/feed-reader` |
+| [**video-transcripts**](standalone/video-transcripts/README.md) | `video_transcript`: what's said in a YouTube or other video (needs [yt-dlp](https://github.com/yt-dlp/yt-dlp)) | `lms get cervezagua/video-transcripts` |
 
 They're the same code as agent-toolkit's, so don't enable one alongside agent-toolkit with Web on, or the model sees the tool twice.
 
