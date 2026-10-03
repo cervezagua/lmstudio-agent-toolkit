@@ -1,177 +1,162 @@
 # agent-toolkit
 
-*Part of the [LM Studio Agent Toolkit](https://github.com/cervezagua/lmstudio-agent-toolkit).*
+**Turn a local model into a working coding agent.** It reads and edits your code, runs your tests, remembers your project, uses git, searches the web and reads your documents. It all runs on your machine: no API keys, nothing uploaded.
 
-Coding-agent tools for LM Studio models: files and a shell, memory that survives between chats, git and GitHub, the web with a real browser, and documents. Everything runs on your machine — no API keys, nothing uploaded.
+[Project home](https://github.com/cervezagua/lmstudio-agent-toolkit) · [Tips & tricks](https://github.com/cervezagua/lmstudio-agent-toolkit#-tips--tricks) · [Report a problem](https://github.com/cervezagua/lmstudio-agent-toolkit/issues)
 
-## Setup
+---
 
-1. Enable **agent-toolkit** in the chat (the chip under the message box).
-2. Click the chip and set **Project Folder** to the folder you want the model to work in. Every group below uses it, and file paths cannot escape it. Leave it empty to use the chat's own working directory.
-3. Switch on the groups you want. **Files & Shell**, **Memory & Context** and **Git & GitHub** start on; **Web** and **Documents** start off, because a long tool list makes small models choose worse.
-4. Keep LM Studio's tool call confirmation on, and approve calls as they come.
+## At a glance
 
-## Files & Shell
+| | Group | Default | In one line |
+|---|---|:---:|---|
+| 📁 | [Files & Shell](#-files--shell) | on | Read, write and edit files, search the project, run commands |
+| 🧠 | [Memory & Context](#-memory--context) | on | Remember things between chats, follow your `AGENTS.md`, plan before changing |
+| 🌿 | [Git & GitHub](#-git--github) | on | Status, diffs, commits, branches, pull requests and issues |
+| 🌐 | [Web](#-web) | off | Search, read pages and feeds, video transcripts, a real browser |
+| 📄 | [Documents](#-documents) | off | Read PDFs, scans and images, with OCR when needed |
 
-| Tool | Parameters | What it does |
-|---|---|---|
-| `read_file` | `path`, `offset?`, `limit?` | Returns lines prefixed with their line numbers. `offset` (1-based) and `limit` page through large files (default: first 2000 lines), and only the requested lines are read into memory. Binary files, and whole-file reads over **Max Read Bytes**, are refused. |
-| `write_file` | `path`, `content` | Creates or overwrites a file. Missing parent folders are created. |
-| `edit_file` | `path`, `old_string`, `new_string`, `replace_all?` | Exact search-and-replace. `old_string` must appear exactly once unless `replace_all` is true. LF text matches Windows CRLF files. |
-| `multi_edit` | `path`, `edits`, `preview?` | Several exact replacements in one file, applied in order. If any one fails, nothing is written. |
-| `insert_lines` | `path`, `after_line`, `content`, `preview?` | Inserts text after a line number (0 = top of the file), without quoting the surrounding code. |
-| `undo_edit` | `path` | Restores a file to its content before this chat's last change to it. |
-| `list_dir` | `path?` | Lists a folder, subfolders first (marked with `/`). |
-| `glob` | `pattern`, `path?` | Finds files by pattern (`**/*.ts`), most recently modified first. |
-| `grep` | `pattern`, `path?`, `glob?`, `ignore_case?`, `max_results?`, `context?`, `output_mode?`, `offset?` | Regex search of file contents. `output_mode` is `content` (default), `files_with_matches` (paths only, the cheapest way to answer "where is X used?") or `count`. `context` adds surrounding lines, `offset` pages through results. Uses ripgrep if installed, otherwise a built-in search. |
-| `run_command` | `command`, `description?`, `cwd?`, `timeout_seconds?` | Runs a shell command and returns the exit code, stdout and stderr. `description` is one line saying what it does, shown while it runs. Output far past the limit is written to a file and its path returned, so nothing is lost. With **Persistent Shell Session** on, every command shares one shell, so `cd`, environment variables and activated virtualenvs carry over. Only present when **Allow Shell Commands** is on. |
-| `shell_reset` | – | Restarts that shell session, clearing its directory and variables. Only with the session enabled. |
+Each group is a switch in the plugin's settings. Leave on only what you need, because small models choose better from a short tool list.
 
-With **Background Tasks** on, for dev servers, watchers and long builds:
+## Getting started
 
-| Tool | Parameters | What it does |
-|---|---|---|
-| `task_run` | `command`, `cwd?`, `name?` | Starts a command in the background and returns a task id. |
-| `task_list` | – | The chat's tasks with their status: running, exited with a code, or gone. |
-| `task_output` | `id`, `offset?`, `max_chars?` | Output written after `offset`, plus the next offset, so the model can poll for new output only. |
-| `task_stop` | `id` | Stops a task and its child processes. |
+1. **Load a tool-capable model**, with 32k context or more.
+2. **Enable agent-toolkit** in the chat. It's a chip under the message box.
+3. **Click the chip and set Project Folder** to the folder you want the model to work in.
+4. **Ask for work**, and approve each tool call as it comes.
 
-With **Diagnostics** on, a `diagnostics` tool runs the project's own checkers (tsc, ESLint, Ruff, Pyright, cargo, go vet). With **Jupyter Notebook Tools** on, `notebook_read` and `notebook_edit` read and change `.ipynb` cells. With **Research Sub-agent** on, `run_subagent` answers a search-heavy question in a read-only nested agent.
+Without a Project Folder, the model works in the chat's own empty folder and is told so.
 
-## Memory & Context
+---
 
-On the **first message of every chat**, this group adds today's date, your instruction files (`AGENTS.md` by default), the memory index, the installed skills, and — in a git repository — the branch, uncommitted changes and recent commits.
+## 📁 Files & Shell
 
-| Tool | Parameters | What it does |
-|---|---|---|
-| `memory_save` | `name`, `description`, `content`, `type` | Saves one fact. `type` is `user`, `feedback`, `project`, `reference` or `session`. Saving an existing name replaces it. |
-| `memory_read` | `name` | Returns a memory's full content; suggests similar names if there's no exact match. |
-| `memory_search` | `query`, `limit?` | Keyword search over names, descriptions and content, with a snippet for each match. |
-| `memory_list` | – | The full index. |
-| `memory_delete` | `name` | Deletes a memory that is wrong or outdated. |
-| `save_session_summary` | `title`, `summary` | Saves a summary of this chat (goal, work done, decisions, next steps) as a `session` memory, so you can continue in a new chat. |
-| `todo_write` | `todos` (list of `{content, status}`) | Replaces this chat's todo list. `status` is `pending`, `in_progress` or `completed`; only one item may be `in_progress`. |
-| `todo_read` | – | Shows the current list. |
-| `skill_list` | – | Lists the skills installed on your computer (name and one-line description). |
-| `skill_read` | `name` | Loads a skill's full instructions to follow for the task at hand. |
-| `skill_save` | `name`, `description`, `content`, `overwrite?` | Writes a new skill for future chats to load. Only with **Let the Model Save Skills** on, and not while planning. |
-| `chat_search` | `query`, `limit?` | Searches your earlier LM Studio chats and returns short excerpts with the chat's title and date. Only with **Search Past Chats** on. |
-| `enter_plan_mode` | – | Switches the chat into planning mode: research only. |
-| `exit_plan_mode` | `plan` | Presents the plan and re-enables the tools that make changes. |
+| Tool | What it does |
+|---|---|
+| `read_file` | Reads a file with line numbers; `offset` and `limit` page through big ones. |
+| `write_file` | Creates or overwrites a file. |
+| `edit_file` | Replaces one exact piece of text. It must match once, so nothing else changes. |
+| `multi_edit` | Several replacements in one file; if any fails, none are written. |
+| `insert_lines` | Inserts text after a line number. |
+| `undo_edit` | Puts a file back as it was before the chat's last change to it. |
+| `list_dir` · `glob` | List a folder, or find files by pattern. |
+| `grep` | Searches file contents, returning lines, just file names, or counts. |
+| `run_command` | Runs a shell command and returns its real exit code and output. |
+| `shell_reset` | Starts the shell session afresh. |
+| `task_run` · `task_list` · `task_output` · `task_stop` | Run dev servers, watchers and long builds in the background. |
+| `diagnostics` | Runs the project's own checkers: tsc, ESLint, Ruff, Pyright, cargo, go vet. |
+| `notebook_read` · `notebook_edit` | Read and change Jupyter notebook cells. Off by default. |
+| `run_subagent` | Answers a search-heavy question in a read-only helper agent. Off by default. |
 
-Skills use the standard Agent Skills layout — `<skill>/SKILL.md` with `name:` and `description:` frontmatter, or a single `<name>.md`. It's the same layout Claude Code, Codex and LM Studio Bionic use, so point **Skills Directory** at `~/.lmstudio/skills` (Bionic's folder) or `~/.claude/skills` and your existing skills work unchanged. A description that wraps over several lines, is quoted across lines, or uses YAML's `>` or `|` blocks is read in full.
+Long command output is saved to a file and its path returned, so nothing is lost. `grep` gives the same results whether or not [ripgrep](https://github.com/BurntSushi/ripgrep) is installed; ripgrep just makes it faster.
 
-## Git & GitHub
+## 🧠 Memory & Context
 
-`git` and `gh` are run directly, never through a shell, so nothing is word-split or interpreted.
+Every new chat starts with today's date, your `AGENTS.md` (or `CLAUDE.md`), your saved memories, your skills and, in a git repository, the branch, uncommitted changes and recent commits.
 
-| Tool | Parameters | What it does |
-|---|---|---|
-| `git_status` | – | Branch, upstream state, and changed/untracked files |
-| `git_diff` | `staged?`, `ref?`, `path?`, `stat_only?` | Unstaged changes by default; `staged` for what will be committed; `ref` to compare against a commit or branch |
-| `git_log` | `count?`, `ref?`, `path?` | Recent commits: hash, date, author, refs, subject (default 15) |
-| `git_show` | `ref`, `stat_only?` | A commit's message and changes |
-| `git_add` | `paths` | Stages files (`["."]` for everything), then shows the short status |
-| `git_commit` | `message` | Commits what's staged; refuses when nothing is staged. Multi-line messages are fine. |
-| `git_branch` | `name?`, `base?`, `switch?` | Lists branches, or creates/switches to `name` (optionally from `base`) |
-| `git_init` | – | Creates a repository in the Project Folder |
-| `git_push` | `remote?` | Pushes the current branch and sets its upstream. **Only present when Allow Push is on. Never force-pushes.** |
-| `gh_pr_list` | `state?`, `limit?`, `search?` | Lists pull requests |
-| `gh_pr_view` | `number?` | A PR's description, status and comments (defaults to the current branch's PR) |
-| `gh_pr_diff` | `number?` | A PR's diff |
-| `gh_pr_checks` | `number?` | CI check results, including pending ones |
-| `gh_pr_create` | `title`, `body`, `base?`, `draft?` | Opens a PR from the current branch (push first) |
-| `gh_issue_list` | `state?`, `limit?`, `search?` | Lists issues |
-| `gh_issue_view` | `number` | An issue with its comments |
+| Tool | What it does |
+|---|---|
+| `memory_save` · `memory_read` · `memory_search` · `memory_list` · `memory_delete` | Facts that last between chats. |
+| `save_session_summary` | Saves where a long chat got to, so a new chat can pick it up. |
+| `todo_write` · `todo_read` | A todo list for work with several steps. |
+| `skill_list` · `skill_read` | Your skills: written instructions for kinds of task. |
+| `skill_save` | Lets the model save a new skill. Off by default. |
+| `chat_search` | Searches your earlier LM Studio chats. Off by default. |
+| `enter_plan_mode` · `exit_plan_mode` | Plan first: the tools that change files disappear until the plan is presented. |
 
-The `gh_*` tools appear only when the [GitHub CLI](https://cli.github.com) is installed and logged in.
+Skills use the standard `SKILL.md` layout, the same as Claude Code, Codex and LM Studio Bionic. Point **Skills Directory** at `~/.lmstudio/skills` or `~/.claude/skills` and the skills you already have work here.
 
-## Web
+## 🌿 Git & GitHub
 
-| Tool | Parameters | What it does |
-|---|---|---|
-| `web_search` | `query`, `count?` | Titles, URLs and snippets from the configured search backend |
-| `fetch_url` | `url`, `selector?`, `max_chars?`, `offset?`, `refresh?` | Downloads a page and returns its main content as markdown (Readability + Turndown), with absolute links. Also reads PDFs page by page; plain text and JSON come back as-is. `offset` continues a long document where the last call stopped. Results are cached for ten minutes unless `refresh` is set, and a redirect to another host is reported in the result. Downloads are capped at 5 MB with a 30 s timeout, and retried on temporary failures. `selector` takes a CSS selector (`main`, `article`, `table#prices`) and returns only the matching elements, which uses far less context. |
-| `browser_open` | `url` | Opens the URL in a real browser (runs JavaScript) and returns a snapshot |
-| `browser_snapshot` | – | A fresh snapshot of the current page |
-| `browser_click` | `ref` | Clicks element `[ref]` from the latest snapshot, then returns the new snapshot |
-| `browser_type` | `ref`, `text`, `submit?` | Fills an input or textarea (or picks a `<select>` option by label); `submit` presses Enter |
-| `browser_back` | – | Goes back in history |
-| `browser_screenshot` | `full_page?` | Saves a PNG to `<chat working directory>/screenshots/` and returns its path |
-| `browser_close` | – | Closes the browser |
-| `read_feed` | `url`, `limit?` | Lists an RSS or Atom feed's latest items: title, date, link and a short summary. Accepts a site's page that links to its feed. |
-| `video_transcript` | `url`, `language?`, `offset?`, `max_chars?` | Title, channel, length and transcript of a YouTube (or other) video, through [yt-dlp](https://github.com/yt-dlp/yt-dlp). Only offered when yt-dlp is installed. |
-| `web_doctor` | – | Says what the web tools can use here: whether SearXNG answers, which browser is installed, whether yt-dlp is there, and how to fix what's missing. |
+| Tool | What it does |
+|---|---|
+| `git_status` · `git_diff` · `git_log` · `git_show` | See what changed, and when. |
+| `git_add` · `git_commit` · `git_branch` · `git_init` | Stage, commit, branch, start a repository. |
+| `git_push` | Pushes the current branch. Off by default, and never forced. |
+| `gh_pr_list` · `gh_pr_view` · `gh_pr_diff` · `gh_pr_checks` · `gh_pr_create` | Pull requests, through the [GitHub CLI](https://cli.github.com). |
+| `gh_issue_list` · `gh_issue_view` | Issues. |
 
-Search uses [SearXNG](https://github.com/searxng/searxng) at `http://localhost:8888` when it's running and falls back to DuckDuckGo, which often answers automated requests with a bot check. A Brave Search API key is the third option. The browser drives your installed Edge or Chrome through Playwright; all chats share one browser.
+`git` and `gh` run directly, never through a shell. The `gh_*` tools appear once `gh` is installed and logged in.
 
-`read_feed` and `video_transcript` are also published on their own, as the [feed-reader](https://github.com/cervezagua/lmstudio-agent-toolkit/tree/main/standalone/feed-reader) and [video-transcripts](https://github.com/cervezagua/lmstudio-agent-toolkit/tree/main/standalone/video-transcripts) plugins, for anyone who wants just that one tool.
+## 🌐 Web
 
-## Documents
+| Tool | What it does |
+|---|---|
+| `web_search` | Searches the web through your SearXNG, DuckDuckGo or Brave. |
+| `fetch_url` | Reads a page as clean markdown, or a PDF page by page. Give it a CSS `selector` to read just one part, like a single table. |
+| `read_feed` | The latest items of an RSS or Atom feed. A site's home page works too. |
+| `video_transcript` | What's said in a YouTube or other video, through [yt-dlp](https://github.com/yt-dlp/yt-dlp). |
+| `browser_open` · `browser_click` · `browser_type` · `browser_back` · `browser_snapshot` · `browser_screenshot` · `browser_close` | Drives your own Edge or Chrome. Pages run their JavaScript, and the model clicks by number. |
+| `web_doctor` | Checks what's set up (SearXNG, the browser, yt-dlp) and says how to fix what isn't. |
 
-**Your chat model does not need vision.** A PDF's text layer is read with no model at all, and OCR runs on a separate vision model only when the page is a scan.
+Search works best with a private [SearXNG](https://github.com/searxng/searxng). Without one it falls back to DuckDuckGo, which often turns automated requests away with a bot check. `video_transcript` appears once yt-dlp is installed.
 
-| Tool | Parameters | What it does |
-|---|---|---|
-| `read_document_text` | `path`, `pages?` | Reads a PDF's text layer: fast, exact, no model needed. Says when a PDF looks scanned and needs OCR. |
-| `ocr_document` | `path`, `pages?`, `instructions?` | Reads a scanned PDF or an image (png, jpg, webp, gif, bmp) with a vision model and returns its text. |
-| `pdf_to_images` | `path`, `pages?`, `output_directory?` | Renders pages as PNG files and returns their paths, without reading them. |
+`read_feed` and `video_transcript` also come as small plugins of their own: [feed-reader](https://github.com/cervezagua/lmstudio-agent-toolkit/tree/main/standalone/feed-reader) and [video-transcripts](https://github.com/cervezagua/lmstudio-agent-toolkit/tree/main/standalone/video-transcripts).
+
+## 📄 Documents
+
+**Your chat model doesn't need vision.** A PDF's text is read without any model, and OCR uses a separate vision model only for scanned pages.
+
+| Tool | What it does |
+|---|---|
+| `read_document_text` | Reads a PDF's text, and says when a page looks scanned. |
+| `ocr_document` | Reads a scanned PDF or an image with a vision model. |
+| `pdf_to_images` | Saves PDF pages as images. |
+
+---
 
 ## Settings
 
-| Setting | Default | What it does |
-|---|---|---|
-| **Project Folder** | empty | The folder every group works in. Empty = the chat's own empty working directory, and the model is told so. |
-| **Max Output Characters** | 20000 | Longer tool results are truncated, keeping head and tail. |
-| **Files & Shell** | on | The group above. |
-| → Allow Shell Commands | on | Exposes `run_command`. |
-| → Shell | auto | `pwsh`/PowerShell on Windows, `bash`/`sh` elsewhere. |
-| → Default Command Timeout | 60 s | The model may ask for up to 10× this. |
-| → Extra Blocked Command Patterns | empty | Case-insensitive regexes refused on top of the built-in ones. |
-| → Persistent Shell Session | on | One shell for the chat, so `cd` and variables carry over. |
-| → Max Read Bytes | 262144 | Largest whole-file read; bigger files need `offset`/`limit` or `grep`. |
-| → Background Tasks | on | Adds the `task_*` tools. |
-| → Diagnostics | on | Adds the `diagnostics` tool. |
-| → Jupyter Notebook Tools | off | Adds `notebook_read` / `notebook_edit`. |
-| → Research Sub-agent | off | Adds `run_subagent`. |
-| → Sub-agent Model | Auto | Dropdown of your models; Auto = the first loaded model. |
-| **Memory & Context** | on | The group above. |
-| → Instruction Files | `AGENTS.md`, `CLAUDE.md`, `.lmstudio/instructions.md` | Loaded from the Project Folder into each new chat. |
-| → Inject Memory Index | on | Also lists saved memories. |
-| → Git Snapshot | on | Adds branch, changes and recent commits. |
-| → Skills | on | Adds `skill_list` / `skill_read`. |
-| → Let the Model Save Skills | off | Adds `skill_save`. A saved skill is loaded into every future chat. |
-| → Scan Loaded Files | on | Leaves out instruction files and skills that look written to steer the model. |
-| → Search Past Chats | off | Adds `chat_search` over your earlier chats. |
-| → Plan Mode | on | Adds `enter_plan_mode` / `exit_plan_mode`. |
-| → Max Injected Characters | 12000 | Cap on what's added to the first message. |
-| **Git & GitHub** | on | The group above. |
-| → Allow Push | off | Exposes `git_push`. |
-| → Enable GitHub Tools | on | Exposes `gh_*` when `gh` is installed. |
-| **Web** | off | The group above. |
-| → Search Backend | auto | `auto`, `searxng`, `duckduckgo` or `brave`. |
-| → SearXNG URL | `http://localhost:8888` | Your instance. |
-| → Default Search Results | 8 | |
-| → Max Page Characters | 15000 | Cap on fetched pages and snapshots. |
-| → Browser Fallback for fetch_url | on | Renders JavaScript-only pages in the browser. |
-| → Enable Browser Tools | on | Exposes `browser_*`. |
-| → Browser | msedge on Windows, chrome elsewhere | `msedge`, `chrome` or `chromium`. |
-| → Headless Browser | on | Turn off to watch it work. |
-| **Documents** | off | The group above. |
-| → Vision Model | Auto | Dropdown of your models, vision models first; Auto = the first loaded vision model. |
-| → PDF Render Scale | 2 | Larger reads small print better and costs more tokens. |
-| → Max Pages Per Call | 10 | |
+**Everywhere**
 
-Global settings (shared by every chat): **Memory Directory**, **Skills Directory**, **Brave Search API Key**.
+| Setting | Default | |
+|---|---|---|
+| Project Folder | *(empty)* | The folder every group works in. |
+| Max Output Characters | 20000 | Longer results keep their beginning and end. |
+
+**Files & Shell**
+
+| Setting | Default | |
+|---|---|---|
+| Allow Shell Commands | on | Offers `run_command`. |
+| Shell | auto | PowerShell on Windows, bash elsewhere. |
+| Default Command Timeout | 60 s | The model can ask for up to ten times this. |
+| Extra Blocked Command Patterns | *(none)* | Your own patterns to refuse. |
+| Persistent Shell Session | on | `cd` and variables carry over between commands. |
+| Max Read Bytes | 256 KB | Bigger files are read in parts. |
+| Background Tasks · Diagnostics | on | |
+| Jupyter Notebook Tools · Research Sub-agent | off | |
+| Sub-agent Model | Auto | Chosen from a list of your models. |
+
+**Memory & Context**
+
+| Setting | Default | |
+|---|---|---|
+| Instruction Files | `AGENTS.md`, `CLAUDE.md`, `.lmstudio/instructions.md` | Loaded into each new chat. |
+| Inject Memory Index · Git Snapshot · Skills · Plan Mode | on | |
+| Scan Loaded Files | on | Leaves out files written to steer the model. |
+| Let the Model Save Skills · Search Past Chats | off | |
+| Max Injected Characters | 12000 | |
+
+**Git & GitHub:** Allow Push *(off)* · Enable GitHub Tools *(on)*.
+
+**Web:** Search Backend *(auto)* · SearXNG URL *(`http://localhost:8888`)* · Default Search Results *(8)* · Max Page Characters *(15000)* · Browser Fallback *(on)* · Enable Browser Tools *(on)* · Browser *(Edge on Windows, Chrome elsewhere)* · Headless *(on)*.
+
+**Documents:** Vision Model *(Auto, chosen from your models)* · PDF Render Scale *(2)* · Max Pages Per Call *(10)*.
+
+**Shared by every chat:** Memory Directory · Skills Directory · Brave Search API Key.
 
 ## Safety
 
-Approving a tool call is the same as running that command yourself.
+Approving a tool call is the same as running that command yourself, so keep LM Studio's confirmation on.
 
-- **Project Folder** — file paths resolve inside it, after following symlinks and junctions. `read_file` may also open this plugin's own output files in the chat folder.
-- **Read before edit** — a file must have been read in this chat before it can be edited, and the edit is refused if it changed since.
-- **Atomic writes** — files are written to a temp file and renamed, so an interrupted write can't truncate your work.
-- **Blocked commands** — catastrophic ones (`rm -rf /`, `format C:`, `diskpart`) are refused. A seatbelt, not a sandbox: a shell command can still do anything your account can.
-- **Opt-in danger** — `git_push` is off by default and never force-pushes; the shell can be switched off entirely. Saving skills and searching past chats are off until you switch them on.
-- **Scan loaded files** — an `AGENTS.md` or a skill that tells the model to ignore its instructions, hides text in invisible characters, or sends secrets away is not loaded. You see the line that tripped it; the model is told only which file and why.
-- **Plan mode** — while planning, every tool that changes a file is withheld. `run_command` stays available for read-only checks, with a reminder that planning is on.
+- **Stays in the Project Folder.** File paths can't leave it, not even through links.
+- **Reads before it edits.** A file must be read before it's changed, and the change is refused if the file changed in the meantime.
+- **Never half-writes a file.** Writes go to a temporary file first, then replace the original.
+- **Refuses disasters.** `rm -rf /`, `format C:`, `diskpart` and similar are blocked. This is a seatbelt, not a sandbox.
+- **Risky things are opt-in.** Pushing, saving skills and searching past chats are off until you switch them on.
+- **Checks what it loads.** An `AGENTS.md` or skill that tries to steer the model ("ignore previous instructions", hidden characters, sending keys away) is left out, and you're shown why.
+
+---
+
+MIT licensed · [Source](https://github.com/cervezagua/lmstudio-agent-toolkit) · [Security](https://github.com/cervezagua/lmstudio-agent-toolkit/blob/main/SECURITY.md)

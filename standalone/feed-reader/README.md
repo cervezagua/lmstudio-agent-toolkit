@@ -1,16 +1,38 @@
 # feed-reader
 
-*Part of the [LM Studio Agent Toolkit](https://github.com/cervezagua/lmstudio-agent-toolkit). The same tool is in agent-toolkit's Web group.*
+**Keep up with the sites you follow, through your model.** Give it a blog, a news site or a project's releases and it reads the latest posts: what's new, what changed, what's worth opening.
 
-Lets an LM Studio model read RSS and Atom feeds: blogs, news sites, release notes, podcasts.
+[Project home](https://github.com/cervezagua/lmstudio-agent-toolkit) · [Report a problem](https://github.com/cervezagua/lmstudio-agent-toolkit/issues)
 
-| Tool | Parameters | What it does |
-|---|---|---|
-| `read_feed` | `url`, `limit?` | Lists a feed's latest items, newest first: title, date, link and a short plain-text summary (10 by default). Accepts a feed's URL, or a site's page that links to its feed. |
+---
 
-No settings, no API keys. The feed is fetched directly from its site; nothing else is contacted.
+## Try it
 
-Try: *"What's new on https://example.com/blog? Summarise the three latest posts."*
+> *"What's new on https://example.com/blog? Summarise the three latest posts."*
 
-> [!NOTE]
-> Using **agent-toolkit** with its Web group on? It already has `read_feed`, so don't enable this plugin in the same chat, or the model sees the tool twice.
+> *"Check the releases feed for this project and tell me if anything mentions Windows."*
+
+> *"Anything about local models on these three news sites this week?"*
+
+## The tool
+
+| Tool | What it does |
+|---|---|
+| `read_feed` | Lists a feed's latest items, newest first: title, date, link and a short summary. |
+
+- **RSS and Atom**, which covers nearly every blog, news site, podcast and release page.
+- **No need to find the feed.** Give it a site's home page and it follows the feed that page points to.
+- **Clean summaries.** HTML is stripped, and each summary is cut to a few lines.
+- **Ten items by default**, up to fifty with `limit`.
+
+To read a whole article, let the model open the item's link. agent-toolkit's `fetch_url` does that, as does any page-reading plugin.
+
+## Setup
+
+None: no settings, no accounts, no API keys. The feed comes straight from the site, and nothing else is contacted.
+
+---
+
+**Using agent-toolkit?** Its Web group already includes `read_feed`, so you don't need this plugin as well. Enabling both in one chat gives the model the same tool twice.
+
+MIT licensed · Part of the [LM Studio Agent Toolkit](https://github.com/cervezagua/lmstudio-agent-toolkit)

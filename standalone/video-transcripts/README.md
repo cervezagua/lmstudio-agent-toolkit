@@ -1,30 +1,55 @@
 # video-transcripts
 
-*Part of the [LM Studio Agent Toolkit](https://github.com/cervezagua/lmstudio-agent-toolkit). The same tool is in agent-toolkit's Web group.*
+**Let your model watch the video for you.** Give it a YouTube link and it reads what's said: to summarise a talk, find the part about one topic, or answer questions instead of guessing from the title.
 
-Lets an LM Studio model read what's said in a video, so it can summarise or answer questions about it instead of guessing from the title. Works with YouTube and most other video sites, through [yt-dlp](https://github.com/yt-dlp/yt-dlp).
+[Project home](https://github.com/cervezagua/lmstudio-agent-toolkit) · [Report a problem](https://github.com/cervezagua/lmstudio-agent-toolkit/issues)
 
-| Tool | Parameters | What it does |
-|---|---|---|
-| `video_transcript` | `url`, `language?`, `offset?`, `max_chars?` | Returns the video's title, channel, length and transcript. Prefers subtitles a person wrote; falls back to automatic captions and says so. Long transcripts come in parts. |
+---
+
+## Try it
+
+> *"Summarise this talk in five bullet points: https://www.youtube.com/watch?v=…"*
+
+> *"What does the speaker say about caching?"*
+
+> *"Give me the recipe from this video as a shopping list."*
 
 ## Setup
 
-Install yt-dlp, then restart LM Studio (or turn the plugin off and on):
+This plugin uses [yt-dlp](https://github.com/yt-dlp/yt-dlp), a free tool for reading video sites. Install it once:
 
-```bash
-winget install yt-dlp
-```
+| Windows | macOS | Linux |
+|---|---|---|
+| `winget install yt-dlp` | `brew install yt-dlp` | your package manager, or `pip install yt-dlp` |
 
-On macOS, `brew install yt-dlp`; on Linux, your package manager or `pip install yt-dlp`. Without it the tool isn't offered at all, so it never shows up as a tool that can only fail.
+Then turn the plugin off and on in LM Studio, or restart LM Studio. The tool only appears once yt-dlp is found, so it never shows up as a tool that can only fail.
 
-Only subtitles are downloaded, into a temporary folder that's deleted afterwards; never the video. yt-dlp runs directly, not through a shell.
+## The tool
 
-Try: *"Summarise https://www.youtube.com/watch?v=… in five bullet points."*
+| Tool | What it does |
+|---|---|
+| `video_transcript` | Returns the video's title, channel, length and transcript. |
+
+- **Works with YouTube and most other video sites** that yt-dlp supports.
+- **Prefers subtitles written by a person**, and falls back to automatic captions, saying so when it does.
+- **Other languages:** ask with `language` (default English), if the video has subtitles in it.
+- **Plain text, without timestamps**, which keeps it short; it can say what was said, not exactly when.
+- **Long transcripts come in parts.** The model asks for the next part when it needs it.
+
+## Settings
 
 | Setting | Default | |
 |---|---|---|
-| **Max Characters** | 15000 | Longer transcripts are returned in parts. |
+| Max Characters | 15000 | How much of a transcript comes back at once. |
 
-> [!NOTE]
-> Using **agent-toolkit** with its Web group on? It already has `video_transcript`, so don't enable this plugin in the same chat, or the model sees the tool twice.
+## Privacy and safety
+
+- **Only the subtitles are downloaded, never the video**, into a temporary folder that's deleted straight away.
+- **Nothing goes anywhere except the video site itself.** No accounts, no API keys.
+- **yt-dlp runs directly, never through a shell**, and anything that isn't an `http` or `https` link is refused.
+
+---
+
+**Using agent-toolkit?** Its Web group already includes `video_transcript`, so you don't need this plugin as well. Enabling both in one chat gives the model the same tool twice.
+
+MIT licensed · Part of the [LM Studio Agent Toolkit](https://github.com/cervezagua/lmstudio-agent-toolkit)
