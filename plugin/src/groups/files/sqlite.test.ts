@@ -121,6 +121,9 @@ describe.runIf(sqliteAvailable())("sqlite_query", () => {
     const { DatabaseSync } = process.getBuiltinModule("node:sqlite");
     for (const file of [database, outside]) {
       const db = new DatabaseSync(file);
+      // One transaction: each insert on its own is a separate sync to disk, which took a slow CI
+      // disk past the hook's time limit.
+      db.exec("BEGIN");
       db.exec(`
         CREATE TABLE people (id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT, photo BLOB, bio TEXT);
         CREATE UNIQUE INDEX people_email ON people (email);
@@ -137,11 +140,12 @@ describe.runIf(sqliteAvailable())("sqlite_query", () => {
       const number = db.prepare("INSERT INTO numbers VALUES (?)");
       for (let n = 1; n <= 120; n++) number.run(n);
       db.prepare("INSERT INTO numbers VALUES (9007199254740993)").run();
+      db.exec("COMMIT");
       db.close();
     }
     original = await readFile(database);
     tools = await toolsProvider(fakeController({ config: { ...baseConfig, projectFolder: root }, workingDirectory: base }));
-  });
+  }, 60_000);
 
   afterAll(() => rm(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {}));
 
