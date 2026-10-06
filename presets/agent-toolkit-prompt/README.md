@@ -26,7 +26,7 @@ It sets nothing else. Temperature, sampling and the prompt template stay as your
 ## Using it
 
 1. Enable [agent-toolkit](https://github.com/cervezagua/lmstudio-agent-toolkit) in the chat and set its **Project Folder**.
-2. Pick this preset in the chat's preset menu. If you got it from the repository, not the Hub, paste the contents of [`system-prompt.md`](system-prompt.md) into the chat's **System Prompt** box.
+2. Get the preset from the [Hub](https://lmstudio.ai/cervezagua/agent-toolkit-prompt) and pick it in the chat's preset menu. Or paste the contents of [`system-prompt.md`](system-prompt.md) into the chat's **System Prompt** box.
 
 The prompt names agent-toolkit's tools, so it is of little use without the plugin. If you already have a system prompt you like, paste this one below it.
 

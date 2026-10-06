@@ -118,7 +118,7 @@ describe("prompt preprocessor", () => {
     expect(text).toContain("Always answer in French.");
     expect(text).toContain("User is Sam");
     expect(text.endsWith("\n\nhello")).toBe(true);
-    expect(ctl.statuses[0]).toMatchObject({ text: "memory-tools loaded AGENTS.md, MEMORY.md" });
+    expect(ctl.statuses[0]).toMatchObject({ text: "agent-toolkit loaded AGENTS.md, MEMORY.md" });
 
     const later = ChatMessage.from({ role: "user", content: "second" });
     const laterCtl = fakeController({

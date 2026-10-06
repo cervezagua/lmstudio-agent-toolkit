@@ -78,7 +78,7 @@ export async function preprocess(ctl: PromptPreprocessorController, userMessage:
     ...(skillList ? ["skills"] : []),
     ...(snapshot ? ["git status"] : []),
   ];
-  ctl.createStatus({ status: "done", text: `memory-tools loaded ${loaded.join(", ")}` });
+  ctl.createStatus({ status: "done", text: `agent-toolkit loaded ${loaded.join(", ")}` });
   // replaceText keeps attached files/images on the message.
   userMessage.replaceText(`${block}\n\n${userMessage.getText()}`);
   return userMessage;

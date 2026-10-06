@@ -8,6 +8,8 @@ export interface FakeControllerOptions {
   workingDirectory: string | null;
   /** For prompt preprocessors: the chat history before the current message (an SDK `Chat`). */
   history?: unknown;
+  /** A stand-in for the LM Studio client, for tools that call a model (e.g. a vision model). */
+  client?: unknown;
 }
 
 function parsedConfig(values: Record<string, unknown>) {
@@ -19,11 +21,11 @@ function parsedConfig(values: Record<string, unknown>) {
   };
 }
 
-export function fakeController({ config = {}, globalConfig = {}, workingDirectory, history }: FakeControllerOptions) {
+export function fakeController({ config = {}, globalConfig = {}, workingDirectory, history, client }: FakeControllerOptions) {
   const abort = new AbortController();
   const statuses: unknown[] = [];
   return {
-    client: undefined as any,
+    client: client as any,
     abortSignal: abort.signal,
     statuses,
     getWorkingDirectory: () => {
