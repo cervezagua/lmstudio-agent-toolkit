@@ -1,17 +1,16 @@
-import { text, tool, type Tool, type ToolsProviderController } from "@lmstudio/sdk";
+import { text, tool, type LLM, type Tool, type ToolsProviderController } from "@lmstudio/sdk";
 import { mkdtemp, rm, stat } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { z } from "zod";
 import { configSchematics } from "../../config";
 import { extractPdfText, renderPdfPages } from "./lib/pdf";
-import { DEFAULT_OCR_PROMPT, ocrImageFile, pickVisionModel } from "./lib/vision";
+import { buildViewPrompt, looksLikeUrl, parseImageUrl, withDownloadedImage } from "./lib/viewImage";
+import { DEFAULT_OCR_PROMPT, IMAGE_EXTENSIONS, ocrImageFile, pickVisionModel, visionModelName } from "./lib/vision";
 import { safe, ToolError } from "../../shared/errors";
 import { displayPath, resolveSafe } from "../../shared/paths";
 import { projectRoot } from "../../shared/projectFolder";
 import { truncate } from "../../shared/truncate";
-
-const IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"];
 
 export async function toolsProvider(ctl: ToolsProviderController) {
   const config = ctl.getPluginConfig(configSchematics);
@@ -58,9 +57,10 @@ export async function toolsProvider(ctl: ToolsProviderController) {
     tool({
       name: "ocr_document",
       description: text`
-        Read a scanned PDF or an image (png, jpg, webp, gif, bmp) and return its content as text,
-        using a vision model in LM Studio. Pages of a PDF are read one at a time, so use pages
-        ("1-3,7") to limit how many. instructions can steer the transcription, e.g. "only the table".
+        Transcribe the exact text of a scanned PDF or an image (png, jpg, webp, gif, bmp), using a
+        vision model in LM Studio; to ask what an image shows, use view_image. Pages of a PDF are
+        read one at a time, so use pages ("1-3,7") to limit how many. instructions can steer the
+        transcription, e.g. "only the table".
       `,
       parameters: { path: z.string(), pages: z.string().optional(), instructions: z.string().optional() },
       implementation: safe(async ({ path, pages, instructions }, ctx) => {
@@ -99,6 +99,42 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         } finally {
           await rm(workDirectory, { recursive: true, force: true }).catch(() => {});
         }
+      }),
+    }),
+  );
+
+  tools.push(
+    tool({
+      name: "view_image",
+      description: text`
+        Have a vision model look at an image and describe it, or answer a question about it: what a
+        screenshot shows, a colour, a chart. image is a path in the project folder or an http(s)
+        URL (png, jpg, webp, gif, bmp). For the exact text of an image, use ocr_document.
+      `,
+      parameters: { image: z.string(), question: z.string().optional() },
+      implementation: safe(async ({ image, question }, ctx) => {
+        const prompt = buildViewPrompt(question);
+        const look = async (model: LLM, file: string, label: string) => {
+          const name = visionModelName(model);
+          ctx.status(`Looking at ${label}`);
+          const answer = await ocrImageFile(ctl.client, model, file, prompt, ctx.signal);
+          const source = `[Answer from the vision model${name ? ` ${name}` : ""}, which looked at the image.]`;
+          return `${label}\n${source}\n\n${truncate(answer || "(the vision model returned nothing)", maxOutputChars)}`;
+        };
+
+        if (looksLikeUrl(image)) {
+          // Refuse a bad URL, then a missing model, before anything is downloaded.
+          const url = parseImageUrl(image).href;
+          const model = await pickVisionModel(ctl.client, config.get("visionModel"));
+          ctx.status(`Downloading ${url}`);
+          return await withDownloadedImage(url, downloaded => look(model, downloaded.file, url), { signal: ctx.signal });
+        }
+
+        const file = await resolveDocument(image);
+        if (!IMAGE_EXTENSIONS.some(extension => file.toLowerCase().endsWith(extension))) {
+          throw new ToolError(`"${image}" is not a supported image (${IMAGE_EXTENSIONS.join(", ")}). For a PDF, use ocr_document.`);
+        }
+        return await look(await pickVisionModel(ctl.client, config.get("visionModel")), file, show(file));
       }),
     }),
   );

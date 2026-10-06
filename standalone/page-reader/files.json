@@ -1,4 +1,4 @@
 {
   "comment": "Files copied from plugin/src at the same relative paths by `npm run sync-standalone`. They are generated: edit the originals in plugin/src.",
-  "files": ["groups/web/lib/fetchUrlTool.ts", "groups/web/lib/fetchPage.ts", "shared/errors.ts"]
+  "files": ["groups/web/lib/fetchUrlTool.ts", "groups/web/lib/fetchPage.ts", "shared/errors.ts", "shared/userAgent.ts"]
 }

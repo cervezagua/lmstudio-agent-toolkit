@@ -96,6 +96,18 @@ npm run setup -- feed-reader
 npm run hub:push -- feed-reader --owner <your-hub-account>
 ```
 
+## Presets
+
+A preset lives in `presets/<name>/`. Edit `system-prompt.md`, then rebuild `preset.json`; a test fails if the two differ, or if the prompt names a tool the plugin doesn't have.
+
+```bash
+node scripts/build-preset.mjs
+```
+
+```bash
+node scripts/preset-push.mjs agent-toolkit-prompt --owner <your-hub-account>
+```
+
 ## Adding a group
 
 1. Create `plugin/src/groups/<name>/toolsProvider.ts` exporting `toolsProvider(ctl)`.

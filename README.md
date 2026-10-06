@@ -73,7 +73,7 @@ One plugin, five groups. Each group is a switch in the plugin's settings, becaus
 | 🧠 | **Memory & Context** | on | Remember things between chats, keep a todo list, follow skills | Opens each chat with your `AGENTS.md`, today's date and git status · plan mode · can save its own skills and search past chats, if you switch those on |
 | 🌿 | **Git & GitHub** | on | Status, diff, commit, branch, pull requests and issues | Runs `git`/`gh` directly, never through a shell · push is opt-in, never forced |
 | 🌐 | **Web** | off | Search, read pages as markdown, drive a real browser, read feeds and video transcripts | Private SearXNG search · read just part of a page · reads PDFs · RSS/Atom · YouTube transcripts via yt-dlp · Edge or Chrome via Playwright |
-| 📄 | **Documents** | off | Read PDFs, scans and images from your folder | Text layer first, free and exact · OCR only when needed · **your chat model needs no vision** |
+| 📄 | **Documents** | off | Read PDFs, scans and images from your folder, and look at pictures | Text layer first, free and exact · OCR only when needed · questions about a screenshot or a picture on the web · **your chat model needs no vision** |
 
 Every tool and setting is in the [full reference](plugin/README.md).
 
@@ -85,13 +85,13 @@ Three of the Web tools also come as small plugins of their own:
 |---|---|---|
 | [**feed-reader**](standalone/feed-reader/README.md) | `read_feed`: the latest items of any RSS or Atom feed | `lms get cervezagua/feed-reader` |
 | [**video-transcripts**](standalone/video-transcripts/README.md) | `video_transcript`: what's said in a YouTube or other video (needs [yt-dlp](https://github.com/yt-dlp/yt-dlp)) | `lms get cervezagua/video-transcripts` |
-| [**page-reader**](standalone/page-reader/README.md) | `fetch_url`: a web page or PDF as clean markdown, or just one part of it | from source: `npm run setup -- page-reader` |
+| [**page-reader**](standalone/page-reader/README.md) | `fetch_url`: a web page or PDF as clean markdown, or just one part of it | `lms get cervezagua/page-reader` |
 
 They're the same code as agent-toolkit's, so don't enable one alongside agent-toolkit with Web on, or the model sees the tool twice.
 
 ### A system prompt to go with it
 
-Small models often know how to call a tool but not when to stop. [**agent-toolkit-prompt**](presets/agent-toolkit-prompt/README.md) is a preset that tells the model to look before editing, keep a task list, check its work, and never repeat a call that already failed. It sets the system prompt and nothing else.
+Small models often know how to call a tool but not when to stop. [**agent-toolkit-prompt**](presets/agent-toolkit-prompt/README.md) is a preset that tells the model to look before editing, keep a task list, check its work, and never repeat a call that already failed. It sets the system prompt and nothing else. Get it from the [Hub](https://lmstudio.ai/cervezagua/agent-toolkit-prompt).
 
 ## 💡 Tips & tricks
 

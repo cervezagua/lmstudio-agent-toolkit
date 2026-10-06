@@ -95,12 +95,13 @@ Search works best with a private [SearXNG](https://github.com/searxng/searxng). 
 
 ## 📄 Documents
 
-**Your chat model doesn't need vision.** A PDF's text is read without any model, and OCR uses a separate vision model only for scanned pages.
+**Your chat model doesn't need vision.** A PDF's text is read without any model, and OCR and `view_image` use a separate vision model only when a page or picture has to be looked at.
 
 | Tool | What it does |
 |---|---|
 | `read_document_text` | Reads a PDF's text, and says when a page looks scanned. |
 | `ocr_document` | Reads a scanned PDF or an image with a vision model. |
+| `view_image` | Looks at a picture, from your folder or a web address, and describes it or answers a question about it. |
 | `pdf_to_images` | Saves PDF pages as images. |
 
 ---

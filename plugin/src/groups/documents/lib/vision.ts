@@ -2,6 +2,8 @@ import { type LLM, type LMStudioClient } from "@lmstudio/sdk";
 import { ToolError } from "../../../shared/errors";
 import { configuredModelKey } from "../../../shared/models";
 
+export const IMAGE_EXTENSIONS = [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"];
+
 export const DEFAULT_OCR_PROMPT = [
   "Transcribe everything written in this image, exactly as it appears.",
   "Keep the reading order and the structure: headings, paragraphs, lists.",
@@ -30,7 +32,7 @@ export async function pickVisionModel(client: LMStudioClient, configuredKey: str
   const visionCapable = downloaded.filter(model => model.vision).map(model => model.modelKey);
   if (visionCapable.length > 0) {
     throw new ToolError(
-      `No vision model is loaded. Load one of these in LM Studio (or set it in the ocr-tools settings): ${visionCapable.slice(0, 5).join(", ")}.`,
+      `No vision model is loaded. Load one of these in LM Studio (or set Vision Model in the plugin's Documents settings): ${visionCapable.slice(0, 5).join(", ")}.`,
     );
   }
   throw new ToolError("No vision-capable model is available. Download one in LM Studio (models marked 'Vision').");
@@ -42,7 +44,16 @@ export interface OcrPage {
   text: string;
 }
 
-/** Sends one image to the vision model and returns its transcription. */
+/** The name to show for a vision model, when the handle carries one. */
+export function visionModelName(model: LLM): string {
+  const { modelKey, identifier } = model as Partial<Pick<LLM, "modelKey" | "identifier">>;
+  return (typeof modelKey === "string" && modelKey) || (typeof identifier === "string" && identifier) || "";
+}
+
+/**
+ * Sends one image with a prompt to the vision model and returns its reply: a transcription for
+ * ocr_document, a description or an answer for view_image.
+ */
 export async function ocrImageFile(
   client: LMStudioClient,
   model: LLM,
