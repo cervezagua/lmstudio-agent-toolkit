@@ -70,6 +70,17 @@ export function makeConfigSchematics(choices?: ModelChoices) {
     },
     20000,
   )
+  .field(
+    "redactSecrets",
+    "boolean",
+    {
+      displayName: "Redact Secrets",
+      subtitle:
+        "Hide passwords, API keys, access tokens and private keys in what the tools show the model, so they stay out of the chat. " +
+        "Each one is replaced by a [redacted] note. Your files are never changed.",
+    },
+    true,
+  )
 
   // ── Files & shell ────────────────────────────────────────────────────────────────────────────
   .field(
@@ -175,6 +186,17 @@ export function makeConfigSchematics(choices?: ModelChoices) {
     {
       displayName: "Jupyter Notebook Tools",
       subtitle: "Adds notebook_read and notebook_edit for .ipynb files. Off by default to keep the tool list short.",
+      dependencies: onlyWhen("enableFiles"),
+    },
+    false,
+  )
+  .field(
+    "enableSqlite",
+    "boolean",
+    {
+      displayName: "Enable SQLite Tool",
+      subtitle:
+        "Adds sqlite_query, which reads SQLite database files in the project folder. It can look but never change anything. Off by default to keep the tool list short.",
       dependencies: onlyWhen("enableFiles"),
     },
     false,

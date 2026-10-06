@@ -6,6 +6,7 @@ import { gitSnapshot } from "./lib/gitSnapshot";
 import { defaultSkillsDirectory, listSkills, partitionSkills, renderSkillList } from "./lib/skills";
 import { describeFinding, locateFinding, scanForInjection } from "../../shared/injectionScan";
 import { PLANNING_NOTE, readMode } from "../../shared/mode";
+import { describeRedaction, redactSecrets } from "../../shared/redact";
 import { projectRoot } from "../../shared/projectFolder";
 
 /**
@@ -60,7 +61,7 @@ export async function preprocess(ctl: PromptPreprocessorController, userMessage:
 
   const snapshot = config.get("injectGitSnapshot") ? await gitSnapshot(projectFolder, ctl.abortSignal) : null;
 
-  const block = buildContextBlock({
+  const built = buildContextBlock({
     projectFolder,
     instructions,
     memoryIndex,
@@ -70,7 +71,21 @@ export async function preprocess(ctl: PromptPreprocessorController, userMessage:
     maxChars: config.get("maxInjectedChars"),
   });
   for (const notice of notices) ctl.createStatus({ status: "error", text: `agent-toolkit did not load ${notice}` });
-  if (!block) return userMessage;
+  if (!built) return userMessage;
+
+  // The same protection the tools have: a key pasted into AGENTS.md or a memory reaches the model as
+  // a marker. Only the loaded context is touched, never the user's own message or the files.
+  let block = built;
+  if (config.get("redactSecrets")) {
+    const hidden = redactSecrets(built);
+    block = hidden.text;
+    if (hidden.count > 0) {
+      ctl.createStatus({
+        status: "error",
+        text: `agent-toolkit hid ${describeRedaction(hidden)} from the model in the loaded files`,
+      });
+    }
+  }
 
   const loaded = [
     ...instructions.map(i => i.name),

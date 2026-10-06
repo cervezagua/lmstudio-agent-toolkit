@@ -141,6 +141,7 @@ Small models often know how to call a tool but not when to stop. [**agent-toolki
 | *"DuckDuckGo is refusing automated searches"* | DuckDuckGo answers a couple of searches, then turns the rest away for a while. The toolkit spaces its requests and stops asking for two minutes once refused | Wait, or set up SearXNG or a Brave API key for search that doesn't run out |
 | A web tool fails, or `video_transcript` is missing | Something the Web group needs isn't set up | Ask the model to run `web_doctor`: it checks SearXNG, the browser and yt-dlp, and says how to fix each |
 | *"agent-toolkit did not load AGENTS.md…"* | The file contains a line that looks written to steer the model, such as "ignore previous instructions" | Read the quoted line. Fix the file, or switch off **Scan Loaded Files** if it's a false alarm |
+| *"agent-toolkit hid 2 secrets from the model"*, or the model sees `[redacted: …]` | A tool's result contained something that looks like an API key, token or private key. Your file is untouched; only what the model sees is masked | Nothing, usually. If the model really needs the value, switch off **Redact Secrets** |
 | A model you just downloaded is missing from a dropdown | The list is read when the plugin starts | Turn the plugin off and on |
 
 ### Platform notes

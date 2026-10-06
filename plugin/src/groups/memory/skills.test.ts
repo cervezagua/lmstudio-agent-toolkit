@@ -37,6 +37,7 @@ const config = () => ({
   enableSkills: true,
   enablePlanMode: true,
   scanLoadedFiles: true,
+  redactSecrets: true,
   allowSkillSave: false,
   enableChatSearch: false,
   injectGitSnapshot: false,
