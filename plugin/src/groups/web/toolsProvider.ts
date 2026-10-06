@@ -9,6 +9,7 @@ import { formatResults, runSearch, type SafeSearch, type SearchBackend } from ".
 import { runWebDoctor } from "./lib/doctor";
 import { makeReadFeedTools } from "./lib/feeds";
 import { makeVideoTranscriptTools } from "./lib/transcript";
+import { makeWikipediaTools } from "./lib/wikipedia";
 import { findExecutable } from "../../shared/process";
 import { safe, ToolError } from "../../shared/errors";
 import { truncate } from "../../shared/truncate";
@@ -62,6 +63,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         }
       : undefined;
   tools.push(...makeFetchUrlTools({ maxChars: maxPageChars, renderInBrowser }));
+  tools.push(...makeWikipediaTools({ maxChars: maxPageChars }));
 
   if (config.get("enableBrowser")) {
     const channel = config.get("browserChannel") as BrowserChannel;
@@ -173,8 +175,8 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       name: "web_doctor",
       description: text`
         Check what the web tools can use on this machine: whether SearXNG answers, which browser is
-        installed, whether yt-dlp is there for video transcripts. Run it when a web tool fails or
-        is missing, and tell the user what it says to fix.
+        installed, whether yt-dlp is there for video transcripts, and whether a newer agent-toolkit
+        is out. Run it when a web tool fails or is missing, and tell the user what it says to fix.
       `,
       parameters: {},
       implementation: safe(async () =>

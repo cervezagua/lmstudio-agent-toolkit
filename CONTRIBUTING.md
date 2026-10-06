@@ -23,7 +23,7 @@ scripts/             install, publish, sync and end-to-end helpers
 searxng/             optional SearXNG setup for Windows + WSL
 ```
 
-One plugin, five groups. A group is a folder under `src/groups/` plus a toggle in `src/config.ts`; `src/toolsProvider.ts` calls the ones that are on and concatenates their tools.
+One plugin, six groups. A group is a folder under `src/groups/` plus a toggle in `src/config.ts`; `src/toolsProvider.ts` calls the ones that are on and concatenates their tools.
 
 ## Setup
 

@@ -487,6 +487,7 @@ describe("web-tools toolsProvider", () => {
     expect((await provider()).map(t => t.name)).toEqual([
       "web_search",
       "fetch_url",
+      "wikipedia",
       "browser_open",
       "browser_snapshot",
       "browser_click",
@@ -501,6 +502,7 @@ describe("web-tools toolsProvider", () => {
     expect((await provider({ enableBrowser: false })).map(t => t.name)).toEqual([
       "web_search",
       "fetch_url",
+      "wikipedia",
       "read_feed",
       ...transcript,
       "web_doctor",

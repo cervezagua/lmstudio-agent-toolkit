@@ -4,7 +4,7 @@ Instructions for anyone — person or model — changing this toolkit. The Memor
 
 ## Layout
 
-- `plugin/` — the one LM Studio plugin. `src/groups/<name>/` holds each group (files, memory, git, web, documents); `src/config.ts` has every setting, including the group toggles; `src/toolsProvider.ts` offers the groups that are on.
+- `plugin/` — the one LM Studio plugin. `src/groups/<name>/` holds each group (files, memory, git, web, documents, utilities); `src/config.ts` has every setting, including the group toggles; `src/toolsProvider.ts` offers the groups that are on.
 - `plugin/src/shared/` — helpers used by several groups.
 - `standalone/<name>/` — small plugins that each ship one tool. Their code is copied from `plugin/src/` by `npm run sync-standalone`; edit it there, never in `standalone/`.
 - `presets/<name>/` — LM Studio presets. Edit `system-prompt.md`, then run `node scripts/build-preset.mjs` to rewrite `preset.json`.

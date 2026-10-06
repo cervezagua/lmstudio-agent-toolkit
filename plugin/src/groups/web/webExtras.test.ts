@@ -5,7 +5,9 @@ import { join } from "path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { callTool, fakeController } from "../../shared/testing/fake-controller";
 import { findExecutable } from "../../shared/process";
-import { runWebDoctor } from "./lib/doctor";
+import { USER_AGENT } from "../../shared/userAgent";
+import { TOOLKIT_VERSION } from "../../version";
+import { checkLatestRelease, compareVersions, LATEST_RELEASE_URL, runWebDoctor } from "./lib/doctor";
 import { discoverFeed, parseFeed, plainText, readFeed, renderFeed } from "./lib/feeds";
 import { clearFetchCache, fetchPage, selectToMarkdown } from "./lib/fetchPage";
 import { checkVideoUrl, fetchTranscript, formatDuration, makeVideoTranscriptTools, subtitleLanguages, vttToText } from "./lib/transcript";
@@ -209,7 +211,80 @@ describe("transcripts", () => {
 });
 
 describe("web_doctor", () => {
-  const base = { braveKeySet: false, browserEnabled: true, channel: "msedge", ytDlp: null, browserPath: () => "C:/browser.exe" };
+  /** Stands in for GitHub, so no test asks the real one. Records what it was asked. */
+  const releaseRequests: Array<{ url: string; init: RequestInit | undefined }> = [];
+  const github = (answer: () => Response | Promise<Response>): typeof fetch =>
+    (async (url: any, init?: RequestInit) => {
+      releaseRequests.push({ url: String(url), init });
+      return answer();
+    }) as typeof fetch;
+  const release = (tag_name: unknown, html_url = `https://github.com/cervezagua/lmstudio-agent-toolkit/releases/tag/${tag_name}`) =>
+    github(() => Response.json({ tag_name, html_url }));
+
+  const base = {
+    braveKeySet: false,
+    browserEnabled: true,
+    channel: "msedge",
+    ytDlp: null,
+    browserPath: () => "C:/browser.exe",
+    fetchRelease: release(`v${TOOLKIT_VERSION}`),
+  };
+
+  beforeEach(() => {
+    releaseRequests.length = 0;
+  });
+
+  const lastLine = async (fetchRelease: typeof fetch) =>
+    (await runWebDoctor({ ...base, backend: "duckduckgo", searxngUrl: "", fetchRelease })).split("\n").pop();
+
+  it("says when the installed version is the latest release, asking GitHub once and honestly", async () => {
+    expect(await lastLine(release(`v${TOOLKIT_VERSION}`))).toBe(`✓ agent-toolkit ${TOOLKIT_VERSION} is the latest release.`);
+    expect(releaseRequests).toHaveLength(1);
+    expect(releaseRequests[0].url).toBe("https://api.github.com/repos/cervezagua/lmstudio-agent-toolkit/releases/latest");
+    expect(LATEST_RELEASE_URL).toBe(releaseRequests[0].url);
+    const headers = new Headers(releaseRequests[0].init?.headers);
+    expect(headers.get("user-agent")).toBe(USER_AGENT);
+    expect(headers.get("accept")).toBe("application/vnd.github+json");
+    expect(releaseRequests[0].init?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("points at a newer release, comparing versions number by number", async () => {
+    expect(await lastLine(release("v0.10.0", "https://example.test/releases/v0.10.0"))).toBe(
+      `~ agent-toolkit ${TOOLKIT_VERSION} is installed; 0.10.0 is available: https://example.test/releases/v0.10.0`,
+    );
+    // No leading "v" is fine too.
+    expect(await lastLine(release("99.0"))).toContain("; 99.0 is available: ");
+    expect(compareVersions("0.10.0", "0.9.2")).toBe(1);
+    expect(compareVersions("0.4", "0.4.0")).toBe(0);
+    expect(compareVersions("0.4.0", "0.4.1")).toBe(-1);
+    expect(compareVersions("1.0.0", "0.99.99")).toBe(1);
+  });
+
+  it("says when the installed version is newer than the latest release", async () => {
+    expect(await lastLine(release("v0.0.1"))).toBe(`✓ agent-toolkit ${TOOLKIT_VERSION} (newer than the latest release 0.0.1)`);
+    expect(await checkLatestRelease(release("v0.3.9"), "0.4.0")).toBe("✓ agent-toolkit 0.4.0 (newer than the latest release 0.3.9)");
+  });
+
+  it("never fails when the version check does: one quiet line instead", async () => {
+    const offline = github(() => {
+      throw new TypeError("fetch failed", { cause: new Error("getaddrinfo ENOTFOUND api.github.com") });
+    });
+    const report = await runWebDoctor({ ...base, backend: "duckduckgo", searxngUrl: "", fetchRelease: offline });
+    expect(report).toContain("~ Search: DuckDuckGo only.");
+    expect(report.split("\n").pop()).toBe("~ Could not check for a newer version (getaddrinfo ENOTFOUND api.github.com).");
+
+    const rateLimited = github(() => new Response('{"message":"API rate limit exceeded"}', { status: 403 }));
+    expect(await lastLine(rateLimited)).toBe("~ Could not check for a newer version (GitHub answered HTTP 403).");
+    expect(await lastLine(github(() => new Response("<html>not json", { status: 200 })))).toBe(
+      "~ Could not check for a newer version (GitHub's answer was not JSON).",
+    );
+    expect(await lastLine(release(undefined))).toBe("~ Could not check for a newer version (the latest release has no version number).");
+    expect(await lastLine(release("nightly"))).toMatch(/^~ Could not check for a newer version \(/);
+    const timedOut = github(() => {
+      throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    });
+    expect(await lastLine(timedOut)).toBe("~ Could not check for a newer version (GitHub did not answer in 3 s).");
+  });
 
   it("says whether SearXNG answers, and whether its JSON format is on", async () => {
     expect(await runWebDoctor({ ...base, backend: "auto", searxngUrl: `${baseUrl}/searx` })).toContain(`✓ SearXNG at ${baseUrl}/searx answers.`);

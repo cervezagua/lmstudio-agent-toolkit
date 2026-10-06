@@ -14,7 +14,8 @@
 | 🧠 | [Memory & Context](#-memory--context) | on | Remember things between chats, follow your `AGENTS.md`, plan before changing |
 | 🌿 | [Git & GitHub](#-git--github) | on | Status, diffs, commits, branches, pull requests and issues |
 | 🌐 | [Web](#-web) | off | Search, read pages and feeds, video transcripts, a real browser |
-| 📄 | [Documents](#-documents) | off | Read PDFs, scans and images, with OCR when needed |
+| 📄 | [Documents](#-documents) | off | Read PDFs, scans and images, look at pictures, write Word and PDF files |
+| 🧮 | [Utilities](#-utilities) | off | Exact arithmetic, and today's date and time |
 
 Each group is a switch in the plugin's settings. Leave on only what you need, because small models choose better from a short tool list.
 
@@ -88,11 +89,12 @@ Skills use the standard `SKILL.md` layout, the same as Claude Code, Codex and LM
 | `read_feed` | The latest items of an RSS or Atom feed. A site's home page works too. |
 | `video_transcript` | What's said in a YouTube or other video, through [yt-dlp](https://github.com/yt-dlp/yt-dlp). |
 | `browser_open` · `browser_click` · `browser_type` · `browser_back` · `browser_snapshot` · `browser_screenshot` · `browser_close` | Drives your own Edge or Chrome. Pages run their JavaScript, and the model clicks by number. |
-| `web_doctor` | Checks what's set up (SearXNG, the browser, yt-dlp) and says how to fix what isn't. |
+| `wikipedia` | Finds a Wikipedia article and returns its text, in any language edition. |
+| `web_doctor` | Checks what's set up (SearXNG, the browser, yt-dlp) and says how to fix what isn't. Also says when a newer agent-toolkit release is out. |
 
 Search works best with a private [SearXNG](https://github.com/searxng/searxng). Without one it falls back to DuckDuckGo, which answers a couple of searches and then turns automated requests away for a while; the toolkit spaces its requests out and pauses for two minutes once refused. More result pages need SearXNG or Brave. `video_transcript` appears once yt-dlp is installed.
 
-`read_feed` and `video_transcript` also come as small plugins of their own: [feed-reader](https://github.com/cervezagua/lmstudio-agent-toolkit/tree/main/standalone/feed-reader) and [video-transcripts](https://github.com/cervezagua/lmstudio-agent-toolkit/tree/main/standalone/video-transcripts).
+`read_feed`, `video_transcript` and `fetch_url` also come as small plugins of their own: [feed-reader](https://github.com/cervezagua/lmstudio-agent-toolkit/tree/main/standalone/feed-reader), [video-transcripts](https://github.com/cervezagua/lmstudio-agent-toolkit/tree/main/standalone/video-transcripts) and [page-reader](https://github.com/cervezagua/lmstudio-agent-toolkit/tree/main/standalone/page-reader).
 
 ## 📄 Documents
 
@@ -107,6 +109,15 @@ Search works best with a private [SearXNG](https://github.com/searxng/searxng). 
 | `write_document` | Writes the model's answer as a Word (`.docx`) or PDF file in your folder. |
 
 PDF output is printed by your own Edge or Chrome, with scripts off and no network access, so it needs one of them installed; Word output needs nothing. Pictures are left out of both, and the tool says how many.
+
+## 🧮 Utilities
+
+Small models guess at sums and don't know what day it is. These two tools give them the right answer.
+
+| Tool | What it does |
+|---|---|
+| `calculate` | Works out an arithmetic expression exactly: `15% of 240`, `sqrt(2) * 10^3`, `12!`. |
+| `current_time` | Today's date, the time and the week number, in your time zone or any other. |
 
 ---
 
