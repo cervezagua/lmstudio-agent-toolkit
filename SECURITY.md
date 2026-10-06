@@ -10,7 +10,7 @@ By design, these plugins let a language model act on your computer:
 - **Memory & Context** stores notes on disk in plain text.
 - **Documents** reads documents and pictures inside the folder you choose, downloads pictures from web addresses the model gives it, sends images to a model running in LM Studio, and writes Word and PDF files into the folder.
 
-Nothing is sent to an outside service except the web requests the model makes through the Web group and the pictures `view_image` downloads.
+Nothing is sent to an outside service except the web requests the model makes through the Web group and the pictures `view_image` downloads. Two of those requests go to fixed places: `wikipedia` asks Wikipedia, and `web_doctor` asks GitHub whether a newer release exists, only when the model runs it. Nothing is checked at start-up.
 
 ## Safeguards, and their limits
 

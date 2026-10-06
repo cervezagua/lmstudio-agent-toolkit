@@ -7,6 +7,7 @@ import { toolsProvider as documentTools } from "./groups/documents/toolsProvider
 import { toolsProvider as fileTools } from "./groups/files/toolsProvider";
 import { toolsProvider as gitTools } from "./groups/git/toolsProvider";
 import { toolsProvider as memoryTools } from "./groups/memory/toolsProvider";
+import { toolsProvider as utilityTools } from "./groups/utilities/toolsProvider";
 import { toolsProvider as webTools } from "./groups/web/toolsProvider";
 import { describeRedaction, redactDeep, REDACTION_MARK } from "./shared/redact";
 
@@ -87,6 +88,7 @@ export async function toolsProvider(controller: ToolsProviderController): Promis
     [config.get("enableGit"), gitTools],
     [config.get("enableWeb"), webTools],
     [config.get("enableDocuments"), documentTools],
+    [config.get("enableUtilities"), utilityTools],
   ];
   const enabled = groups.filter(([on]) => on).map(([, build]) => build(ctl));
   const tools = (await Promise.all(enabled)).flat();

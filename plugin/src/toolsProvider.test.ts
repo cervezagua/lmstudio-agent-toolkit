@@ -1,3 +1,4 @@
+import { readFileSync } from "fs";
 import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -51,6 +52,7 @@ const baseConfig = {
   visionModel: "",
   renderScale: 2,
   maxPages: 10,
+  enableUtilities: false,
 };
 const globalConfig = { memoryDirectory: "", skillsDirectory: "", braveApiKey: "" };
 
@@ -79,6 +81,26 @@ describe("group toggles", () => {
     expect(names).not.toContain("memory_save");
     expect(names).not.toContain("web_search");
     expect(names).not.toContain("read_document_text");
+    expect(names).not.toContain("calculate");
+    expect(names).not.toContain("current_time");
+  });
+
+  it("adds the Utilities tools only when that group is switched on", async () => {
+    const before = (await build({ projectFolder: project })).map(t => t.name);
+    const tools = await build({ projectFolder: project, enableUtilities: true });
+    const after = tools.map(t => t.name);
+    expect(after.filter(name => !before.includes(name))).toEqual(["calculate", "current_time"]);
+    expect(await callTool(tools, "calculate", { expression: "200 + 15%" })).toBe("200 + 15% = 230");
+    expect(await callTool(tools, "current_time", { timezone: "UTC" })).toContain("Time zone: UTC (UTC+00:00)");
+
+    // The group needs no project folder and no other group.
+    const alone = await build({ enableFiles: false, enableUtilities: true });
+    expect(alone.map(t => t.name)).toEqual(["calculate", "current_time"]);
+  });
+
+  it("has Utilities off by default in the settings", () => {
+    const source = readFileSync(join(__dirname, "config.ts"), "utf-8");
+    expect(source).toMatch(/"enableUtilities",\s*"boolean",\s*\{[^}]*displayName: "Utilities",[^}]*\},\s*false,/);
   });
 
   it("adds a group's tools when it is switched on, and nothing else", async () => {

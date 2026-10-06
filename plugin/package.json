@@ -1,6 +1,6 @@
 {
   "name": "lms-plugin-agent-toolkit",
-  "version": "1.0.0",
+  "version": "0.4.0",
   "description": "Coding-agent tools for LM Studio models: files and shell, memory, git, web and documents",
   "private": true,
   "scripts": {

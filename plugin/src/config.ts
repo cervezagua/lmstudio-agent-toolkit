@@ -522,6 +522,18 @@ export function makeConfigSchematics(choices?: ModelChoices) {
     },
     10,
   )
+
+  // ── Utilities ────────────────────────────────────────────────────────────────────────────────
+  .field(
+    "enableUtilities",
+    "boolean",
+    {
+      displayName: "Utilities",
+      subtitle:
+        "A calculator and a clock: small models are bad at arithmetic and do not know today's date. Off by default.",
+    },
+    false,
+  )
   .build();
 }
 

@@ -81,6 +81,7 @@ const allGroupsOff = {
   visionModel: "",
   renderScale: 2,
   maxPages: 10,
+  enableUtilities: false,
 };
 const groupFor = { coder: "enableFiles", memory: "enableMemory", git: "enableGit", web: "enableWeb", ocr: "enableDocuments" };
 

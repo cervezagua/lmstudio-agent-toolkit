@@ -65,15 +65,16 @@ LM Studio fetches the dependencies itself. Re-run `npm run setup` after `git pul
 
 ## 🧩 What your model can do
 
-One plugin, five groups. Each group is a switch in the plugin's settings, because a long tool list makes small models choose worse.
+One plugin, six groups. Each group is a switch in the plugin's settings, because a long tool list makes small models choose worse.
 
 | | Group | Default | What the model can do | Highlights |
 |---|---|:---:|---|---|
 | 📁 | **Files & Shell** | on | Read, write and edit files, search, run commands | Locked to your project folder · read-before-edit · undo · background tasks · project diagnostics |
 | 🧠 | **Memory & Context** | on | Remember things between chats, keep a todo list, follow skills | Opens each chat with your `AGENTS.md`, today's date and git status · plan mode · can save its own skills and search past chats, if you switch those on |
 | 🌿 | **Git & GitHub** | on | Status, diff, commit, branch, pull requests and issues | Runs `git`/`gh` directly, never through a shell · push is opt-in, never forced |
-| 🌐 | **Web** | off | Search, read pages as markdown, drive a real browser, read feeds and video transcripts | Private SearXNG search · read just part of a page · reads PDFs · RSS/Atom · YouTube transcripts via yt-dlp · Edge or Chrome via Playwright |
+| 🌐 | **Web** | off | Search, read pages as markdown, drive a real browser, read feeds, Wikipedia and video transcripts | Private SearXNG search · read just part of a page · reads PDFs · RSS/Atom · Wikipedia in any language · YouTube transcripts via yt-dlp · Edge or Chrome via Playwright |
 | 📄 | **Documents** | off | Read PDFs, scans and images from your folder, look at pictures, and write Word and PDF files | Text layer first, free and exact · OCR only when needed · questions about a screenshot or a picture on the web · reports saved as `.docx` or `.pdf` · **your chat model needs no vision** |
+| 🧮 | **Utilities** | off | Do arithmetic exactly, and know today's date and time | Percentages, powers and functions without guessing · any time zone |
 
 Every tool and setting is in the [full reference](plugin/README.md).
 
