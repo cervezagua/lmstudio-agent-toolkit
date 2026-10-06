@@ -47,6 +47,7 @@ Without a Project Folder, the model works in the chat's own empty folder and is 
 | `diagnostics` | Runs the project's own checkers: tsc, ESLint, Ruff, Pyright, cargo, go vet. |
 | `notebook_read` · `notebook_edit` | Read and change Jupyter notebook cells. Off by default. |
 | `run_subagent` | Answers a search-heavy question in a read-only helper agent. Off by default. |
+| `sqlite_query` | Shows a SQLite database's tables, or runs one read-only query. Off by default. |
 
 Long command output is saved to a file and its path returned, so nothing is lost. `grep` gives the same results whether or not [ripgrep](https://github.com/BurntSushi/ripgrep) is installed; ripgrep just makes it faster.
 
@@ -117,6 +118,7 @@ PDF output is printed by your own Edge or Chrome, with scripts off and no networ
 |---|---|---|
 | Project Folder | *(empty)* | The folder every group works in. |
 | Max Output Characters | 20000 | Longer results keep their beginning and end. |
+| Redact Secrets | on | Hides API keys, tokens and private keys in what tools return. Your files are never changed. |
 
 **Files & Shell**
 
@@ -129,7 +131,7 @@ PDF output is printed by your own Edge or Chrome, with scripts off and no networ
 | Persistent Shell Session | on | `cd` and variables carry over between commands. |
 | Max Read Bytes | 256 KB | Bigger files are read in parts. |
 | Background Tasks · Diagnostics | on | |
-| Jupyter Notebook Tools · Research Sub-agent | off | |
+| Jupyter Notebook Tools · Research Sub-agent · SQLite Tool | off | |
 | Sub-agent Model | Auto | Chosen from a list of your models. |
 
 **Memory & Context**

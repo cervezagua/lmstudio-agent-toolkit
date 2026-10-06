@@ -35,6 +35,7 @@ const chatConfig = () => ({
   enableSkills: false,
   enablePlanMode: true,
   scanLoadedFiles: true,
+  redactSecrets: true,
   allowSkillSave: false,
   enableChatSearch: false,
   injectGitSnapshot: false,
@@ -175,6 +176,45 @@ describe("prompt preprocessor", () => {
     });
   });
 
+  // What is loaded into the chat gets the same protection as tool output.
+  describe("a project file that holds a secret", () => {
+    const TOKEN = "ghp" + "_" + "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8";
+    const run = async (overrides: Record<string, unknown> = {}) => {
+      const notes = `# Notes\n\nDeploy with GITHUB_TOKEN=${TOKEN} set.\nRun the tests before finishing.`;
+      await writeFile(join(projectDir, "AGENTS.md"), notes);
+      const ctl = fakeController({
+        config: { ...chatConfig(), instructionFiles: ["AGENTS.md"], ...overrides },
+        globalConfig: { memoryDirectory: memoryDir, skillsDirectory: "" },
+        workingDirectory: chatDir,
+        history: Chat.empty(),
+      });
+      const message = ChatMessage.from({ role: "user", content: `my own token is ${TOKEN}` });
+      const text = ((await preprocess(ctl, message)) as ChatMessage).getText();
+      const onDisk = await readFile(join(projectDir, "AGENTS.md"), "utf-8");
+      return { text, notes, onDisk, statuses: ctl.statuses as Array<{ status: string; text: string }> };
+    };
+
+    it("is loaded with the secret replaced, and the user is told", async () => {
+      const { text, statuses, notes, onDisk } = await run();
+      expect(text).toContain("Deploy with GITHUB_TOKEN=[redacted: GitHub token] set.");
+      expect(text).toContain("Run the tests before finishing.");
+      const notice = statuses.find(s => s.text.includes("hid"));
+      expect(notice?.text).toBe("agent-toolkit hid 1 secret (GitHub token) from the model in the loaded files");
+      expect(notice?.text).not.toContain(TOKEN.slice(0, 8));
+      expect(onDisk).toBe(notes);
+    });
+
+    it("leaves what the user typed alone", async () => {
+      const { text } = await run();
+      expect(text.endsWith(`my own token is ${TOKEN}`)).toBe(true);
+    });
+
+    it("loads as before when redaction is switched off", async () => {
+      const { text, statuses } = await run({ redactSecrets: false });
+      expect(text).toContain(`GITHUB_TOKEN=${TOKEN} set.`);
+      expect(statuses.some(s => s.text.includes("hid"))).toBe(false);
+    });
+  });
   it("leaves the message untouched when there is nothing to load", async () => {
     const message = ChatMessage.from({ role: "user", content: "hi" });
     const ctl = fakeController({

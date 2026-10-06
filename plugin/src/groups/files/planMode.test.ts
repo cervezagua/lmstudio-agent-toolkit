@@ -25,6 +25,7 @@ const baseConfig = {
   enableBackgroundTasks: true,
   enableNotebookTools: true,
   enableDiagnostics: true,
+  enableSqlite: false,
   enableSubagent: false,
   subagentModel: "",
 };

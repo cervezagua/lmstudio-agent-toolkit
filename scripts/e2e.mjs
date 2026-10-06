@@ -40,6 +40,7 @@ const memoryDir = inProcess ? scratchMemoryDir : join(homedir(), ".lmstudio-agen
 const allGroupsOff = {
   projectFolder: "",
   maxOutputChars: 20000,
+  redactSecrets: true,
   enableFiles: false,
   allowShell: true,
   shell: "auto",
@@ -50,6 +51,7 @@ const allGroupsOff = {
   enableBackgroundTasks: false,
   enableDiagnostics: false,
   enableNotebookTools: false,
+  enableSqlite: false,
   enableSubagent: false,
   subagentModel: "",
   enableMemory: false,

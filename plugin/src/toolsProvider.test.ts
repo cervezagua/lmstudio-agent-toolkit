@@ -2,14 +2,15 @@ import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { callTool, fakeController } from "./shared/testing/fake-controller";
+import { callTool, fakeController, fakeToolContext } from "./shared/testing/fake-controller";
 import { modeFile } from "./shared/mode";
-import { toolsProvider } from "./toolsProvider";
+import { toolsProvider, withRedaction } from "./toolsProvider";
 
 /** Every key the merged schema declares, so the fake controller can answer any group's lookup. */
 const baseConfig = {
   projectFolder: "",
   maxOutputChars: 20000,
+  redactSecrets: true,
   enableFiles: true,
   allowShell: false,
   shell: "auto",
@@ -20,6 +21,7 @@ const baseConfig = {
   enableBackgroundTasks: false,
   enableDiagnostics: false,
   enableNotebookTools: false,
+  enableSqlite: false,
   enableSubagent: false,
   subagentModel: "",
   enableMemory: false,
@@ -169,5 +171,149 @@ describe("chat state files", () => {
       expect(String(result)).toMatch(/managed by the toolkit/);
     }
     expect(JSON.parse(await readFile(modeFile(work), "utf-8")).planning).toBe(false);
+  });
+});
+
+// Tool output goes into the model's context and the saved chat, so secrets in it are replaced by
+// markers on the way out. The values below are made up, and assembled so this file holds no token.
+describe("secret redaction", () => {
+  const TOKEN = "ghp" + "_" + "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8";
+  const ENV_FILE = `# local settings\nGITHUB_TOKEN=${TOKEN}\nDB_PASSWORD=correcthorsebattery\nPORT=8080\n`;
+
+  const call = async (tools: any[], name: string, params: Record<string, unknown>) => {
+    const { ctx, warnings, statuses } = fakeToolContext();
+    const found = tools.find(t => t.name === name);
+    found.checkParameters(params);
+    return { result: await found.implementation(params, ctx), warnings, statuses };
+  };
+
+  it("hides a token in a file that is read, warns the user, and tells the model", async () => {
+    await writeFile(join(project, ".env"), ENV_FILE);
+    const tools = await build({ projectFolder: project });
+    const { result, warnings } = await call(tools, "read_file", { path: ".env" });
+
+    expect(result).toContain("2\tGITHUB_TOKEN=[redacted: GitHub token]");
+    expect(result).toContain("3\tDB_PASSWORD=[redacted: password]");
+    expect(result).toContain("4\tPORT=8080");
+    expect(result).not.toContain(TOKEN);
+    expect(result).not.toContain("correcthorsebattery");
+    const lastLine = String(result).split("\n").pop();
+    expect(lastLine).toMatch(/^\[2 secret values are hidden as "\[redacted: …\]"\. Do not try to recover what was hidden, and do not write the markers into files\.\]$/);
+
+    expect(warnings).toEqual(["agent-toolkit hid 2 secrets (GitHub token, password) from the model"]);
+    expect(warnings.join()).not.toContain(TOKEN.slice(0, 8));
+  });
+
+  it("never changes the file on disk", async () => {
+    await writeFile(join(project, ".env"), ENV_FILE);
+    const tools = await build({ projectFolder: project, allowShell: true });
+    await call(tools, "read_file", { path: ".env" });
+    await call(tools, "grep", { pattern: "TOKEN" });
+    expect(await readFile(join(project, ".env"), "utf-8")).toBe(ENV_FILE);
+  });
+
+  it("covers every tool, not only read_file", async () => {
+    await writeFile(join(project, ".env"), ENV_FILE);
+    const tools = await build({ projectFolder: project });
+    const { result, warnings } = await call(tools, "grep", { pattern: "GITHUB", glob: ".env" });
+    expect(result).toContain("GITHUB_TOKEN=[redacted: GitHub token]");
+    expect(result).not.toContain(TOKEN);
+    expect(warnings).toHaveLength(1);
+  });
+
+  it("leaves output without secrets exactly as it was, with no warning", async () => {
+    await writeFile(join(project, "notes.txt"), "The token bucket refills every second.\n");
+    const on = await call(await build({ projectFolder: project }), "read_file", { path: "notes.txt" });
+    const off = await call(await build({ projectFolder: project, redactSecrets: false }), "read_file", { path: "notes.txt" });
+    expect(on.result).toBe(off.result);
+    expect(on.warnings).toEqual([]);
+  });
+
+  it("does nothing when the setting is off", async () => {
+    await writeFile(join(project, ".env"), ENV_FILE);
+    const tools = await build({ projectFolder: project, redactSecrets: false });
+    const { result, warnings } = await call(tools, "read_file", { path: ".env" });
+    expect(result).toContain(`GITHUB_TOKEN=${TOKEN}`);
+    expect(result).not.toContain("redacted");
+    expect(warnings).toEqual([]);
+  });
+
+  it("does not redact what the model sends: a write keeps its content", async () => {
+    const tools = await build({ projectFolder: project });
+    const content = `API_TOKEN=${TOKEN}\n`;
+    const { result, warnings } = await call(tools, "write_file", { path: "written.env", content });
+    expect(result).toMatch(/^Created written\.env/);
+    expect(warnings).toEqual([]);
+    expect(await readFile(join(project, "written.env"), "utf-8")).toBe(content);
+  });
+
+  // The model only ever saw the marker, so an edit that quotes it cannot match the file.
+  it("explains why an edit that quotes a marker did not match, and changes nothing", async () => {
+    await writeFile(join(project, ".env"), ENV_FILE);
+    const tools = await build({ projectFolder: project });
+    await call(tools, "read_file", { path: ".env" });
+    const { result } = await call(tools, "edit_file", {
+      path: ".env",
+      old_string: "GITHUB_TOKEN=[redacted: GitHub token]",
+      new_string: "GITHUB_TOKEN=other",
+    });
+    expect(result).toMatch(/^Error: old_string was not found/);
+    expect(result).toContain("It stands for a hidden secret and is not text in the file");
+    expect(await readFile(join(project, ".env"), "utf-8")).toBe(ENV_FILE);
+
+    // Editing around the secret works as usual.
+    const around = await call(tools, "edit_file", { path: ".env", old_string: "PORT=8080", new_string: "PORT=9090" });
+    expect(around.result).toMatch(/^Edited \.env/);
+    expect(await readFile(join(project, ".env"), "utf-8")).toBe(ENV_FILE.replace("8080", "9090"));
+  });
+
+  describe("around any tool", () => {
+    const fakeTool = (name: string, implementation: (params: any, ctx: any) => unknown) =>
+      ({ name, description: "", type: "function", checkParameters: () => {}, implementation }) as any;
+
+    it("keeps results that are not strings, redacting only the strings inside them", async () => {
+      const image = Buffer.from("not text");
+      const tools = withRedaction([
+        fakeTool("object", () => ({ ok: true, count: 2, lines: [`key ${TOKEN}`, "plain"], image })),
+        fakeTool("number", () => 42),
+        fakeTool("nothing", () => undefined),
+        fakeTool("list", async () => ["a", 1, null]),
+      ]);
+      const object = await call(tools, "object", {});
+      expect(object.result).toEqual({ ok: true, count: 2, lines: ["key [redacted: GitHub token]", "plain"], image });
+      expect(object.result.image).toBe(image);
+      expect(object.warnings).toEqual(["agent-toolkit hid 1 secret (GitHub token) from the model"]);
+      expect((await call(tools, "number", {})).result).toBe(42);
+      expect((await call(tools, "nothing", {})).result).toBeUndefined();
+      expect((await call(tools, "list", {})).result).toEqual(["a", 1, null]);
+    });
+
+    it("hands the tool its parameters and context untouched", async () => {
+      let seen: { params: unknown; ctx: unknown } | undefined;
+      const tools = withRedaction([
+        fakeTool("probe", (params, ctx) => {
+          seen = { params, ctx };
+          ctx.status("working");
+          return ctx.signal.aborted ? "aborted" : `value ${TOKEN}`;
+        }),
+      ]);
+      const { ctx, statuses, warnings } = fakeToolContext();
+      const params = { text: `sent ${TOKEN}` };
+      const result = await tools[0].implementation(params, ctx as any);
+      expect(seen?.ctx).toBe(ctx);
+      expect(seen?.params).toBe(params);
+      expect(statuses).toEqual(["working"]);
+      expect(warnings).toHaveLength(1);
+      expect(result).toContain("value [redacted: GitHub token]");
+    });
+
+    it("lets a tool's real failure through", async () => {
+      const tools = withRedaction([
+        fakeTool("broken", () => {
+          throw new Error("disk on fire");
+        }),
+      ]);
+      await expect(call(tools, "broken", {})).rejects.toThrow("disk on fire");
+    });
   });
 });

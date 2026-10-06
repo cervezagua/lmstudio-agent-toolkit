@@ -16,6 +16,7 @@ import { editNotebook, parseNotebook, renderNotebook } from "./lib/notebook";
 import { pickSubagentModel, runSubagent } from "./lib/subagent";
 import { globFiles, grepFiles, parseRipgrepOutput } from "./lib/search";
 import { getSession, resetSession, type ShellSpec } from "./lib/session";
+import { DEFAULT_MAX_ROWS, MAX_MAX_ROWS, sqliteAvailable, sqliteQuery } from "./lib/sqlite";
 import { formatTaskLine, TaskManager } from "./lib/tasks";
 import { safe, ToolError } from "../../shared/errors";
 import { isChatStateFile, PLANNING_NOTE, readMode } from "../../shared/mode";
@@ -440,6 +441,40 @@ export async function toolsProvider(ctl: ToolsProviderController) {
           await writeFileAtomic(file, serialized);
           await recordWrite(file, serialized);
           return `${message} (${show(file)})`;
+        }),
+      }),
+    );
+  }
+
+  // Needs Node's built-in node:sqlite, so on an older runtime the tool is simply not offered.
+  if (config.get("enableSqlite") && sqliteAvailable()) {
+    tools.push(
+      tool({
+        name: "sqlite_query",
+        description: text`
+          Read a SQLite database file in the project. Without sql it returns the schema: tables,
+          columns, row counts and indexes. With sql it runs one read-only statement (SELECT) and
+          returns up to max_rows rows (default ${DEFAULT_MAX_ROWS}). It cannot change the database.
+        `,
+        parameters: {
+          path: z.string(),
+          sql: z.string().optional(),
+          max_rows: z.number().int().min(1).max(MAX_MAX_ROWS).optional(),
+        },
+        implementation: safe(async ({ path, sql, max_rows }, ctx) => {
+          const file = await resolveSafe(root, path);
+          // Checked first: SQLite would create a database at a path that does not exist.
+          const info = await stat(file).catch(() => null);
+          if (!info) throw new ToolError(await notFoundMessage(root, path, `${show(file)} does not exist.`));
+          if (!info.isFile()) throw new ToolError(`${show(file)} is not a file.`);
+          const output = await sqliteQuery({
+            file,
+            shown: show(file),
+            sql: sql?.trim() ? sql : null,
+            maxRows: max_rows,
+            signal: ctx.signal,
+          });
+          return truncate(output, maxOutputChars);
         }),
       }),
     );
