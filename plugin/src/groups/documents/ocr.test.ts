@@ -162,7 +162,7 @@ describe("ocr-tools toolsProvider", () => {
     toolsProvider(fakeController({ config: config(overrides), workingDirectory: work }));
 
   it("registers its tools", async () => {
-    expect((await provider()).map(t => t.name)).toEqual(["read_document_text", "ocr_document", "view_image", "pdf_to_images"]);
+    expect((await provider()).map(t => t.name)).toEqual(["read_document_text", "ocr_document", "view_image", "pdf_to_images", "write_document"]);
   });
 
   it("reads a PDF's text layer and warns that it looks scanned", async () => {

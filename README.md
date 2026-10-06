@@ -73,7 +73,7 @@ One plugin, five groups. Each group is a switch in the plugin's settings, becaus
 | 🧠 | **Memory & Context** | on | Remember things between chats, keep a todo list, follow skills | Opens each chat with your `AGENTS.md`, today's date and git status · plan mode · can save its own skills and search past chats, if you switch those on |
 | 🌿 | **Git & GitHub** | on | Status, diff, commit, branch, pull requests and issues | Runs `git`/`gh` directly, never through a shell · push is opt-in, never forced |
 | 🌐 | **Web** | off | Search, read pages as markdown, drive a real browser, read feeds and video transcripts | Private SearXNG search · read just part of a page · reads PDFs · RSS/Atom · YouTube transcripts via yt-dlp · Edge or Chrome via Playwright |
-| 📄 | **Documents** | off | Read PDFs, scans and images from your folder, and look at pictures | Text layer first, free and exact · OCR only when needed · questions about a screenshot or a picture on the web · **your chat model needs no vision** |
+| 📄 | **Documents** | off | Read PDFs, scans and images from your folder, look at pictures, and write Word and PDF files | Text layer first, free and exact · OCR only when needed · questions about a screenshot or a picture on the web · reports saved as `.docx` or `.pdf` · **your chat model needs no vision** |
 
 Every tool and setting is in the [full reference](plugin/README.md).
 

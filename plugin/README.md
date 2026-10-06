@@ -103,6 +103,9 @@ Search works best with a private [SearXNG](https://github.com/searxng/searxng). 
 | `ocr_document` | Reads a scanned PDF or an image with a vision model. |
 | `view_image` | Looks at a picture, from your folder or a web address, and describes it or answers a question about it. |
 | `pdf_to_images` | Saves PDF pages as images. |
+| `write_document` | Writes the model's answer as a Word (`.docx`) or PDF file in your folder. |
+
+PDF output is printed by your own Edge or Chrome, with scripts off and no network access, so it needs one of them installed; Word output needs nothing. Pictures are left out of both, and the tool says how many.
 
 ---
 

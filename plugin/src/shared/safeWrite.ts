@@ -8,7 +8,7 @@ import { dirname, join } from "path";
  * rename is refused (a locked file, or a filesystem that will not replace across handles), which
  * is the best that can be done there anyway.
  */
-export async function writeFileAtomic(file: string, content: string): Promise<void> {
+export async function writeFileAtomic(file: string, content: string | Uint8Array): Promise<void> {
   const temporary = join(dirname(file), `.${randomBytes(6).toString("hex")}.tmp`);
   const mode = await stat(file).then(
     info => info.mode,

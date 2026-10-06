@@ -1,15 +1,19 @@
 import { text, tool, type LLM, type Tool, type ToolsProviderController } from "@lmstudio/sdk";
-import { mkdtemp, rm, stat } from "fs/promises";
+import { mkdir, mkdtemp, rm, stat } from "fs/promises";
 import { tmpdir } from "os";
-import { join } from "path";
+import { basename, dirname, extname, join } from "path";
 import { z } from "zod";
 import { configSchematics } from "../../config";
 import { extractPdfText, renderPdfPages } from "./lib/pdf";
 import { buildViewPrompt, looksLikeUrl, parseImageUrl, withDownloadedImage } from "./lib/viewImage";
+import { markdownToDocxBuffer } from "./lib/writeDocx";
+import { htmlToPdfBuffer, markdownToPrintHtml } from "./lib/writePdf";
 import { DEFAULT_OCR_PROMPT, IMAGE_EXTENSIONS, ocrImageFile, pickVisionModel, visionModelName } from "./lib/vision";
 import { safe, ToolError } from "../../shared/errors";
+import { isChatStateFile, readMode } from "../../shared/mode";
 import { displayPath, resolveSafe } from "../../shared/paths";
 import { projectRoot } from "../../shared/projectFolder";
+import { writeFileAtomic } from "../../shared/safeWrite";
 import { truncate } from "../../shared/truncate";
 
 export async function toolsProvider(ctl: ToolsProviderController) {
@@ -27,6 +31,15 @@ export async function toolsProvider(ctl: ToolsProviderController) {
     const file = await resolveSafe(root, path);
     const info = await stat(file).catch(() => null);
     if (!info?.isFile()) throw new ToolError(`"${path}" is not a file.`);
+    return file;
+  };
+
+  /** Resolves a path a tool is about to change, refusing the toolkit's own chat state files. */
+  const resolveWritable = async (path: string) => {
+    const file = await resolveSafe(root, path);
+    if (isChatStateFile(ctl.getWorkingDirectory(), file)) {
+      throw new ToolError(`${show(file)} is managed by the toolkit and cannot be changed by a tool.`);
+    }
     return file;
   };
 
@@ -161,5 +174,66 @@ export async function toolsProvider(ctl: ToolsProviderController) {
     }),
   );
 
+  // Plan mode (the Memory group's): while planning, tools that change things are not offered.
+  const planning = (await readMode(ctl.getWorkingDirectory())).planning;
+
+  if (!planning) {
+    tools.push(
+      tool({
+        name: "write_document",
+        description: text`
+          Write markdown as a Word (.docx) or PDF (.pdf) file in the project folder; the extension of
+          path picks the format. Headings, lists, tables, code and links are kept; images are left
+          out. Refuses to replace an existing file unless overwrite is true. For text formats (.md,
+          .csv, .html) use write_file.
+        `,
+        parameters: { path: z.string(), content: z.string(), overwrite: z.boolean().optional() },
+        implementation: safe(async ({ path, content, overwrite }, ctx) => {
+          const extension = extname(path).toLowerCase();
+          if (extension !== ".docx" && extension !== ".pdf") {
+            throw new ToolError(
+              `write_document writes Word (.docx) and PDF (.pdf) files, so "${path}" must end in .docx or .pdf. ` +
+                "For text formats such as .md, .csv or .html, use write_file.",
+            );
+          }
+          if (!content.trim()) throw new ToolError("content is empty: pass the document as markdown.");
+
+          const file = await resolveWritable(path);
+          const existing = await stat(file).catch(() => null);
+          if (existing?.isDirectory()) throw new ToolError(`"${path}" is a directory.`);
+          if (existing && !overwrite) {
+            throw new ToolError(`${show(file)} already exists. Pass overwrite: true to replace it, or choose another name.`);
+          }
+
+          const title = basename(file, extname(file));
+          let buffer: Buffer;
+          let omittedImages: number;
+          if (extension === ".docx") {
+            ctx.status(`Writing ${show(file)}`);
+            ({ buffer, omittedImages } = await markdownToDocxBuffer(content, title));
+          } else {
+            const page = await markdownToPrintHtml(content, title);
+            omittedImages = page.omittedImages;
+            ctx.status(`Printing ${show(file)}`);
+            buffer = await htmlToPdfBuffer(page.html, config.get("browserChannel"), { signal: ctx.signal });
+          }
+
+          await mkdir(dirname(file), { recursive: true });
+          await writeFileAtomic(file, buffer);
+          const left =
+            omittedImages === 0
+              ? ""
+              : ` ${omittedImages} image${omittedImages === 1 ? " was" : "s were"} left out (images are not embedded; the alt text is kept in brackets).`;
+          return `${existing ? "Overwrote" : "Created"} ${show(file)} (${extension === ".docx" ? "Word" : "PDF"}, ${formatSize(buffer.length)}).${left}`;
+        }),
+      }),
+    );
+  }
+
   return tools;
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} bytes`;
+  return bytes < 1024 * 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
