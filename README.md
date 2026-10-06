@@ -79,14 +79,19 @@ Every tool and setting is in the [full reference](plugin/README.md).
 
 ### Just one tool?
 
-Two of the Web tools also come as small plugins of their own:
+Three of the Web tools also come as small plugins of their own:
 
 | Plugin | What it adds | Install |
 |---|---|---|
 | [**feed-reader**](standalone/feed-reader/README.md) | `read_feed`: the latest items of any RSS or Atom feed | `lms get cervezagua/feed-reader` |
 | [**video-transcripts**](standalone/video-transcripts/README.md) | `video_transcript`: what's said in a YouTube or other video (needs [yt-dlp](https://github.com/yt-dlp/yt-dlp)) | `lms get cervezagua/video-transcripts` |
+| [**page-reader**](standalone/page-reader/README.md) | `fetch_url`: a web page or PDF as clean markdown, or just one part of it | from source: `npm run setup -- page-reader` |
 
 They're the same code as agent-toolkit's, so don't enable one alongside agent-toolkit with Web on, or the model sees the tool twice.
+
+### A system prompt to go with it
+
+Small models often know how to call a tool but not when to stop. [**agent-toolkit-prompt**](presets/agent-toolkit-prompt/README.md) is a preset that tells the model to look before editing, keep a task list, check its work, and never repeat a call that already failed. It sets the system prompt and nothing else.
 
 ## 💡 Tips & tricks
 

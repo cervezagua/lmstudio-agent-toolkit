@@ -86,7 +86,7 @@ It publishes from a clean staging copy, the same way the installer does. Add `--
 
 Some tools are also published as small plugins of their own, in `standalone/<name>/`. Each has its own `manifest.json`, `package.json`, README and a few lines of `src/` that register the tool, but **no copy of the tool's code in git**. `standalone/<name>/files.json` lists the files it needs from `plugin/src/`, and `npm run sync-standalone` copies them in at the same relative paths, so their imports work unchanged. The copies are gitignored; `npm test`, `npm run typecheck`, `npm run setup` and `npm run hub:push` all sync first.
 
-So edit the tool in `plugin/src/`, never in `standalone/`. To ship a tool on its own, keep its module free of agent-toolkit's config (pass settings in, as `makeReadFeedTools` and `makeVideoTranscriptTools` do), list its files in a new `files.json`, and add the plugin to the `deps` and `typecheck` scripts and to CI.
+So edit the tool in `plugin/src/`, never in `standalone/`. To ship a tool on its own, keep its module free of agent-toolkit's config (pass settings in, as `makeReadFeedTools`, `makeVideoTranscriptTools` and `makeFetchUrlTools` do), list its files in a new `files.json`, and add the plugin to the `deps` and `typecheck` scripts and to CI.
 
 ```bash
 npm run setup -- feed-reader
