@@ -82,14 +82,14 @@ Skills use the standard `SKILL.md` layout, the same as Claude Code, Codex and LM
 
 | Tool | What it does |
 |---|---|
-| `web_search` | Searches the web through your SearXNG, DuckDuckGo or Brave. |
+| `web_search` | Searches the web through your SearXNG, DuckDuckGo or Brave. Repeat searches are answered from a short cache; `page` asks for more results. |
 | `fetch_url` | Reads a page as clean markdown, or a PDF page by page. Give it a CSS `selector` to read just one part, like a single table. |
 | `read_feed` | The latest items of an RSS or Atom feed. A site's home page works too. |
 | `video_transcript` | What's said in a YouTube or other video, through [yt-dlp](https://github.com/yt-dlp/yt-dlp). |
 | `browser_open` · `browser_click` · `browser_type` · `browser_back` · `browser_snapshot` · `browser_screenshot` · `browser_close` | Drives your own Edge or Chrome. Pages run their JavaScript, and the model clicks by number. |
 | `web_doctor` | Checks what's set up (SearXNG, the browser, yt-dlp) and says how to fix what isn't. |
 
-Search works best with a private [SearXNG](https://github.com/searxng/searxng). Without one it falls back to DuckDuckGo, which often turns automated requests away with a bot check. `video_transcript` appears once yt-dlp is installed.
+Search works best with a private [SearXNG](https://github.com/searxng/searxng). Without one it falls back to DuckDuckGo, which answers a couple of searches and then turns automated requests away for a while; the toolkit spaces its requests out and pauses for two minutes once refused. More result pages need SearXNG or Brave. `video_transcript` appears once yt-dlp is installed.
 
 `read_feed` and `video_transcript` also come as small plugins of their own: [feed-reader](https://github.com/cervezagua/lmstudio-agent-toolkit/tree/main/standalone/feed-reader) and [video-transcripts](https://github.com/cervezagua/lmstudio-agent-toolkit/tree/main/standalone/video-transcripts).
 
@@ -140,7 +140,7 @@ Search works best with a private [SearXNG](https://github.com/searxng/searxng). 
 
 **Git & GitHub:** Allow Push *(off)* · Enable GitHub Tools *(on)*.
 
-**Web:** Search Backend *(auto)* · SearXNG URL *(`http://localhost:8888`)* · Default Search Results *(8)* · Max Page Characters *(15000)* · Browser Fallback *(on)* · Enable Browser Tools *(on)* · Browser *(Edge on Windows, Chrome elsewhere)* · Headless *(on)*.
+**Web:** Search Backend *(auto)* · SearXNG URL *(`http://localhost:8888`)* · Safe Search *(moderate)* · Default Search Results *(8)* · Max Page Characters *(15000)* · Browser Fallback *(on)* · Enable Browser Tools *(on)* · Browser *(Edge on Windows, Chrome elsewhere)* · Headless *(on)*.
 
 **Documents:** Vision Model *(Auto, chosen from your models)* · PDF Render Scale *(2)* · Max Pages Per Call *(10)*.
 

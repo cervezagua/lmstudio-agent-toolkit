@@ -5,7 +5,7 @@ import { z } from "zod";
 import { configSchematics, globalConfigSchematics } from "../../config";
 import { browserSession, type BrowserChannel } from "./lib/browser";
 import { fetchPage, selectToMarkdown } from "./lib/fetchPage";
-import { formatResults, runSearch, type SearchBackend } from "./lib/search";
+import { formatResults, runSearch, type SafeSearch, type SearchBackend } from "./lib/search";
 import { runWebDoctor } from "./lib/doctor";
 import { makeReadFeedTools } from "./lib/feeds";
 import { makeVideoTranscriptTools } from "./lib/transcript";
@@ -24,23 +24,29 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       name: "web_search",
       description: text`
         Search the web. Returns titles, URLs and snippets. Use fetch_url to read a result.
-        Write specific queries; add a year for recent topics.
+        Write specific queries; add a year for recent topics. Pass page (2, 3, ...) for more results.
       `,
-      parameters: { query: z.string().min(1), count: z.number().int().min(1).max(20).optional() },
+      parameters: {
+        query: z.string().min(1),
+        count: z.number().int().min(1).max(20).optional(),
+        page: z.number().int().min(1).optional(),
+      },
       // ctx.status must be called as a method (it relies on `this`), so don't destructure it.
-      implementation: safe(async ({ query, count }, ctx) => {
+      implementation: safe(async ({ query, count, page }, ctx) => {
         const { signal } = ctx;
-        ctx.status(`Searching (${backend}): ${query}`);
-        const { results, note } = await runSearch({
+        ctx.status(`Searching (${backend}): ${query}${page && page > 1 ? `, page ${page}` : ""}`);
+        const { results, note, cached } = await runSearch({
           backend,
           query,
           count: count ?? config.get("maxSearchResults"),
+          page,
+          safeSearch: config.get("safeSearch") as SafeSearch,
           searxngUrl: config.get("searxngUrl"),
           braveApiKey: backend === "brave" ? ctl.getGlobalPluginConfig(globalConfigSchematics).get("braveApiKey") : "",
           signal,
         });
-        if (note) ctx.warn(note);
-        return note ? `${formatResults(results)}\n\n(${note})` : formatResults(results);
+        if (note && !cached) ctx.warn(note);
+        return note ? `${formatResults(results, page)}\n\n(${note})` : formatResults(results, page);
       }),
     }),
   );

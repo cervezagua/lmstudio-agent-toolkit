@@ -91,7 +91,7 @@ export class BrowserSession {
       } catch (error: any) {
         throw new ToolError(
           `Could not start the browser (${channel}): ${String(error?.message ?? error).split("\n")[0]}. ` +
-            "Ask the user to pick an installed browser in the web-tools plugin settings.",
+            "Ask the user to pick an installed browser in the plugin's Web settings.",
         );
       }
       this.launchedWith = key;

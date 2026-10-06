@@ -121,6 +121,7 @@ describe("selector", () => {
           config: {
             searchBackend: "searxng",
             searxngUrl: "",
+            safeSearch: "moderate",
             maxSearchResults: 8,
             maxPageChars: 15000,
             browserFallback: false,
