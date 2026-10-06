@@ -16,10 +16,10 @@
   },
   "scripts": {
     "setup": "node scripts/install.mjs",
-    "deps": "npm --prefix plugin install && npm --prefix standalone/feed-reader install && npm --prefix standalone/video-transcripts install",
+    "deps": "npm --prefix plugin install && npm --prefix standalone/feed-reader install && npm --prefix standalone/page-reader install && npm --prefix standalone/video-transcripts install",
     "sync-standalone": "node scripts/sync-standalone.mjs",
     "test": "node scripts/sync-standalone.mjs && vitest run",
-    "typecheck": "node scripts/sync-standalone.mjs && npm --prefix plugin run typecheck && npm --prefix standalone/feed-reader run typecheck && npm --prefix standalone/video-transcripts run typecheck",
+    "typecheck": "node scripts/sync-standalone.mjs && npm --prefix plugin run typecheck && npm --prefix standalone/feed-reader run typecheck && npm --prefix standalone/page-reader run typecheck && npm --prefix standalone/video-transcripts run typecheck",
     "e2e": "node scripts/e2e.mjs",
     "hub:push": "node scripts/hub-push.mjs"
   },

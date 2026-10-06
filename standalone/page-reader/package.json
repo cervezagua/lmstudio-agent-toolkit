@@ -1,0 +1,23 @@
+{
+  "name": "lms-plugin-page-reader",
+  "version": "1.0.0",
+  "description": "Lets LM Studio models read web pages and PDFs as clean markdown",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@lmstudio/sdk": "1.5.0",
+    "@mozilla/readability": "^0.6.0",
+    "linkedom": "^0.18.13",
+    "turndown": "^7.2.4",
+    "unpdf": "^1.8.1",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/turndown": "^5.0.6",
+    "typescript": "^5.9.0"
+  }
+}

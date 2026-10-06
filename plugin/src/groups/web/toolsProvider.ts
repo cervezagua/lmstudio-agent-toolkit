@@ -4,7 +4,7 @@ import { join } from "path";
 import { z } from "zod";
 import { configSchematics, globalConfigSchematics } from "../../config";
 import { browserSession, type BrowserChannel } from "./lib/browser";
-import { fetchPage, selectToMarkdown } from "./lib/fetchPage";
+import { makeFetchUrlTools, type RenderInBrowser } from "./lib/fetchUrlTool";
 import { formatResults, runSearch, type SafeSearch, type SearchBackend } from "./lib/search";
 import { runWebDoctor } from "./lib/doctor";
 import { makeReadFeedTools } from "./lib/feeds";
@@ -51,75 +51,17 @@ export async function toolsProvider(ctl: ToolsProviderController) {
     }),
   );
 
-  tools.push(
-    tool({
-      name: "fetch_url",
-      description: text`
-        Download a web page and return its main content as markdown. Also reads PDFs, plain text and
-        JSON. Long documents are cut off: pass offset (characters already read) to continue where
-        the previous call stopped, or a bigger max_chars.
-        Pages that only render through JavaScript are retried automatically in the browser.
-        Recent pages are cached for a few minutes; pass refresh to fetch again.
-        To read only part of a page, pass selector, a CSS selector such as "main", "article" or
-        "table#prices": much shorter than the whole page. It applies to the page as downloaded,
-        before any JavaScript runs.
-      `,
-      parameters: {
-        url: z.string(),
-        selector: z.string().optional(),
-        max_chars: z.number().int().min(500).max(200000).optional(),
-        offset: z.number().int().min(0).optional(),
-        refresh: z.boolean().optional(),
-      },
-      implementation: safe(async ({ url, selector, max_chars, offset, refresh }, ctx) => {
-        ctx.status(`Fetching ${url}`);
-        const page = await fetchPage(url, { signal: ctx.signal, refresh });
-        let body = page.markdown.trim();
-        let note = "";
-
-        if (selector !== undefined && selector.trim()) {
-          if (page.kind !== "html" || !page.html) {
-            throw new ToolError(`selector only works on web pages; ${page.url} is ${page.kind === "pdf" ? "a PDF" : "plain text"}.`);
-          }
-          const selected = selectToMarkdown(page.html, page.url, selector.trim());
-          if (selected.matches === 0) {
-            throw new ToolError(`Nothing on ${page.url} matches "${selector}". Call without selector to see the whole page.`);
-          }
-          body = selected.markdown.trim();
-          note = `\n(${selected.matches} element${selected.matches === 1 ? "" : "s"} matching "${selector}")`;
+  // Also published on its own as the page-reader plugin, which has no browser to fall back on.
+  const renderInBrowser: RenderInBrowser | undefined =
+    config.get("enableBrowser") && config.get("browserFallback")
+      ? async (url, maxChars) => {
+          const browserPage = await browserSession.getPage(config.get("browserChannel") as BrowserChannel, config.get("headless"));
+          await browserPage.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+          await browserSession.settle();
+          return browserSession.snapshot(maxChars);
         }
-
-        // A page that renders only through JavaScript arrives nearly empty; the browser can run it.
-        if (!selector?.trim() && body.length < 200 && page.kind === "html" && config.get("enableBrowser") && config.get("browserFallback")) {
-          ctx.status("Page looks empty, retrying in the browser");
-          try {
-            const browserPage = await browserSession.getPage(config.get("browserChannel") as BrowserChannel, config.get("headless"));
-            await browserPage.goto(page.url, { waitUntil: "domcontentloaded", timeout: 30_000 });
-            await browserSession.settle();
-            body = await browserSession.snapshot(max_chars ?? maxPageChars);
-            note = "\n(rendered in the browser because the plain page was empty)";
-          } catch (error) {
-            note = `\n(the page looks empty and the browser fallback failed: ${(error as Error).message})`;
-          }
-        }
-
-        const start = offset ?? 0;
-        if (start >= body.length && body.length > 0) {
-          throw new ToolError(`offset ${start} is past the end of this document (${body.length} characters).`);
-        }
-        const limit = max_chars ?? maxPageChars;
-        const slice = body.slice(start, start + limit);
-        const more = start + slice.length < body.length ? `\n\n[${body.length - start - slice.length} characters left; call again with offset ${start + slice.length}]` : "";
-        const header =
-          `URL: ${page.url}\n` +
-          (page.title ? `Title: ${page.title}\n` : "") +
-          (page.kind === "pdf" ? "Type: PDF\n" : "") +
-          (page.redirectedFrom ? `Redirected: ${page.redirectedFrom} -> ${new URL(page.url).host}\n` : "") +
-          (page.fromCache ? "From cache (pass refresh to fetch again)\n" : "");
-        return `${header}${note}\n${slice || "(no readable text)"}${more}`;
-      }),
-    }),
-  );
+      : undefined;
+  tools.push(...makeFetchUrlTools({ maxChars: maxPageChars, renderInBrowser }));
 
   if (config.get("enableBrowser")) {
     const channel = config.get("browserChannel") as BrowserChannel;
