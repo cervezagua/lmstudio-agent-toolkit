@@ -38,6 +38,7 @@ const baseConfig = {
   enableWeb: false,
   searchBackend: "auto",
   searxngUrl: "",
+  safeSearch: "moderate",
   maxSearchResults: 5,
   maxPageChars: 8000,
   browserFallback: false,

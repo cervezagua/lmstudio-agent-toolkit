@@ -68,6 +68,7 @@ const allGroupsOff = {
   enableWeb: false,
   searchBackend: "duckduckgo",
   searxngUrl: "",
+  safeSearch: "moderate",
   maxSearchResults: 5,
   maxPageChars: 8000,
   browserFallback: false,

@@ -378,6 +378,17 @@ export function makeConfigSchematics(choices?: ModelChoices) {
     "http://localhost:8888",
   )
   .field(
+    "safeSearch",
+    "select",
+    {
+      displayName: "Safe Search",
+      subtitle: "How strictly search results are filtered for adult content.",
+      options: ["moderate", "strict", "off"],
+      dependencies: onlyWhen("enableWeb"),
+    },
+    "moderate",
+  )
+  .field(
     "maxSearchResults",
     "numeric",
     { int: true, min: 1, max: 20, displayName: "Default Search Results", dependencies: onlyWhen("enableWeb") },

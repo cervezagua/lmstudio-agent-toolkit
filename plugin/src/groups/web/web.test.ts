@@ -7,7 +7,21 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { callTool, fakeController } from "../../shared/testing/fake-controller";
 import { browserSession, formatSnapshot } from "./lib/browser";
 import { clearFetchCache, fetchPage, htmlToMarkdown } from "./lib/fetchPage";
-import { decodeDuckDuckGoUrl, formatResults, parseDuckDuckGoHtml, runSearch, searchSearxng } from "./lib/search";
+import {
+  braveSearchUrl,
+  clearSearchState,
+  decodeDuckDuckGoUrl,
+  duckDuckGoForm,
+  formatResults,
+  parseDuckDuckGoHtml,
+  runSearch,
+  searchBrave,
+  searchDuckDuckGo,
+  searchSearxng,
+  type DuckDuckGoDeps,
+  type SafeSearch,
+  type SearchOptions,
+} from "./lib/search";
 import { ToolError } from "../../shared/errors";
 import { findExecutable } from "../../shared/process";
 import { toolsProvider } from "./toolsProvider";
@@ -60,6 +74,8 @@ let server: Server;
 let baseUrl: string;
 /** Counts requests per path so the retry tests can assert how many attempts were made. */
 const requestCounts = new Map<string, number>();
+/** The query string of the latest request per path, for checking what a search backend was asked. */
+const lastQueries = new Map<string, URLSearchParams>();
 
 beforeAll(async () => {
   server = createServer((req, res) => {
@@ -69,6 +85,7 @@ beforeAll(async () => {
     };
     const path = req.url?.split("?")[0] ?? "";
     requestCounts.set(path, (requestCounts.get(path) ?? 0) + 1);
+    lastQueries.set(path, new URLSearchParams(req.url?.split("?")[1] ?? ""));
     switch (path) {
       case "/article":
         return send(200, "text/html; charset=utf-8", ARTICLE);
@@ -119,6 +136,8 @@ afterAll(async () => {
 });
 
 describe("search parsing", () => {
+  beforeEach(() => clearSearchState());
+
   it("parses DuckDuckGo HTML results, skipping ads", () => {
     const html = `<div class="result result--ad"><a class="result__a" href="https://ad.example">Ad</a></div>
       <div class="result"><h2><a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fa%3Fb%3D1&rut=x">Example   A</a></h2>
@@ -158,6 +177,206 @@ describe("search parsing", () => {
   it("formats results", () => {
     expect(formatResults([{ title: "T", url: "https://u", snippet: "S" }])).toBe("1. T\n   https://u\n   S");
     expect(formatResults([])).toBe("No results.");
+    expect(formatResults([{ title: "T", url: "https://u", snippet: "" }], 2)).toBe("Page 2\n\n1. T\n   https://u");
+    expect(formatResults([], 3)).toBe("No results on page 3.");
+  });
+});
+
+const DDG_OK = { status: 200, html: `<div class="result"><a class="result__a" href="https://example.com/a">A</a></div>` };
+const DDG_REFUSED = { status: 202, html: "<html><form action='/anomaly.js'></form></html>" };
+
+/** A DuckDuckGo that answers from a script, on a clock that only moves when the code sleeps or the test says so. */
+function fakeDuckDuckGo(answers: Array<"ok" | "refused"> = []) {
+  const state = { t: 1_000_000, starts: [] as number[], sleeps: [] as number[], asked: [] as SafeSearch[] };
+  const deps: DuckDuckGoDeps = {
+    now: () => state.t,
+    sleep: async ms => {
+      state.sleeps.push(ms);
+      state.t += ms;
+    },
+    request: async (_query, safeSearch) => {
+      state.starts.push(state.t);
+      state.asked.push(safeSearch);
+      return (answers.shift() ?? "ok") === "ok" ? DDG_OK : DDG_REFUSED;
+    },
+  };
+  const search = (query = "q", safeSearch?: SafeSearch) => searchDuckDuckGo(query, 5, { safeSearch }, deps);
+  return { state, deps, search };
+}
+
+describe("DuckDuckGo pacing", () => {
+  beforeEach(() => clearSearchState());
+
+  it("leaves two seconds between the starts of consecutive requests", async () => {
+    const { state, search } = fakeDuckDuckGo();
+    expect(await search()).toEqual([{ title: "A", url: "https://example.com/a", snippet: "" }]);
+    await search();
+    expect(state.starts).toEqual([1_000_000, 1_002_000]);
+    state.t += 500;
+    await search();
+    expect(state.sleeps).toEqual([2000, 1500]);
+    state.t += 5000; // long enough ago: no wait
+    await search();
+    expect(state.sleeps).toEqual([2000, 1500]);
+    expect(state.starts).toHaveLength(4);
+  });
+
+  it("queues concurrent searches instead of firing them together", async () => {
+    const { state, search } = fakeDuckDuckGo();
+    await Promise.all([search("a"), search("b"), search("c")]);
+    expect(state.starts).toEqual([1_000_000, 1_002_000, 1_004_000]);
+  });
+
+  it("retries a bot check once, four seconds later", async () => {
+    const { state, search } = fakeDuckDuckGo(["refused", "ok"]);
+    expect(await search()).toHaveLength(1);
+    expect(state.starts).toEqual([1_000_000, 1_004_000]);
+    expect(state.sleeps).toEqual([4000]);
+  });
+
+  it("stops asking for two minutes after a refusal that survives the retry", async () => {
+    const { state, deps, search } = fakeDuckDuckGo(["refused", "refused"]);
+    const refusal: Error = await search().catch(error => error);
+    expect(refusal).toBeInstanceOf(ToolError);
+    expect(refusal.message).toMatch(/refusing automated searches\. Do not retry web_search for about 2 minutes/);
+    expect(refusal.message).toContain("SearXNG or a Brave API key in the plugin's Web settings");
+    expect(refusal.message).not.toContain("web-tools");
+    expect(state.starts).toHaveLength(2);
+
+    // Cooling down: an error straight away, and nothing sent.
+    state.t += 61_000;
+    await expect(search()).rejects.toThrow(/Do not retry web_search for about 1 minute:/);
+    const viaAuto = runSearch({ backend: "auto", query: "other", count: 5, searxngUrl: "", braveApiKey: "" }, (q, c, o) =>
+      searchDuckDuckGo(q, c, o, deps),
+    );
+    await expect(viaAuto).rejects.toThrow(/No search backend worked\..* DuckDuckGo: DuckDuckGo is refusing automated searches/);
+    expect(state.starts).toHaveLength(2);
+    expect(state.sleeps).toEqual([4000]);
+
+    state.t += 59_000; // two minutes after the refusal
+    expect(await search()).toHaveLength(1);
+    expect(state.starts).toHaveLength(3);
+  });
+
+  it("sends the safe-search level as kp", async () => {
+    expect(new URLSearchParams(duckDuckGoForm("cats", "strict")).get("kp")).toBe("1");
+    expect(new URLSearchParams(duckDuckGoForm("cats", "moderate")).get("kp")).toBe("-1");
+    expect(new URLSearchParams(duckDuckGoForm("cats", "off")).get("kp")).toBe("-2");
+    expect(duckDuckGoForm("a b")).toBe("q=a+b&kp=-1");
+
+    const { state, deps } = fakeDuckDuckGo();
+    await runSearch({ backend: "duckduckgo", query: "q", count: 5, safeSearch: "strict", searxngUrl: "", braveApiKey: "" }, (q, c, o) =>
+      searchDuckDuckGo(q, c, o, deps),
+    );
+    expect(state.asked).toEqual(["strict"]);
+  });
+});
+
+describe("search cache, pages and safe search", () => {
+  beforeEach(() => clearSearchState());
+
+  const ddgResult = [{ title: "DDG", url: "https://ddg.example", snippet: "" }];
+  const counting = () => {
+    const calls: string[] = [];
+    const ddg = async (query: string) => {
+      calls.push(query);
+      return ddgResult;
+    };
+    return { calls, ddg };
+  };
+  const ddgOptions: SearchOptions = { backend: "duckduckgo", query: "q", count: 5, searxngUrl: "", braveApiKey: "" };
+
+  it("answers a repeated search from the cache for ten minutes, and says so", async () => {
+    const { calls, ddg } = counting();
+    let t = 0;
+    const now = () => t;
+    expect(await runSearch({ ...ddgOptions, query: "Some Query" }, ddg, now)).toEqual({ results: ddgResult });
+    t += 9 * 60_000;
+    expect(await runSearch({ ...ddgOptions, query: "  some query " }, ddg, now)).toEqual({ results: ddgResult, note: "cached", cached: true });
+    expect(calls).toHaveLength(1);
+    t += 61_000; // ten minutes after the first answer
+    expect((await runSearch({ ...ddgOptions, query: "some query" }, ddg, now)).cached).toBeUndefined();
+    expect(calls).toHaveLength(2);
+
+    // A fallback keeps its own note.
+    const auto = { ...ddgOptions, backend: "auto" as const };
+    await runSearch(auto, ddg, now);
+    expect((await runSearch(auto, ddg, now)).note).toBe("SearXNG unavailable, used DuckDuckGo: no SearXNG URL is configured; cached");
+    expect(calls).toHaveLength(3);
+  });
+
+  it("keeps pages, safe-search levels, counts and backends apart", async () => {
+    const { calls, ddg } = counting();
+    await runSearch(ddgOptions, ddg);
+    await runSearch({ ...ddgOptions, safeSearch: "strict" }, ddg);
+    await runSearch({ ...ddgOptions, count: 6 }, ddg);
+    expect(calls).toHaveLength(3);
+    expect((await runSearch({ ...ddgOptions, safeSearch: "moderate", page: 1 }, ddg)).cached).toBe(true); // the defaults
+    expect(calls).toHaveLength(3);
+
+    requestCounts.clear();
+    const searxng = { ...ddgOptions, backend: "searxng" as const, searxngUrl: `${baseUrl}/searx` };
+    expect((await runSearch(searxng, ddg)).cached).toBeUndefined();
+    expect((await runSearch({ ...searxng, page: 2 }, ddg)).cached).toBeUndefined();
+    expect(requestCounts.get("/searx/search")).toBe(2);
+    expect((await runSearch({ ...searxng, page: 2 }, ddg)).cached).toBe(true);
+    expect(requestCounts.get("/searx/search")).toBe(2);
+    expect(calls).toHaveLength(3);
+  });
+
+  it("keeps at most 50 answers, dropping the oldest", async () => {
+    const { calls, ddg } = counting();
+    for (let i = 0; i <= 50; i++) await runSearch({ ...ddgOptions, query: `query ${i}` }, ddg);
+    expect(calls).toHaveLength(51);
+    expect((await runSearch({ ...ddgOptions, query: "query 50" }, ddg)).cached).toBe(true);
+    expect((await runSearch({ ...ddgOptions, query: "query 1" }, ddg)).cached).toBe(true);
+    expect((await runSearch({ ...ddgOptions, query: "query 0" }, ddg)).cached).toBeUndefined(); // was dropped
+    expect(calls).toHaveLength(52);
+  });
+
+  it("does not cache an empty answer or an error", async () => {
+    let answers = 0;
+    const empty = async () => {
+      answers++;
+      return [];
+    };
+    await runSearch(ddgOptions, empty);
+    expect((await runSearch(ddgOptions, empty)).cached).toBeUndefined();
+    expect(answers).toBe(2);
+  });
+
+  it("asks SearXNG and Brave for the page and safe-search level", async () => {
+    await searchSearxng(`${baseUrl}/searx`, "q", 5);
+    expect(Object.fromEntries(lastQueries.get("/searx/search")!)).toEqual({ q: "q", format: "json", pageno: "1", safesearch: "1" });
+    await searchSearxng(`${baseUrl}/searx`, "q", 5, { page: 3, safeSearch: "strict" });
+    expect(lastQueries.get("/searx/search")!.get("pageno")).toBe("3");
+    expect(lastQueries.get("/searx/search")!.get("safesearch")).toBe("2");
+    await searchSearxng(`${baseUrl}/searx`, "q", 5, { safeSearch: "off" });
+    expect(lastQueries.get("/searx/search")!.get("safesearch")).toBe("0");
+
+    const first = braveSearchUrl("q", 5).searchParams;
+    expect(first.get("offset")).toBeNull();
+    expect(first.get("safesearch")).toBe("moderate");
+    const third = braveSearchUrl("q", 5, 3, "strict").searchParams;
+    expect(third.get("offset")).toBe("2");
+    expect(third.get("safesearch")).toBe("strict");
+    expect(braveSearchUrl("q", 5, 10, "off").searchParams.get("offset")).toBe("9");
+    expect(braveSearchUrl("q", 5, 10, "off").searchParams.get("safesearch")).toBe("off");
+    // Refused before any request is made.
+    await expect(searchBrave("key", "q", 5, { page: 11 })).rejects.toThrow(/at most 10 pages/);
+  });
+
+  it("explains that DuckDuckGo has no second page", async () => {
+    const { calls, ddg } = counting();
+    const onePage = /DuckDuckGo only gives the first page.*SearXNG or a Brave API key.*more specific query/;
+    await expect(runSearch({ ...ddgOptions, page: 2 }, ddg)).rejects.toThrow(onePage);
+    await expect(runSearch({ ...ddgOptions, backend: "auto", page: 2 }, ddg)).rejects.toThrow(onePage);
+    await expect(runSearch({ ...ddgOptions, backend: "auto", page: 2, searxngUrl: "http://127.0.0.1:1" }, ddg)).rejects.toThrow(onePage);
+    expect(calls).toHaveLength(0);
+
+    // With SearXNG up, auto pages through it.
+    expect((await runSearch({ ...ddgOptions, backend: "auto", page: 2, searxngUrl: `${baseUrl}/searx` }, ddg)).results).toHaveLength(1);
+    expect(lastQueries.get("/searx/search")!.get("pageno")).toBe("2");
   });
 });
 
@@ -231,6 +450,7 @@ describe("formatSnapshot", () => {
 const baseConfig = {
   searchBackend: "searxng",
   searxngUrl: "",
+  safeSearch: "moderate",
   maxSearchResults: 8,
   maxPageChars: 15000,
   browserFallback: false,
@@ -240,6 +460,8 @@ const baseConfig = {
 };
 
 describe("web-tools toolsProvider", () => {
+  beforeEach(() => clearSearchState());
+
   let workingDirectory: string;
 
   beforeAll(async () => {
@@ -293,6 +515,21 @@ describe("web-tools toolsProvider", () => {
     const fetched = await callTool(tools, "fetch_url", { url: `${baseUrl}/article`, max_chars: 500 });
     expect(fetched).toMatch(/^URL: http:\/\/127\.0\.0\.1:\d+\/article\nTitle: Fallback Title\n\n/);
     expect(fetched).toMatch(/\[\d+ characters left; call again with offset 500\]$/);
+  });
+
+  it("passes page and the Safe Search setting to the search, and marks a cached answer", async () => {
+    const tools = await provider({ safeSearch: "strict" });
+    requestCounts.clear();
+    expect(await callTool(tools, "web_search", { query: "anything", page: 2 })).toBe("Page 2\n\n1. Result One\n   https://one.example\n   First");
+    expect(lastQueries.get("/searx/search")!.get("pageno")).toBe("2");
+    expect(lastQueries.get("/searx/search")!.get("safesearch")).toBe("2");
+    expect(await callTool(tools, "web_search", { query: "Anything", page: 2 })).toBe(
+      "Page 2\n\n1. Result One\n   https://one.example\n   First\n\n(cached)",
+    );
+    expect(requestCounts.get("/searx/search")).toBe(1);
+
+    const ddg = await provider({ searchBackend: "duckduckgo" });
+    expect(await callTool(ddg, "web_search", { query: "anything", page: 2 })).toMatch(/^Error: DuckDuckGo only gives the first page/);
   });
 
   it("pages through a long document with offset", async () => {
