@@ -32,13 +32,26 @@ export interface RenderedPage {
   file: string;
 }
 
+/** Where this module sits relative to the plugin folder when it runs from source. */
+const WORKER_IN_PLUGIN = ["src", "groups", "documents", "lib", "pdf-worker.mjs"];
+
+/**
+ * The places pdf-worker.mjs can be, given the folder the running code is in: next to this file when
+ * running from source (tests, tsx), and under the plugin folder's src/ when LM Studio runs the
+ * bundle from <plugin>/.lmstudio/. Exported so a test can hold the second one to the real layout:
+ * nothing else notices when the file moves, because tests always run from source.
+ */
+export function workerCandidates(directory: string): string[] {
+  return [
+    join(directory, "pdf-worker.mjs"),
+    join(directory, "..", ...WORKER_IN_PLUGIN),
+    join(directory, "..", "..", ...WORKER_IN_PLUGIN), // a bundle one level deeper, e.g. .lmstudio/dev/
+  ];
+}
+
 /** Locates pdf-worker.mjs, both in the bundled plugin (.lmstudio/) and when running from source. */
 function workerPath(): string {
-  const candidates = [
-    join(__dirname, "pdf-worker.mjs"), // running from src/lib (tests, tsx)
-    join(__dirname, "..", "src", "lib", "pdf-worker.mjs"), // bundled into <plugin>/.lmstudio/
-    join(__dirname, "..", "..", "src", "lib", "pdf-worker.mjs"),
-  ];
+  const candidates = workerCandidates(__dirname);
   for (const candidate of candidates) {
     if (existsSync(candidate)) return candidate;
   }

@@ -2,7 +2,8 @@ import { realpath } from "fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "path";
 import { ToolError } from "./errors";
 
-function isInside(root: string, target: string): boolean {
+/** Whether `target` is `root` itself or somewhere below it. Lexical: neither path is resolved. */
+export function isInside(root: string, target: string): boolean {
   const rel = relative(root, target);
   if (rel === "") return true;
   // On Windows, relative() across drives returns an absolute path.

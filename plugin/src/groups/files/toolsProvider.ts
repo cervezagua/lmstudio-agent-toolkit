@@ -14,7 +14,7 @@ import { notFoundMessage } from "./lib/suggest";
 import { availableCheckers, runChecker } from "./lib/diagnostics";
 import { editNotebook, parseNotebook, renderNotebook } from "./lib/notebook";
 import { pickSubagentModel, runSubagent } from "./lib/subagent";
-import { globFiles, grepFiles, parseRipgrepOutput } from "./lib/search";
+import { assertPatternStaysInside, globFiles, grepFiles, parseRipgrepOutput } from "./lib/search";
 import { getSession, resetSession, type ShellSpec } from "./lib/session";
 import { DEFAULT_MAX_ROWS, MAX_MAX_ROWS, sqliteAvailable, sqliteQuery } from "./lib/sqlite";
 import { formatTaskLine, TaskManager } from "./lib/tasks";
@@ -100,6 +100,19 @@ export async function toolsProvider(ctl: ToolsProviderController) {
   };
 
   /**
+   * The folder a command should run in. Its existence is checked here because a missing folder
+   * otherwise only shows up as a failure to start the process, which reads like a missing shell.
+   */
+  const resolveCommandDirectory = async (cwd: string | undefined) => {
+    const directory = await resolveSafe(root, cwd ?? ".");
+    const info = await stat(directory).catch(() => null);
+    if (!info?.isDirectory()) {
+      throw new ToolError(`cwd "${cwd ?? "."}" is not a folder in the project. Use list_dir to see which folders exist.`);
+    }
+    return directory;
+  };
+
+  /**
    * Shared preparation for every tool that changes a file: resolve it, refuse notebooks and huge
    * files, and refuse editing a version the model has not read (or that changed since it did).
    */
@@ -140,7 +153,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       implementation: safe(async ({ path, offset, limit }) => {
         const file = await resolveReadable(path);
         const windowed = offset !== undefined || limit !== undefined;
-        await assertReadableSize(file, show(file), maxReadBytes, windowed);
+        const info = await assertReadableSize(file, show(file), maxReadBytes, windowed);
         if (await looksBinary(file)) throw new ToolError(`"${path}" looks like a binary file.`);
 
         const { lines, start, totalLines } = await readTextSlice(file, offset ?? 1, limit ?? 2000);
@@ -156,7 +169,11 @@ export async function toolsProvider(ctl: ToolsProviderController) {
 
         // Remember what the model has seen, so edits to a stale view can be refused. The content is
         // re-read inside recordRead so the hash matches the bytes on disk, line endings included.
-        if (!windowed) await recordRead(file);
+        // A read of part of a file counts as well: a file over Max Read Bytes can only be read in
+        // parts, so if those did not count it could never be edited, and the refusal ("read it
+        // first") had no way to be satisfied. An edit still has to quote the text it replaces, and a
+        // file that changed since is still refused. Files too big to edit are not hashed for nothing.
+        if (!windowed || info.size <= MAX_EDIT_BYTES) await recordRead(file);
         return truncate(body, maxOutputChars) + note || "(empty file)";
       }),
     }),
@@ -349,6 +366,8 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         } catch (error) {
           throw new ToolError(`Invalid regular expression: ${(error as Error).message}`);
         }
+        // Checked here too, so the answer is the same whether ripgrep or the built-in search runs.
+        if (glob) assertPatternStaysInside(glob, "glob");
         const searchPath = await resolveSafe(root, path ?? ".");
         const maxResults = max_results ?? 100;
         const mode = output_mode ?? "content";
@@ -534,7 +553,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         implementation: safe(async ({ command, description, cwd, timeout_seconds }, ctx) => {
           const { signal } = ctx;
           checkCommand(command);
-          const workingDir = await resolveSafe(root, cwd ?? ".");
+          const workingDir = await resolveCommandDirectory(cwd);
           const timeoutMs = (timeout_seconds ?? defaultTimeout) * 1000;
           const label = description?.trim() || (command.length > 80 ? command.slice(0, 80) + "…" : command);
           ctx.status(`Running: ${label}`);
@@ -599,7 +618,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
           parameters: { command: z.string(), cwd: z.string().optional(), name: z.string().optional() },
           implementation: safe(async ({ command, cwd, name }, ctx) => {
             checkCommand(command);
-            const workingDir = await resolveSafe(root, cwd ?? ".");
+            const workingDir = await resolveCommandDirectory(cwd);
             ctx.status(`Starting background task: ${command.slice(0, 60)}`);
             const task = await tasks.start(
               {

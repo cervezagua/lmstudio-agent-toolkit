@@ -105,8 +105,12 @@ export function selectToMarkdown(html: string, pageUrl: string, selector: string
   return { matches: elements.length, markdown: parts.filter(Boolean).join("\n\n---\n\n") };
 }
 
-async function readLimited(response: Response, maxBytes: number): Promise<string> {
-  if (!response.body) return "";
+/**
+ * The body, read no further than `maxBytes`: the download stops there, so a huge file costs neither
+ * the memory nor the time. `complete` is false when there was more.
+ */
+async function readBytes(response: Response, maxBytes: number): Promise<{ bytes: Buffer; complete: boolean }> {
+  if (!response.body) return { bytes: Buffer.alloc(0), complete: true };
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
@@ -115,12 +119,17 @@ async function readLimited(response: Response, maxBytes: number): Promise<string
     if (done) break;
     total += value.byteLength;
     if (total > maxBytes) {
-      await reader.cancel();
-      break;
+      await reader.cancel().catch(() => {});
+      return { bytes: Buffer.concat(chunks), complete: false };
     }
     chunks.push(value);
   }
-  return new TextDecoder("utf-8").decode(Buffer.concat(chunks));
+  return { bytes: Buffer.concat(chunks), complete: true };
+}
+
+/** A page's text; one longer than `maxBytes` is cut there. */
+async function readLimited(response: Response, maxBytes: number): Promise<string> {
+  return new TextDecoder("utf-8").decode((await readBytes(response, maxBytes)).bytes);
 }
 
 /** Extracts the text of a PDF, page by page, so the model can read reports and papers. */
@@ -270,10 +279,18 @@ export async function fetchPage(
   };
 
   if (contentType === "application/pdf" || (contentType === "" && parsed.pathname.toLowerCase().endsWith(".pdf"))) {
-    const buffer = new Uint8Array(await response.arrayBuffer());
-    if (buffer.byteLength > MAX_BYTES) throw new ToolError(`The PDF at ${finalUrl} is larger than 5 MB.`);
+    // Refused as soon as it is known to be too big: from the header when the server sends one, and
+    // otherwise after 5 MB has arrived, never after the whole file has.
+    const tooLarge = () => new ToolError(`The PDF at ${finalUrl} is larger than 5 MB.`);
+    if (Number(response.headers.get("content-length")) > MAX_BYTES) {
+      await response.body?.cancel().catch(() => {});
+      throw tooLarge();
+    }
+    const { bytes, complete } = await readBytes(response, MAX_BYTES);
+    if (!complete) throw tooLarge();
     try {
-      const { title, text } = await pdfToText(buffer);
+      // A copy with a buffer of its own, which is what PDF.js expects to be handed.
+      const { title, text } = await pdfToText(new Uint8Array(bytes));
       return remember({ url: finalUrl, title, contentType: "application/pdf", markdown: text, kind: "pdf", redirectedFrom });
     } catch (error) {
       throw new ToolError(`Could not read the PDF at ${finalUrl}: ${(error as Error).message}`);

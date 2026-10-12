@@ -1,4 +1,4 @@
-import { runProcess } from "../../../shared/process";
+import { commandEnv, runProcess } from "../../../shared/process";
 
 /**
  * A few lines about the repository, added at the start of a chat. Without it the model has to spend
@@ -12,7 +12,7 @@ export async function gitSnapshot(directory: string, signal?: AbortSignal): Prom
         cwd: directory,
         timeoutMs: 5000,
         signal,
-        env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat", NO_COLOR: "1" },
+        env: commandEnv({ GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat", NO_COLOR: "1" }),
       });
       return result.exitCode === 0 ? result.stdout.trim() : null;
     } catch {

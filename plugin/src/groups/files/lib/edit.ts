@@ -1,6 +1,32 @@
 import { ToolError } from "../../../shared/errors";
 
-const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/**
+ * Removes `search` from `content`: the first occurrence, or every one. An occurrence that is a whole
+ * line takes its line break with it, otherwise the file keeps a blank line where the model asked for
+ * the text to be gone; one inside a longer line just goes.
+ *
+ * Each occurrence is handled where it stands, in the same left-to-right order `countOccurrences`
+ * counts them, so the number reported is the number removed. (A single pattern for "a whole line"
+ * cannot do this: it swallows the line break that the next line's match would have to start after,
+ * so every second line of a run survived, and occurrences inside a line were never touched.)
+ */
+function removeOccurrences(content: string, search: string, all: boolean): string {
+  let out = "";
+  let position = 0;
+  let index = content.indexOf(search);
+  while (index !== -1) {
+    const end = index + search.length;
+    const next = all ? content.indexOf(search, end) : -1;
+    const startsLine = index === 0 || content[index - 1] === "\n";
+    const lineBreak = content.startsWith("\r\n", end) ? 2 : content[end] === "\n" ? 1 : 0;
+    // Not when the next occurrence begins inside that line break (a search that itself starts with one).
+    const takeLineBreak = startsLine && lineBreak > 0 && (next === -1 || next >= end + lineBreak);
+    out += content.slice(position, index);
+    position = takeLineBreak ? end + lineBreak : end;
+    index = next;
+  }
+  return out + content.slice(position);
+}
 
 function countOccurrences(haystack: string, needle: string): number {
   let count = 0;
@@ -57,14 +83,8 @@ export function applyEdit(
     );
   }
 
-  // Deleting a whole line should take its newline too, otherwise the file keeps a blank line
-  // where the model asked for the text to be gone.
   if (replacement === "") {
-    const wholeLine = new RegExp(`(^|\\n)${escapeRegExp(search)}\\r?\\n`, replaceAll ? "g" : "");
-    if (wholeLine.test(content)) {
-      const updated = content.replace(wholeLine, "$1");
-      return { content: updated, replacements: replaceAll ? count : 1 };
-    }
+    return { content: removeOccurrences(content, search, replaceAll), replacements: replaceAll ? count : 1 };
   }
 
   // split/join avoids String.replace's special `$&`-style patterns in the replacement.

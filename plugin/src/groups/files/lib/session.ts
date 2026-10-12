@@ -1,4 +1,5 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "child_process";
+import { ToolError } from "../../../shared/errors";
 import { commandEnv } from "../../../shared/process";
 import { randomUUID } from "crypto";
 
@@ -49,8 +50,14 @@ export class ShellSession {
     // The shell can die between commands; writing to its stdin then fails with EPIPE, which the
     // next exec() handles by starting a fresh shell.
     child.stdin.on("error", () => {});
-    child.on("error", () => this.dispose());
-    child.on("exit", () => (this.child = null));
+    // Only while this is still the session's shell: a shell killed after a timeout exits a moment
+    // later, and by then a new one may have taken its place, which must not be forgotten or killed.
+    child.on("error", () => {
+      if (this.child === child) this.dispose();
+    });
+    child.on("exit", () => {
+      if (this.child === child) this.child = null;
+    });
     this.child = child;
     return child;
   }
@@ -78,7 +85,7 @@ export class ShellSession {
 
   async exec(command: string, timeoutMs: number, signal?: AbortSignal): Promise<SessionResult> {
     if (this.busy) {
-      throw new Error("The shell session is already running a command. Wait for it, or use task_run for long jobs.");
+      throw new ToolError("The shell session is already running a command. Wait for it, or use task_run for long jobs.");
     }
     this.busy = true;
     try {
@@ -88,16 +95,23 @@ export class ShellSession {
       let stdout = "";
       let stderr = "";
 
-      return await new Promise<SessionResult>(resolve => {
+      return await new Promise<SessionResult>((resolve, reject) => {
         let settled = false;
-        const finish = (result: SessionResult) => {
-          if (settled) return;
+        // Everything this command put on the long-lived shell comes off again here. A listener left
+        // behind keeps the command's whole output alive for as long as the shell runs.
+        const release = () => {
+          if (settled) return false;
           settled = true;
           clearTimeout(timer);
           child.stdout.off("data", onStdout);
           child.stderr.off("data", onStderr);
+          child.off("exit", onExit);
+          child.off("error", onError);
           signal?.removeEventListener("abort", onAbort);
-          resolve(result);
+          return true;
+        };
+        const finish = (result: SessionResult) => {
+          if (release()) resolve(result);
         };
 
         const done = (exitCode: number | null, timedOut = false) => {
@@ -129,10 +143,23 @@ export class ShellSession {
           done(null, true);
         }, timeoutMs);
 
+        const onExit = () => done(child.exitCode);
+        // A shell that cannot be started says so with "error" and never exits. Without this the
+        // command waited out its whole timeout and was then reported as having timed out.
+        const onError = (error: NodeJS.ErrnoException) => {
+          if (!release()) return;
+          const why =
+            error.code === "ENOENT"
+              ? `"${this.spec.file}" was not found on PATH. Pick another Shell in the plugin's settings`
+              : error.message;
+          reject(new ToolError(`The shell could not be started: ${why}.`));
+        };
+
         child.stdout.on("data", onStdout);
         child.stderr.on("data", onStderr);
         signal?.addEventListener("abort", onAbort, { once: true });
-        child.on("exit", () => done(child.exitCode));
+        child.on("exit", onExit);
+        child.on("error", onError);
 
         child.stdin.write(this.wrap(command, marker));
       });
@@ -152,7 +179,7 @@ export class ShellSession {
   dispose() {
     const child = this.child;
     this.child = null;
-    if (!child) return;
+    if (!child || child.pid === undefined) return; // no shell, or one that never started
     try {
       if (process.platform === "win32") {
         spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });

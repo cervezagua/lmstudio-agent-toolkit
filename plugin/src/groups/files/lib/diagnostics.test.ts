@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { availableCheckers, CHECKERS, runChecker } from "./diagnostics";
+import { availableCheckers, CHECKERS, npxCommand, runChecker } from "./diagnostics";
 import { runSubagent, SUBAGENT_SYSTEM_PROMPT, pickSubagentModel } from "./subagent";
 import { ToolError } from "../../../shared/errors";
 
@@ -62,6 +62,28 @@ describe("runChecker", () => {
     expect(report).toContain("bad.ts");
     expect(report).toContain("not assignable");
   }, 120000);
+
+  it("can start the project's own tools through npx on every system", async () => {
+    // On Windows npx is a .cmd file, which Node refuses to start directly ("spawn EINVAL"), so tsc
+    // and ESLint never ran there. Nothing is installed in this folder and nothing is downloaded: the
+    // point is that npx starts and answers, where it used to fail before running at all.
+    for (const name of ["tsc", "eslint"]) {
+      const checker = CHECKERS.find(c => c.name === name)!;
+      const report = await runChecker(checker, root, { maxChars: 2000 });
+      expect(report).toMatch(new RegExp(`^${name}[ :(]`));
+      expect(report).not.toContain("EINVAL");
+    }
+  }, 120000);
+
+  it("runs npx through cmd.exe on Windows only, never downloading, with the default ESLint formatter", () => {
+    expect(npxCommand(["tsc"], "win32")).toEqual({ file: "cmd.exe", args: ["/d", "/s", "/c", "npx", "--no-install", "tsc"] });
+    expect(npxCommand(["tsc"], "linux")).toEqual({ file: "npx", args: ["--no-install", "tsc"] });
+    expect(npxCommand(["tsc"], "darwin")).toEqual({ file: "npx", args: ["--no-install", "tsc"] });
+    // "compact" was removed from ESLint itself in version 9, where asking for it is an error.
+    const eslint = CHECKERS.find(c => c.name === "eslint")!.command(root);
+    expect(eslint.args).not.toContain("--format");
+    expect(eslint.args.slice(-2)).toEqual(["eslint", "."]);
+  });
 
   it("explains a missing executable", async () => {
     const missing = { ...CHECKERS[0], name: "ghost", command: () => ({ file: "definitely-not-installed-xyz", args: [] }) };
