@@ -1,9 +1,10 @@
+import { existsSync } from "fs";
 import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { callTool, fakeController } from "../../shared/testing/fake-controller";
-import { extractPdfText, parsePageRange, renderPdfPages } from "./lib/pdf";
+import { extractPdfText, parsePageRange, renderPdfPages, workerCandidates } from "./lib/pdf";
 import { DEFAULT_OCR_PROMPT, ocrImageFile, pickVisionModel } from "./lib/vision";
 import { ToolError } from "../../shared/errors";
 import { toolsProvider } from "./toolsProvider";
@@ -98,6 +99,35 @@ describe("PDF reading", () => {
     }
     await expect(renderPdfPages(join(root, "doc.pdf"), join(work, "x"), { maxPages: 2 })).rejects.toThrow(/at most 2/);
   }, 60000);
+
+  it("returns all of a long document's text, not just what fits in a pipe's buffer", async () => {
+    // About 150 KB of text: the worker used to exit before a pipe had taken it all (macOS, Linux).
+    // Ten short lines a page, because text that runs off this small page is not part of its text.
+    const pages = Array.from({ length: 400 }, (_, page) =>
+      Array.from({ length: 10 }, (_, line) => `p${page + 1} l${line} lorem ipsum dolor sit amet`).join(") Tj 0 -14 Td ("),
+    );
+    await writeFile(join(root, "long.pdf"), makePdf(pages));
+    const result = await extractPdfText(join(root, "long.pdf"));
+    expect(result.totalPages).toBe(400);
+    expect(result.pages).toHaveLength(400);
+    expect(result.pages[399].text).toContain("p400 l9 lorem ipsum");
+    expect(result.pages.reduce((sum, page) => sum + page.text.length, 0)).toBeGreaterThan(100_000);
+  }, 60000);
+});
+
+describe("finding the PDF worker", () => {
+  // Tests run from source, where the worker sits next to pdf.ts. LM Studio runs a bundle from
+  // <plugin>/.lmstudio/, and from there the worker was looked for in a folder that no longer exists.
+  const pluginFolder = join(__dirname, "..", "..", "..");
+
+  it("is found from the folder LM Studio runs the bundle in", () => {
+    expect(existsSync(join(pluginFolder, "manifest.json"))).toBe(true);
+    expect(workerCandidates(join(pluginFolder, ".lmstudio")).some(existsSync)).toBe(true);
+  });
+
+  it("is found when running from source", () => {
+    expect(workerCandidates(join(__dirname, "lib")).some(existsSync)).toBe(true);
+  });
 });
 
 describe("vision helpers", () => {

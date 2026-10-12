@@ -1,9 +1,10 @@
 import { mkdir, readdir, readFile, stat } from "fs/promises";
 import { homedir } from "os";
-import { basename, join, resolve } from "path";
+import { basename, dirname, join, resolve } from "path";
 import { slugify } from "./memoryStore";
 import { ToolError } from "../../../shared/errors";
 import { locateFinding, scanForInjection, type InjectionFinding } from "../../../shared/injectionScan";
+import { displayPath, resolveSafe } from "../../../shared/paths";
 import { writeFileAtomic } from "../../../shared/safeWrite";
 
 export interface Skill {
@@ -136,7 +137,11 @@ export async function listSkills(directory: string): Promise<Skill[]> {
       const exists = await stat(file).then(s => s.isFile(), () => false);
       if (!exists) continue;
       const text = await readFile(file, "utf-8");
-      const siblings = (await readdir(join(directory, entry.name))).filter(f => f !== "SKILL.md");
+      const siblings = (await readdir(join(directory, entry.name), { withFileTypes: true }))
+        .filter(sibling => sibling.name !== "SKILL.md")
+        // A folder ends with "/", so the model can tell it has to look inside.
+        .map(sibling => (sibling.isDirectory() ? `${sibling.name}/` : sibling.name))
+        .sort();
       skills.push({ ...parseSkillHeader(text, entry.name), file, extraFiles: siblings });
     } else if (entry.isFile() && entry.name.toLowerCase().endsWith(".md") && entry.name.toLowerCase() !== "readme.md") {
       const file = join(directory, entry.name);
@@ -158,6 +163,38 @@ export async function readSkill(directory: string, name: string): Promise<{ skil
     throw new ToolError(`No skill named "${name}". Available skills: ${available}.`);
   }
   return { skill, content: await readFile(skill.file, "utf-8") };
+}
+
+const MAX_SKILL_FILE_BYTES = 512 * 1024;
+
+/**
+ * Reads one of the files that sit next to a skill's SKILL.md (a reference, a template, a script), or
+ * lists a folder there. Skills live outside the project folder, where read_file cannot go, so this
+ * is the only way the model can open them; it never reaches outside the skill's own folder.
+ */
+export async function readSkillFile(directory: string, name: string, path: string): Promise<{ skill: Skill; shown: string; content: string }> {
+  const { skill } = await readSkill(directory, name);
+  if (basename(skill.file) !== "SKILL.md") {
+    throw new ToolError(`The skill "${skill.name}" is a single file and has no other files.`);
+  }
+  const folder = dirname(skill.file);
+  const target = await resolveSafe(folder, path).catch(() => {
+    throw new ToolError(`"${path}" is not inside the skill "${skill.name}". Its files: ${skill.extraFiles.join(", ") || "none"}.`);
+  });
+  const shown = displayPath(folder, target);
+  const info = await stat(target).catch(() => null);
+  if (!info) throw new ToolError(`The skill "${skill.name}" has no file "${path}". Its files: ${skill.extraFiles.join(", ") || "none"}.`);
+  if (info.isDirectory()) {
+    const entries = await readdir(target, { withFileTypes: true });
+    const listing = entries.map(entry => (entry.isDirectory() ? `${entry.name}/` : entry.name)).sort();
+    return { skill, shown: `${shown}/`, content: listing.join("\n") || "(empty folder)" };
+  }
+  if (info.size > MAX_SKILL_FILE_BYTES) {
+    throw new ToolError(`${shown} is ${Math.round(info.size / 1024)} KB, more than a skill file this tool reads (${MAX_SKILL_FILE_BYTES / 1024} KB).`);
+  }
+  const bytes = await readFile(target);
+  if (bytes.subarray(0, 8000).includes(0)) throw new ToolError(`${shown} is not a text file.`);
+  return { skill, shown, content: bytes.toString("utf-8") };
 }
 
 export interface FlaggedSkill {

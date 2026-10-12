@@ -349,6 +349,27 @@ class Parser {
     this.index++;
   }
 
+  /**
+   * "sum(1,000, 2,500)" would be read as four arguments, 1, 0, 2 and 500, and answered 503 without a
+   * word. A comma with nothing around it, between a short number and exactly three digits, is far
+   * more likely a thousands separator than two arguments, so it is refused, and both ways to write
+   * what was meant are given. A wrong guess here costs the model one retry; the other way round it
+   * costs a wrong number that looks right.
+   */
+  private refuseThousandsSeparator(): void {
+    const comma = this.current;
+    const before = this.tokens[this.index - 1];
+    const after = this.tokens[this.index + 1];
+    if (before.type !== "number" || after.type !== "number") return;
+    const touching = before.position + before.text.length === comma.position && after.position === comma.position + 1;
+    if (!touching || !/^\d{1,3}$/.test(before.text) || !/^\d{3}(\.\d+)?$/.test(after.text)) return;
+    throw new ToolError(
+      `"${before.text},${after.text}" at position ${before.position} looks like one number with a thousands separator, ` +
+        `but inside a function a comma separates arguments. Write ${before.text}${after.text} or ${before.text}_${after.text} for one number, ` +
+        `or put a space after the comma if you mean two.`,
+    );
+  }
+
   private call(name: Token, depth: number): number {
     const spec = Object.hasOwn(FUNCTIONS, name.text) ? FUNCTIONS[name.text] : undefined;
     if (!spec) throw this.unknown(name);
@@ -359,6 +380,7 @@ class Parser {
       while (true) {
         args.push(this.additive(depth + 1).value);
         if (!this.isOp(",")) break;
+        this.refuseThousandsSeparator();
         this.index++;
       }
     }

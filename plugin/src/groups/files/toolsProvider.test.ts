@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { basename, join } from "path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -149,6 +149,58 @@ describe("coder-tools toolsProvider", () => {
     await writeFile(join(root, "huge.txt"), "x".repeat(20000));
     expect(await callTool(small, "read_file", { path: "huge.txt" })).toMatch(/^Error: huge.txt is \d+ KB, over the 8 KB limit/);
     expect(await callTool(small, "read_file", { path: "huge.txt", limit: 1 })).toContain("1\txxx");
+  });
+
+  it("lets a file be edited after reading part of it, the only way to read a big one", async () => {
+    // Reads with offset or limit did not count as reading, and a file over the limit can be read no
+    // other way, so "read it first" could never be satisfied.
+    const small = await toolsProvider(
+      fakeController({ config: { ...baseConfig, projectFolder: root, maxReadBytes: 8192 }, workingDirectory: work }),
+    );
+    await writeFile(join(root, "big.txt"), `first line\n${"x".repeat(20000)}\nlast line\n`);
+    const edit = (old_string: string, new_string: string) => callTool(small, "edit_file", { path: "big.txt", old_string, new_string });
+
+    expect(await edit("first line", "1st line")).toMatch(/^Error: You have not read big.txt/);
+    expect(await callTool(small, "read_file", { path: "big.txt" })).toMatch(/^Error: big.txt is \d+ KB, over the 8 KB limit/);
+    expect(await callTool(small, "read_file", { path: "big.txt", offset: 1, limit: 1 })).toContain("1\tfirst line");
+    expect(await edit("first line", "1st line")).toMatch(/^Edited big.txt/);
+
+    // What the check is for still holds: a file someone else changed since has to be read again.
+    await writeFile(join(root, "big.txt"), `rewritten\n${"y".repeat(20000)}\n`);
+    expect(await edit("rewritten", "mine")).toMatch(/^Error: big.txt changed on disk since you read it/);
+    await callTool(small, "read_file", { path: "big.txt", limit: 1 });
+    expect(await edit("rewritten", "mine")).toMatch(/^Edited big.txt/);
+  });
+
+  it("keeps glob and grep inside the project folder", async () => {
+    // A project folder with something next to it that is none of the model's business.
+    const outer = await mkdtemp(join(tmpdir(), "coder-tools-confined-"));
+    try {
+      const inner = join(outer, "project");
+      await mkdir(inner);
+      await writeFile(join(inner, "in.txt"), "marker inside\n");
+      await writeFile(join(outer, "out.txt"), "marker outside\n");
+      const confined = await toolsProvider(fakeController({ config: { ...baseConfig, projectFolder: inner }, workingDirectory: work }));
+
+      for (const pattern of ["../*.txt", "../**/*", join(outer, "*.txt").replace(/\\/g, "/")]) {
+        expect(await callTool(confined, "glob", { pattern })).toMatch(/^Error: pattern must stay inside the project folder/);
+        // Refused the same way whether ripgrep or the built-in search would have run.
+        expect(await callTool(confined, "grep", { pattern: "marker", glob: pattern })).toMatch(/^Error: glob must stay inside the project folder/);
+      }
+      expect(await callTool(confined, "glob", { pattern: "*.txt" })).toBe("in.txt");
+      expect(await callTool(confined, "grep", { pattern: "marker" })).toBe("in.txt:1: marker inside");
+    } finally {
+      await rm(outer, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {});
+    }
+  });
+
+  it("names a working folder that does not exist, instead of blaming the shell", async () => {
+    for (const name of ["run_command", "task_run"]) {
+      expect(await callTool(tools, name, { command: "node -e \"1\"", cwd: "no-such-folder" })).toMatch(
+        /^Error: cwd "no-such-folder" is not a folder in the project\. Use list_dir/,
+      );
+    }
+    expect(await callTool(tools, "task_list", {})).not.toContain("node -e");
   });
 
   it("sends text edits on notebooks to notebook_edit", async () => {

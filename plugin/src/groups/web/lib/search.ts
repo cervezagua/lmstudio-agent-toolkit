@@ -66,6 +66,37 @@ export interface DuckDuckGoDeps {
   now: () => number;
   sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
   request: (query: string, safeSearch: SafeSearch, signal?: AbortSignal) => Promise<{ status: number; html: string }>;
+  /** How long one request may take before it is given up on. */
+  timeoutMs: number;
+}
+
+/** Long enough for a slow answer, short enough that the searches queued behind it are not held up. */
+export const DUCKDUCKGO_TIMEOUT_MS = 15_000;
+
+/**
+ * One request, given up on after `timeoutMs`. Searches wait their turn in a queue that every chat
+ * shares, so a connection that stalls must not be allowed to hold all of them for the minutes fetch
+ * would wait by itself. Failures come back as ToolErrors, so `auto` can report them like any other.
+ */
+async function requestWithin(
+  request: DuckDuckGoDeps["request"],
+  query: string,
+  safeSearch: SafeSearch,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<{ status: number; html: string }> {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  const timedOut = new Promise<never>((_, reject) => {
+    timeout.addEventListener("abort", () => reject(timeout.reason), { once: true });
+  });
+  try {
+    // Raced as well as passed on: the wait ends on time even if the request ignores its signal.
+    return await Promise.race([request(query, safeSearch, signal ? AbortSignal.any([signal, timeout]) : timeout), timedOut]);
+  } catch (error: any) {
+    if (signal?.aborted || error instanceof ToolError) throw error; // the user cancelled, or it is already explained
+    if (timeout.aborted) throw new ToolError(`DuckDuckGo did not answer within ${Math.round(timeoutMs / 1000)} seconds.`);
+    throw new ToolError(`Could not reach DuckDuckGo (${error?.cause?.code ?? error?.cause?.message ?? error?.message ?? error}).`);
+  }
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -121,7 +152,12 @@ export function searchDuckDuckGo(
   deps: Partial<DuckDuckGoDeps> = {},
 ): Promise<SearchResult[]> {
   const { safeSearch = "moderate", signal } = options;
-  const { now, sleep: wait, request } = { now: Date.now, sleep, request: requestDuckDuckGo, ...deps };
+  const {
+    now,
+    sleep: wait,
+    request,
+    timeoutMs,
+  } = { now: Date.now, sleep, request: requestDuckDuckGo, timeoutMs: DUCKDUCKGO_TIMEOUT_MS, ...deps };
   const turn = duckDuckGoQueue.then(async () => {
     signal?.throwIfAborted();
     for (let attempt = 1; ; attempt++) {
@@ -129,7 +165,7 @@ export function searchDuckDuckGo(
       const early = duckDuckGoLastStart + DUCKDUCKGO_GAP_MS - now();
       if (early > 0) await wait(early, signal);
       duckDuckGoLastStart = now();
-      const { status, html } = await request(query, safeSearch, signal);
+      const { status, html } = await requestWithin(request, query, safeSearch, timeoutMs, signal);
       const results = parseDuckDuckGoHtml(html);
       if (results.length > 0 || (status === 200 && !/anomaly|captcha|challenge/i.test(html))) return results.slice(0, count);
       if (attempt === 2) {

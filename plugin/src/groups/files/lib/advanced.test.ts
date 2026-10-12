@@ -171,6 +171,32 @@ describe("TaskManager", () => {
     expect(taskState(await tasks.get(task.id))).not.toBe("running");
     await expect(tasks.get("nope")).rejects.toThrow(/No background task/);
   });
+
+  it("says so when the task cannot be started, and does not list it", async () => {
+    // A process that cannot start reports it through an "error" event. With no listener that event
+    // is thrown in the process itself, so this test would bring the whole test file down.
+    const tasks = new TaskManager(join(dir, "tasks"));
+    const missing = { file: "definitely-not-a-shell-xyz", args: (c: string) => [c] };
+    await expect(tasks.start(missing, "echo hi", dir)).rejects.toThrow(ToolError);
+    await expect(tasks.start(missing, "echo hi", dir)).rejects.toThrow(
+      /^The task could not be started: the shell "definitely-not-a-shell-xyz" was not found\. Pick another Shell/,
+    );
+    // The same for a folder that is not there: on every system that is a failure to start.
+    await expect(tasks.start(shell, "echo hi", join(dir, "no-such-folder"))).rejects.toThrow(
+      /^The task could not be started: the folder .*no-such-folder does not exist\.$/,
+    );
+
+    expect(await tasks.list()).toEqual([]);
+    expect((await readdir(join(dir, "tasks"))).filter(name => name.endsWith(".log"))).toEqual([]);
+    await new Promise(resolve => setTimeout(resolve, 100)); // room for a stray "error" event to surface
+  });
+
+  it("records the exit of a command that ends at once", async () => {
+    const tasks = new TaskManager(join(dir, "tasks"));
+    const task = await tasks.start(shell, "exit 3", dir);
+    for (let i = 0; i < 50 && (await tasks.get(task.id)).exitCode === null; i++) await new Promise(resolve => setTimeout(resolve, 100));
+    expect(await tasks.get(task.id)).toMatchObject({ exitCode: 3 });
+  });
 });
 
 describe("ShellSession", () => {
@@ -215,6 +241,46 @@ describe("ShellSession", () => {
     expect(result.timedOut).toBe(true);
     const after = await session.exec("echo alive", 20000);
     expect(after.stdout).toContain("alive");
+  }, 60000);
+
+  it("leaves nothing of a finished command on the shell", async () => {
+    // Each command used to leave an "exit" listener behind, holding on to that command's output.
+    const session = getSession(spec, dir);
+    for (let i = 0; i < 12; i++) expect((await session.exec(`echo run${i}`, 20000)).stdout).toContain(`run${i}`);
+    const child = (session as any).child;
+    expect(child.listenerCount("exit")).toBe(1); // the session's own
+    expect(child.listenerCount("error")).toBe(1);
+    expect(child.stdout.listenerCount("data")).toBe(0);
+    expect(child.stderr.listenerCount("data")).toBe(0);
+  }, 60000);
+
+  it("keeps the shell that replaced a killed one", async () => {
+    // The killed shell exits a moment later; that must not make the session forget its new one.
+    const session = getSession(spec, dir);
+    const hang = spec.kind === "powershell" ? "Start-Sleep -Seconds 30" : "sleep 30";
+    expect((await session.exec(hang, 1000)).timedOut).toBe(true);
+    const setVar = spec.kind === "powershell" ? "$env:LMS_KEPT='yes'" : "export LMS_KEPT=yes";
+    const readVar = spec.kind === "powershell" ? "Write-Output $env:LMS_KEPT" : "echo $LMS_KEPT";
+    await session.exec(setVar, 20000); // starts the replacement straight away
+    await new Promise(resolve => setTimeout(resolve, 1500)); // by now the killed shell has exited
+    expect(session.isRunning).toBe(true);
+    expect((await session.exec(readVar, 20000)).stdout.trim()).toBe("yes");
+  }, 60000);
+
+  it("says at once when the shell is not installed", async () => {
+    const missing: ShellSpec = { file: "definitely-not-a-shell-xyz", replArgs: [], kind: "posix" };
+    const session = getSession(missing, dir);
+    const started = Date.now();
+    try {
+      // Used to wait out the whole timeout and then report that the command had timed out.
+      await expect(session.exec("echo hi", 30000)).rejects.toThrow(
+        /^The shell could not be started: "definitely-not-a-shell-xyz" was not found on PATH\. Pick another Shell/,
+      );
+      await expect(session.exec("echo hi", 30000)).rejects.toThrow(ToolError);
+      expect(Date.now() - started).toBeLessThan(10000);
+    } finally {
+      resetSession(missing, dir);
+    }
   }, 60000);
 });
 

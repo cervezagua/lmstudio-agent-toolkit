@@ -1,7 +1,7 @@
 import { basename, relative } from "path";
 import { ToolError } from "../../../shared/errors";
 import { resolveInside } from "../../../shared/paths";
-import { runProcess } from "../../../shared/process";
+import { commandEnv, runProcess } from "../../../shared/process";
 import { truncate } from "../../../shared/truncate";
 
 const NON_INTERACTIVE_ENV = {
@@ -36,7 +36,9 @@ export async function runCli(executable: string, args: string[], options: CliOpt
       timeoutMs: options.timeoutMs ?? 120_000,
       signal: options.signal,
       stdin: options.stdin,
-      env: { ...process.env, ...NON_INTERACTIVE_ENV },
+      // commandEnv, not process.env: git starts other programs itself (hooks, git-lfs, credential
+      // helpers) and they need the same PATH a terminal has.
+      env: commandEnv(NON_INTERACTIVE_ENV),
     });
   } catch (error: any) {
     if (error?.code === "ENOENT") throw new ToolError(`"${executable}" is not installed or not on PATH.`);

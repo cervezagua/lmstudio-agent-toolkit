@@ -8,19 +8,22 @@ import {
   listSkills,
   partitionSkills,
   readSkill,
+  readSkillFile,
   renderSkillList,
   saveSkill,
 } from "./lib/skills";
 import { lmStudioHome, renderChatMatches, searchChats } from "./lib/chatSearch";
-import { scanForInjection } from "../../shared/injectionScan";
+import { locateFinding, scanForInjection } from "../../shared/injectionScan";
 import { readMode, writeMode } from "../../shared/mode";
 import { defaultMemoryDirectory, MEMORY_TYPES, MemoryStore, renderIndex } from "./lib/memoryStore";
 import { completionNudge, readTodos, renderTodos, TODO_STATUSES, writeTodos } from "./lib/todos";
 import { safe, ToolError } from "../../shared/errors";
+import { truncate } from "../../shared/truncate";
 
 export async function toolsProvider(ctl: ToolsProviderController) {
   const globalConfig = ctl.getGlobalPluginConfig(globalConfigSchematics);
   const config = ctl.getPluginConfig(configSchematics);
+  const maxOutputChars = config.get("maxOutputChars");
   const store = new MemoryStore(defaultMemoryDirectory(globalConfig.get("memoryDirectory")));
   const skillsDirectory = defaultSkillsDirectory(globalConfig.get("skillsDirectory"));
   const workingDirectory = ctl.getWorkingDirectory();
@@ -196,16 +199,34 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       }),
       tool({
         name: "skill_read",
-        description: "Load a skill's full instructions by name, and follow them for the task at hand.",
-        parameters: { name: z.string() },
-        implementation: safe(async ({ name }) => {
+        description: text`
+          Load a skill's full instructions by name, and follow them for the task at hand. A skill can
+          come with other files (references, templates, scripts): pass file to read one of those.
+        `,
+        parameters: { name: z.string(), file: z.string().optional() },
+        implementation: safe(async ({ name, file }) => {
+          // The skill's own instructions are checked either way: a skill that was held back does not
+          // get to hand out its other files.
           const { skill, content } = await readSkill(skillsDirectory, name);
           if (scan) {
             const [finding] = scanForInjection(content);
             if (finding) throw new ToolError(flaggedSkillMessage({ skill, finding }));
           }
+          if (file?.trim()) {
+            const extra = await readSkillFile(skillsDirectory, name, file.trim());
+            if (scan) {
+              const [finding] = scanForInjection(extra.content);
+              if (finding) {
+                throw new ToolError(
+                  `${extra.shown} in the skill "${skill.name}" was not loaded: ${locateFinding(finding)}. Tell the user; they can fix the file or turn off Scan Loaded Files.`,
+                );
+              }
+            }
+            return `# Skill: ${skill.name}, file ${extra.shown}\n\n${truncate(extra.content, maxOutputChars)}`;
+          }
+          // read_file cannot open these: skills live outside the project folder.
           const extras = skill.extraFiles.length
-            ? `\n\n[files in this skill's folder, read them with read_file if needed: ${skill.extraFiles.join(", ")}]`
+            ? `\n\n[other files in this skill, read one by calling skill_read again with file: ${skill.extraFiles.join(", ")}]`
             : "";
           return `# Skill: ${skill.name}\n(from ${skill.file})\n\n${content}${extras}`;
         }),

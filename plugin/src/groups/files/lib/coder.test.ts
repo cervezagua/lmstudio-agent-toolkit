@@ -79,6 +79,33 @@ describe("search", () => {
     expect(result).toMatchObject({ truncated: true });
     expect(result.matches).toHaveLength(1);
   });
+
+  it("never reaches outside the folder being searched, whatever the glob says", async () => {
+    // fast-glob follows "../" and absolute patterns, which made a glob a way out of the project folder.
+    const inner = join(root, "src");
+    const slashes = (path: string) => path.replace(/\\/g, "/");
+    await writeFile(join(root, "outside.txt"), "omega outside\n");
+    await writeFile(join(inner, "inside.txt"), "omega inside\n");
+    const grep = (glob: string) => grepFiles({ root: inner, searchPath: inner, pattern: "omega", glob, ignoreCase: false, maxResults: 10 });
+
+    for (const pattern of ["../*.txt", "../../**/*.txt", "sub/../../*.txt", "..\\*.txt", slashes(join(root, "*.txt"))]) {
+      await expect(globFiles({ cwd: inner, pattern, limit: 10 })).rejects.toThrow(/^pattern must stay inside the project folder/);
+      await expect(grep(pattern)).rejects.toThrow(/^glob must stay inside the project folder/);
+    }
+
+    // A ".." tucked inside braces is not a path segment, so that check lets it through. Whatever
+    // fast-glob makes of such a pattern, nothing outside comes back: the results are filtered too.
+    for (const pattern of ["{..,.}/*.txt", "{../,}*.txt", "sub/{../..,.}/*.txt"]) {
+      const found = await globFiles({ cwd: inner, pattern, limit: 10 });
+      expect(found.files.map(slashes).filter(file => !file.startsWith(`${slashes(inner)}/`))).toEqual([]);
+      expect((await grep(pattern)).matches.join("\n")).not.toContain("omega outside");
+    }
+
+    // Ordinary patterns are untouched, dots in names and braces included.
+    expect((await globFiles({ cwd: inner, pattern: "**/..hidden*", limit: 10 })).total).toBe(0);
+    expect((await globFiles({ cwd: inner, pattern: "*.{txt,md}", limit: 10 })).files.map(slashes)).toEqual([slashes(join(inner, "inside.txt"))]);
+    expect((await grep("*.txt")).matches).toEqual(["inside.txt:1: omega inside"]);
+  });
 });
 
 describe("grep output modes", () => {

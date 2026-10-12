@@ -1,6 +1,7 @@
 import fg from "fast-glob";
 import { readFile, stat } from "fs/promises";
-import { displayPath } from "../../../shared/paths";
+import { ToolError } from "../../../shared/errors";
+import { displayPath, isInside } from "../../../shared/paths";
 
 export const DEFAULT_IGNORES = [
   "**/node_modules/**",
@@ -23,9 +24,27 @@ export interface GlobOptions {
   includeHidden?: boolean;
 }
 
-/** Matches files under `cwd`, newest-modified first. */
+/**
+ * Refuses a glob that points outside the folder being searched. fast-glob follows a leading "../"
+ * and absolute patterns, so without this a pattern is a way out of the project folder that the path
+ * checks never see. This gives the model a clear answer for the ways that were found to work. The
+ * results are filtered as well (see `globFiles` and `grepFiles`), so a pattern that finds another way
+ * to say the same thing still gets nothing from outside.
+ */
+export function assertPatternStaysInside(pattern: string, label: string): void {
+  const normalized = pattern.replace(/\\/g, "/");
+  const absolute = normalized.startsWith("/") || /^[A-Za-z]:/.test(normalized);
+  if (absolute || normalized.split("/").includes("..")) {
+    throw new ToolError(
+      `${label} must stay inside the project folder: no ".." and no absolute paths. To search a sub-folder, pass it as path.`,
+    );
+  }
+}
+
+/** Matches files under `cwd`, newest-modified first. Never returns a file outside `cwd`. */
 export async function globFiles({ cwd, pattern, limit, includeHidden = true }: GlobOptions) {
-  const entries = await fg(pattern, {
+  assertPatternStaysInside(pattern, "pattern");
+  const found = await fg(pattern, {
     cwd,
     absolute: true,
     dot: includeHidden,
@@ -35,6 +54,7 @@ export async function globFiles({ cwd, pattern, limit, includeHidden = true }: G
     stats: true,
     followSymbolicLinks: false,
   });
+  const entries = found.filter(entry => isInside(cwd, entry.path));
   entries.sort((a, b) => (b.stats?.mtimeMs ?? 0) - (a.stats?.mtimeMs ?? 0));
   return { files: entries.slice(0, limit).map(e => e.path), total: entries.length };
 }
@@ -102,6 +122,7 @@ export interface GrepResult {
 /** Pure-JS recursive regex search, used when ripgrep is not installed. */
 export async function grepFiles(options: GrepOptions): Promise<GrepResult> {
   const regex = new RegExp(options.pattern, options.ignoreCase ? "i" : "");
+  if (options.glob) assertPatternStaysInside(options.glob, "glob");
   const searchStat = await stat(options.searchPath);
   const files = searchStat.isFile()
     ? [options.searchPath]
@@ -115,7 +136,10 @@ export async function grepFiles(options: GrepOptions): Promise<GrepResult> {
           suppressErrors: true,
           followSymbolicLinks: false,
         })
-      ).sort();
+      )
+        // The contents of these files are about to be returned, so none may lie outside the search.
+        .filter(file => isInside(options.searchPath, file))
+        .sort();
 
   const mode = options.outputMode ?? "content";
   const context = Math.max(0, Math.min(options.context ?? 0, 10));

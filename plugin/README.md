@@ -61,7 +61,7 @@ Every new chat starts with today's date, your `AGENTS.md` (or `CLAUDE.md`), your
 | `memory_save` · `memory_read` · `memory_search` · `memory_list` · `memory_delete` | Facts that last between chats. |
 | `save_session_summary` | Saves where a long chat got to, so a new chat can pick it up. |
 | `todo_write` · `todo_read` | A todo list for work with several steps. |
-| `skill_list` · `skill_read` | Your skills: written instructions for kinds of task. |
+| `skill_list` · `skill_read` | Your skills: written instructions for kinds of task. `skill_read` also opens the other files in a skill's folder. |
 | `skill_save` | Lets the model save a new skill. Off by default. |
 | `chat_search` | Searches your earlier LM Studio chats. Off by default. |
 | `enter_plan_mode` · `exit_plan_mode` | Plan first: the tools that change files disappear until the plan is presented. |

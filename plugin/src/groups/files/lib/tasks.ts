@@ -123,6 +123,7 @@ export class TaskManager {
     const id = `t${Date.now().toString(36)}${Math.floor(Math.random() * 1296).toString(36).padStart(2, "0")}`;
     const logFile = join(this.directory, `${id}.log`);
     const handle = await open(logFile, "a");
+    let started = false;
     try {
       const child = spawn(shell.file, shell.args(command), {
         cwd,
@@ -131,6 +132,31 @@ export class TaskManager {
         detached: process.platform !== "win32",
         stdio: ["ignore", handle.fd, handle.fd],
       });
+      // Listened for from the start, so a command that ends at once is still recorded as ended.
+      const exited = new Promise<{ code: number; at: string }>(resolve => {
+        child.once("exit", code => resolve({ code: code ?? -1, at: new Date().toISOString() }));
+      });
+      // A process that cannot be started (no such shell, no such folder) says so with an "error"
+      // event, not an exception. With nothing listening, Node throws that event in the plugin's own
+      // process; and the task would have been listed as started when it never ran.
+      await new Promise<void>((resolve, reject) => {
+        child.once("spawn", () => resolve());
+        child.once("error", reject);
+      }).catch(async (error: any) => {
+        // "Not found" is reported for a missing folder as well as for a missing program.
+        const folderExists = await stat(cwd).then(
+          info => info.isDirectory(),
+          () => false,
+        );
+        const why = !folderExists
+          ? `the folder ${cwd} does not exist`
+          : error?.code === "ENOENT"
+            ? `the shell "${shell.file}" was not found. Pick another Shell in the plugin's settings`
+            : String(error?.message ?? error);
+        throw new ToolError(`The task could not be started: ${why}.`);
+      });
+      child.on("error", () => {}); // a later failure, such as a signal that cannot be delivered, is not fatal
+      started = true;
       const task: TaskRecord = {
         id,
         name: name?.trim() || command.slice(0, 60),
@@ -143,14 +169,15 @@ export class TaskManager {
         logFile,
       };
       await this.withIndexLock(async () => this.writeIndex([...(await this.readIndex()), task]));
-      child.on("exit", code => {
-        // Nothing awaits this handler, so a failure here must not become an unhandled rejection.
-        this.update(id, { exitCode: code ?? -1, endedAt: new Date().toISOString() }).catch(() => {});
-      });
+      // Nothing awaits this, so a failure here must not become an unhandled rejection.
+      void exited.then(({ code, at }) => this.update(id, { exitCode: code, endedAt: at })).catch(() => {});
       child.unref();
       return task;
     } finally {
       await handle.close();
+      // Nothing ran, so there is no output to keep. Only once the handle is closed: Windows will not
+      // remove a file that is still open.
+      if (!started) await rm(logFile, { force: true }).catch(() => {});
     }
   }
 

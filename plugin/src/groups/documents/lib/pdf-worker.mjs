@@ -10,6 +10,11 @@ import { join } from "node:path";
 
 const [mode, file, ...rest] = process.argv.slice(2);
 
+// Exit only once the line has been written. A pipe is written asynchronously on macOS and Linux, so
+// exiting straight after console.log cut off everything past the pipe's buffer (about 64 KB), and a
+// long document came back as half a line of JSON.
+const finish = result => process.stdout.write(`${JSON.stringify(result)}\n`, () => process.exit(0));
+
 function parsePageRange(text, totalPages) {
   if (!text || !text.trim()) return Array.from({ length: totalPages }, (_, i) => i + 1);
   const pages = new Set();
@@ -33,19 +38,23 @@ async function readBytes() {
 }
 
 try {
-  const { getDocumentProxy, extractText, renderPageAsImage } = await import("unpdf");
+  const unpdf = await import("unpdf");
+  finish(mode === "extract" ? await extract(unpdf) : await render(unpdf));
+} catch (error) {
+  finish({ ok: false, error: String(error?.message ?? error) });
+}
 
-  if (mode === "extract") {
-    const [range] = rest;
-    const document = await getDocumentProxy(await readBytes());
-    const { text, totalPages } = await extractText(document, { mergePages: false });
-    const selected = parsePageRange(range, totalPages);
-    const pages = selected.map(page => ({ page, text: (text[page - 1] ?? "").trim() }));
-    const characters = pages.reduce((sum, p) => sum + p.text.length, 0);
-    console.log(JSON.stringify({ ok: true, totalPages, pages, looksScanned: characters < 50 * pages.length }));
-    process.exit(0);
-  }
+async function extract({ getDocumentProxy, extractText }) {
+  const [range] = rest;
+  const document = await getDocumentProxy(await readBytes());
+  const { text, totalPages } = await extractText(document, { mergePages: false });
+  const selected = parsePageRange(range, totalPages);
+  const pages = selected.map(page => ({ page, text: (text[page - 1] ?? "").trim() }));
+  const characters = pages.reduce((sum, p) => sum + p.text.length, 0);
+  return { ok: true, totalPages, pages, looksScanned: characters < 50 * pages.length };
+}
 
+async function render({ getDocumentProxy, renderPageAsImage }) {
   const [outputDirectory, range, scaleText, maxPagesText] = rest;
   const document = await getDocumentProxy(await readBytes());
   const totalPages = document.numPages;
@@ -66,7 +75,5 @@ try {
     await writeFile(target, Buffer.from(image));
     rendered.push({ page, file: target });
   }
-  console.log(JSON.stringify({ ok: true, totalPages, rendered }));
-} catch (error) {
-  console.log(JSON.stringify({ ok: false, error: String(error?.message ?? error) }));
+  return { ok: true, totalPages, rendered };
 }

@@ -107,6 +107,17 @@ beforeAll(async () => {
         return send(200, "text/plain", "ABCDEFGHIJ".repeat(60)); // 600 characters
       case "/doc.pdf":
         return send(200, "application/pdf", MINIMAL_PDF);
+      case "/big.pdf": {
+        // 6 MB with no Content-Length, so only reading it shows how big it is.
+        res.writeHead(200, { "Content-Type": "application/pdf" });
+        const megabyte = Buffer.alloc(1024 * 1024, 0x20);
+        for (let i = 0; i < 6; i++) res.write(megabyte);
+        return res.end();
+      }
+      case "/declared-big.pdf":
+        // Says it is 6 MB up front; the body is never asked for.
+        res.writeHead(200, { "Content-Type": "application/pdf", "Content-Length": String(6 * 1024 * 1024) });
+        return res.end(Buffer.alloc(1024, 0x20));
       case "/form":
         return send(200, "text/html", FORM_PAGE);
       case "/next":
@@ -199,6 +210,7 @@ function fakeDuckDuckGo(answers: Array<"ok" | "refused"> = []) {
       state.asked.push(safeSearch);
       return (answers.shift() ?? "ok") === "ok" ? DDG_OK : DDG_REFUSED;
     },
+    timeoutMs: 15_000,
   };
   const search = (query = "q", safeSearch?: SafeSearch) => searchDuckDuckGo(query, 5, { safeSearch }, deps);
   return { state, deps, search };
@@ -256,6 +268,47 @@ describe("DuckDuckGo pacing", () => {
     state.t += 59_000; // two minutes after the refusal
     expect(await search()).toHaveLength(1);
     expect(state.starts).toHaveLength(3);
+  });
+
+  it("gives up on a request that stalls, so the searches queued behind it are not held up", async () => {
+    // Every chat shares the one queue. A request with no time limit of its own held all of them for
+    // as long as fetch was willing to wait, which is minutes.
+    const { deps } = fakeDuckDuckGo();
+    let asked = 0;
+    const stalling: DuckDuckGoDeps = {
+      ...deps,
+      timeoutMs: 30,
+      // The first request never answers, and does not even watch its signal.
+      request: (query, safeSearch, signal) => (asked++ === 0 ? new Promise(() => {}) : deps.request(query, safeSearch, signal)),
+    };
+    const first = searchDuckDuckGo("stalls", 5, {}, stalling);
+    const second = searchDuckDuckGo("next in line", 5, {}, stalling);
+    const failure: Error = await first.catch(error => error);
+    expect(failure).toBeInstanceOf(ToolError);
+    expect(failure.message).toMatch(/^DuckDuckGo did not answer within \d+ seconds\.$/);
+    expect(await second).toHaveLength(1);
+  });
+
+  it("reports a connection failure as something the model can act on", async () => {
+    const { deps } = fakeDuckDuckGo();
+    const offline: DuckDuckGoDeps = {
+      ...deps,
+      request: async () => {
+        throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ENOTFOUND" } });
+      },
+    };
+    await expect(searchDuckDuckGo("q", 5, {}, offline)).rejects.toThrow(ToolError);
+    await expect(searchDuckDuckGo("q", 5, {}, offline)).rejects.toThrow(/^Could not reach DuckDuckGo \(ENOTFOUND\)\.$/);
+    // As a ToolError it is part of what "auto" reports, not a bare exception that fails the tool call.
+    const viaAuto = runSearch({ backend: "auto", query: "q", count: 5, searxngUrl: "", braveApiKey: "" }, (q, c, o) =>
+      searchDuckDuckGo(q, c, o, offline),
+    );
+    await expect(viaAuto).rejects.toThrow(/^No search backend worked\..* DuckDuckGo: Could not reach DuckDuckGo \(ENOTFOUND\)\.$/);
+
+    // Cancelling is not a failure to explain: it is passed on as it is.
+    const cancelled = new AbortController();
+    cancelled.abort();
+    await expect(searchDuckDuckGo("q", 5, { signal: cancelled.signal }, deps)).rejects.toMatchObject({ name: "AbortError" });
   });
 
   it("sends the safe-search level as kp", async () => {
@@ -400,6 +453,13 @@ describe("page fetching", () => {
     expect(page.markdown).toContain("Quarterly report text");
     expect(page.markdown).toContain("--- page 1 of 1 ---");
   });
+
+  it("refuses a PDF over 5 MB as soon as that is known, not after downloading all of it", async () => {
+    // Without a Content-Length the size only shows while reading, and reading stops at the limit.
+    await expect(fetchPage(`${baseUrl}/big.pdf`)).rejects.toThrow(/^The PDF at .*\/big\.pdf is larger than 5 MB\.$/);
+    // With one, the body is not read at all.
+    await expect(fetchPage(`${baseUrl}/declared-big.pdf`)).rejects.toThrow(/^The PDF at .*\/declared-big\.pdf is larger than 5 MB\.$/);
+  }, 30000);
 
   it("retries retryable failures and gives up with a clear error", async () => {
     requestCounts.clear();
