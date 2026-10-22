@@ -217,7 +217,9 @@ describe("coder-tools toolsProvider", () => {
       // With no Project Folder the tools work in the chat's folder, where the list is kept. A model
       // that could write it could make any file "attached", so no spelling of it may be written.
       const scratch = await toolsProvider(fakeController({ config: { ...baseConfig, projectFolder: "" }, workingDirectory: work }));
-      const spellings = [".agent-toolkit/attachments.json", ".AGENT-TOOLKIT/Attachments.JSON", ".agent-toolkit/other.json", ".agent-toolkit"];
+      const spellings = [".agent-toolkit/attachments.json", ".agent-toolkit/other.json", ".agent-toolkit"];
+      // Another case is the same file only where the filesystem ignores case; on Linux it is a different, harmless file.
+      if (process.platform === "win32" || process.platform === "darwin") spellings.push(".AGENT-TOOLKIT/Attachments.JSON");
       if (process.platform === "win32") {
         // A stream of the file, a name Windows trims, and the folder's 8.3 short name.
         spellings.push(".agent-toolkit/attachments.json::$DATA", ".agent-toolkit/attachments.json.", ".agent-toolkit./attachments.json");
