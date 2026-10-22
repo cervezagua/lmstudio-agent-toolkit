@@ -7,7 +7,8 @@ import { callTool, fakeController } from "../../shared/testing/fake-controller";
 import { buildContextBlock, loadInstructionFiles } from "./lib/instructions";
 import { MemoryStore, parseMemory, serializeMemory, slugify } from "./lib/memoryStore";
 import { readTodos, renderTodos } from "./lib/todos";
-import { preprocess } from "./promptPreprocessor";
+// The Memory group's block reaches a message through the plugin's one prompt preprocessor.
+import { promptPreprocessor as preprocess } from "../../index";
 import { toolsProvider } from "./toolsProvider";
 
 let base: string;
@@ -29,6 +30,8 @@ afterEach(async () => {
 });
 
 const chatConfig = () => ({
+  enableMemory: true,
+  readAttachments: false,
   projectFolder: projectDir,
   maxOutputChars: 20000,
   instructionFiles: ["AGENTS.md", "CLAUDE.md", "../outside.md"],

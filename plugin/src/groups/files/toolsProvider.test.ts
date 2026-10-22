@@ -2,7 +2,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { basename, join } from "path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { readAttachments, recordAttachments } from "../../shared/attachments";
+import { execFileSync } from "child_process";
+import { readAttachments, recordAttachments, setUserFilesDirectory } from "../../shared/attachments";
 import { callTool, fakeController } from "../../shared/testing/fake-controller";
 import { toolsProvider } from "./toolsProvider";
 
@@ -197,24 +198,49 @@ describe("coder-tools toolsProvider", () => {
 
   it("reads a text file the user attached, and never changes the list of attachments", async () => {
     const store = await mkdtemp(join(tmpdir(), "coder-tools-user-files-"));
+    setUserFilesDirectory(store); // stands in for LM Studio's own folder
     try {
       await writeFile(join(store, "1792647278075 - 9.txt"), "attached notes\n");
-      await recordAttachments(work, [{ name: "notes.txt", path: join(store, "1792647278075 - 9.txt"), image: false }]);
+      await writeFile(join(store, "1792647278075 - 10.pdf"), Buffer.from([0x25, 0x50, 0x44, 0x46, 0, 1, 2]));
+      await recordAttachments(work, [
+        { name: "notes.txt", path: join(store, "1792647278075 - 9.txt"), image: false },
+        { name: "report.pdf", path: join(store, "1792647278075 - 10.pdf"), image: false },
+      ]);
       expect(await callTool(tools, "read_file", { path: "notes.txt" })).toBe("1\tattached notes");
+      // A PDF is pointed at the tool that reads it, and is shown by its own name.
+      expect(await callTool(tools, "read_file", { path: "report.pdf" })).toBe(
+        'Error: "report.pdf" looks like a binary file. For a PDF, use read_document_text (Documents group).',
+      );
       // Read only: the attachment is not in the project, so it cannot be edited or overwritten.
       expect(await callTool(tools, "edit_file", { path: "notes.txt", old_string: "attached", new_string: "x" })).toMatch(/does not exist/);
 
       // With no Project Folder the tools work in the chat's folder, where the list is kept. A model
-      // that could write it could make any file "attached".
+      // that could write it could make any file "attached", so no spelling of it may be written.
       const scratch = await toolsProvider(fakeController({ config: { ...baseConfig, projectFolder: "" }, workingDirectory: work }));
-      for (const [name, params] of [
-        ["write_file", { path: ".agent-toolkit/attachments.json", content: "[]" }],
-        ["insert_lines", { path: ".agent-toolkit/attachments.json", after_line: 0, content: "[]" }],
-      ] as const) {
-        expect(await callTool(scratch, name, params)).toMatch(/is managed by the toolkit and cannot be changed by a tool/);
+      const spellings = [".agent-toolkit/attachments.json", ".AGENT-TOOLKIT/Attachments.JSON", ".agent-toolkit/other.json", ".agent-toolkit"];
+      if (process.platform === "win32") {
+        // A stream of the file, a name Windows trims, and the folder's 8.3 short name.
+        spellings.push(".agent-toolkit/attachments.json::$DATA", ".agent-toolkit/attachments.json.", ".agent-toolkit./attachments.json");
+        const folder = join(work, ".agent-toolkit").replace(/'/g, "''");
+        const short = execFileSync("powershell", ["-NoProfile", "-Command", `(New-Object -ComObject Scripting.FileSystemObject).GetFolder('${folder}').ShortPath`], {
+          encoding: "utf-8",
+        }).trim();
+        // Only where the volume makes short names, as system drives do by default.
+        if (short && !/\.agent-toolkit$/i.test(short)) spellings.push(`${basename(short)}/attachments.json`);
       }
-      expect(await readAttachments(work)).toHaveLength(1);
+      for (const path of spellings) {
+        for (const [name, params] of [
+          ["write_file", { path, content: '[{"name":"k","path":"C:/x","image":false}]' }],
+          ["insert_lines", { path, after_line: 0, content: "[]" }],
+        ] as const) {
+          expect(await callTool(scratch, name, params), `${name} ${path}`).toMatch(
+            /^Error: (.* is managed by the toolkit and cannot be changed by a tool|Path .* (contains ":"|has a name ending in a dot or a space))/,
+          );
+        }
+      }
+      expect(await readAttachments(work)).toHaveLength(2);
     } finally {
+      setUserFilesDirectory(null);
       await rm(store, { recursive: true, force: true }).catch(() => {});
     }
   });

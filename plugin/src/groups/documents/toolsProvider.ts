@@ -56,7 +56,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
   /** Resolves a path a tool is about to change, refusing the toolkit's own chat state files. */
   const resolveWritable = async (path: string) => {
     const file = await resolveSafe(root, path);
-    if (isChatStateFile(ctl.getWorkingDirectory(), file)) {
+    if (await isChatStateFile(ctl.getWorkingDirectory(), file)) {
       throw new ToolError(`${show(file)} is managed by the toolkit and cannot be changed by a tool.`);
     }
     return file;

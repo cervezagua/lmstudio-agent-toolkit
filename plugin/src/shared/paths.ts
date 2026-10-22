@@ -10,8 +10,30 @@ export function isInside(root: string, target: string): boolean {
   return !isAbsolute(rel) && rel !== ".." && !rel.startsWith(".." + sep);
 }
 
+/**
+ * On Windows one file has several spellings: "name::$DATA" (an alternate data stream, here the main
+ * one), "name." and "name " (the trailing dot or space is dropped), and an 8.3 short name such as
+ * "AGENT-~1". A check that compares paths as text, like the one that protects the toolkit's own
+ * files, is blind to all of them. The first three are refused outright, as no one names a file that
+ * way on purpose; short names are expanded by comparing real paths (see `realpathOfNearestExisting`).
+ */
+function assertPlainWindowsPath(path: string): void {
+  if (process.platform !== "win32") return;
+  const segments = path.split(/[\\/]+/).filter(Boolean);
+  segments.forEach((segment, index) => {
+    const drive = index === 0 && /^[A-Za-z]:$/.test(segment);
+    if (!drive && segment.includes(":")) {
+      throw new ToolError(`Path "${path}" contains ":", which on Windows names a hidden stream of a file, not a file.`);
+    }
+    if (segment !== "." && segment !== ".." && /[. ]$/.test(segment)) {
+      throw new ToolError(`Path "${path}" has a name ending in a dot or a space, which Windows silently drops.`);
+    }
+  });
+}
+
 /** Lexically resolves `path` against `root`, throwing if the result escapes `root`. */
 export function resolveInside(root: string, path: string): string {
+  assertPlainWindowsPath(path);
   const rootAbs = resolve(root);
   const target = resolve(rootAbs, path);
   if (!isInside(rootAbs, target)) {
@@ -20,8 +42,11 @@ export function resolveInside(root: string, path: string): string {
   return target;
 }
 
-/** Real path of `path`, or of its nearest existing ancestor joined with the missing tail. */
-async function realpathOfNearestExisting(path: string): Promise<string> {
+/**
+ * Real path of `path`, or of its nearest existing ancestor joined with the missing tail. Links and
+ * junctions are followed, and on Windows 8.3 short names are expanded to the long ones.
+ */
+export async function realpathOfNearestExisting(path: string): Promise<string> {
   try {
     return await realpath(path);
   } catch (error: any) {

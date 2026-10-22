@@ -1,4 +1,4 @@
-import { type ChatMessage, type PromptPreprocessorController } from "@lmstudio/sdk";
+import { type PromptPreprocessorController } from "@lmstudio/sdk";
 import { configSchematics, globalConfigSchematics } from "../../config";
 import { buildContextBlock, loadInstructionFiles } from "./lib/instructions";
 import { defaultMemoryDirectory, INDEX_FILE, MemoryStore } from "./lib/memoryStore";
@@ -6,24 +6,14 @@ import { gitSnapshot } from "./lib/gitSnapshot";
 import { defaultSkillsDirectory, listSkills, partitionSkills, renderSkillList } from "./lib/skills";
 import { describeFinding, locateFinding, scanForInjection } from "../../shared/injectionScan";
 import { PLANNING_NOTE, readMode } from "../../shared/mode";
-import { composeMessage } from "../../shared/attachments";
 import { describeRedaction, redactSecrets } from "../../shared/redact";
 import { projectRoot } from "../../shared/projectFolder";
 
 /**
- * On the first user message of a chat, prepends project instructions (AGENTS.md etc.) and the
- * saved-memory index. Later messages pass through untouched, so the context is added only once.
- */
-export async function preprocess(ctl: PromptPreprocessorController, userMessage: ChatMessage) {
-  const block = await memoryContext(ctl);
-  if (block) userMessage.replaceText(composeMessage([block], userMessage.getText()));
-  return userMessage;
-}
-
-/**
- * What the Memory group adds to a message, or null: the whole context block on the first message of
- * a chat, and on later ones only a reminder while planning mode is on. The caller puts it in front of
- * the user's words (see `composeMessage`), together with anything else the plugin adds.
+ * What the Memory group adds to a message, or null. On the first user message of a chat: project
+ * instructions (AGENTS.md etc.), the saved-memory index, skills and the git snapshot, so the context
+ * is added only once. On later ones only a reminder while planning mode is on. The plugin's prompt
+ * preprocessor (src/index.ts) puts it in front of the user's words, with anything else it adds.
  */
 export async function memoryContext(ctl: PromptPreprocessorController): Promise<string | null> {
   const history = await ctl.pullHistory();

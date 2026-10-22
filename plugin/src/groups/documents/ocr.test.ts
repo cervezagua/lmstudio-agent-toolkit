@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { recordAttachments } from "../../shared/attachments";
+import { recordAttachments, setUserFilesDirectory } from "../../shared/attachments";
 import { callTool, fakeController } from "../../shared/testing/fake-controller";
 import { extractPdfText, parsePageRange, renderPdfPages, workerCandidates } from "./lib/pdf";
 import { DEFAULT_OCR_PROMPT, ocrImageFile, pickVisionModel } from "./lib/vision";
@@ -213,8 +213,12 @@ describe("ocr-tools toolsProvider", () => {
       await writeFile(join(store, "1792647278075 - 72.pdf"), makePdf(["Attached invoice 77"]));
       await writeFile(join(store, "1792647278075 - 73.pdf"), makePdf(["Someone else's file"]));
       await recordAttachments(work, [{ name: "main.pdf", path: join(store, "1792647278075 - 72.pdf"), image: false }]);
+      setUserFilesDirectory(store); // stands in for LM Studio's own folder
     });
-    afterEach(() => rm(store, { recursive: true, force: true }).catch(() => {}));
+    afterEach(async () => {
+      setUserFilesDirectory(null);
+      await rm(store, { recursive: true, force: true }).catch(() => {});
+    });
 
     it("is read by the name it was attached under, or the name LM Studio stored it as", async () => {
       const tools = await provider();

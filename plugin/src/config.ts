@@ -88,7 +88,7 @@ export function makeConfigSchematics(choices?: ModelChoices) {
       displayName: "Read Attached Files",
       subtitle:
         "Put the text of a PDF, Word or text file you attach to a message into that message, so the model can work with it. " +
-        "LM Studio's RAG plugin does the same; with both on, whichever runs first reads the file.",
+        "LM Studio's RAG plugin does this too: use one of the two in a chat, not both.",
     },
     true,
   )
@@ -101,7 +101,7 @@ export function makeConfigSchematics(choices?: ModelChoices) {
       max: 1000000,
       displayName: "Max Attachment Characters",
       subtitle:
-        "How much of attached files' text goes into a message. Never more than about 40% of the loaded model's context; " +
+        "How much of attached files' text goes into a message. Never more than half of what the chat's model has left; " +
         "the model is told how to read the rest.",
       dependencies: onlyWhen("readAttachments"),
     },

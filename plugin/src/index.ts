@@ -5,6 +5,16 @@ import { listModelChoices } from "./shared/models";
 import { memoryContext } from "./groups/memory/promptPreprocessor";
 import { toolsProvider } from "./toolsProvider";
 
+/** About how much text the chat holds already, so attached files leave room for the rest. */
+async function historyChars(ctl: PromptPreprocessorController): Promise<number> {
+  try {
+    const history = await ctl.pullHistory();
+    return history.getMessagesArray().reduce((sum, message) => sum + message.getText().length, 0);
+  } catch {
+    return 0;
+  }
+}
+
 /**
  * Everything the plugin adds to a message, put in front of the user's own words with a clear line
  * between them: the Memory group's context block, and the text of any file the user attached.
@@ -19,8 +29,9 @@ export async function promptPreprocessor(ctl: PromptPreprocessorController, user
   }
   if (config.get("readAttachments")) {
     try {
-      const attached = await attachmentContext(ctl, userMessage as any, {
+      const attached = await attachmentContext(ctl as any, userMessage as any, {
         maxChars: config.get("maxAttachmentChars"),
+        usedChars: (await historyChars(ctl)) + added.reduce((sum, block) => sum + block.length, 0),
         documentTools: config.get("enableDocuments"),
         fileTools: config.get("enableFiles"),
       });

@@ -72,7 +72,9 @@ export async function toolsProvider(ctl: ToolsProviderController) {
   if (!rootStat?.isDirectory()) {
     throw new Error(`Project Folder "${root}" does not exist or is not a directory.`);
   }
-  const show = (path: string) => displayPath(root, path);
+  // A file the user attached is shown by the name it was attached under, not by where LM Studio keeps it.
+  const attachmentNames = new Map<string, string>();
+  const show = (path: string) => attachmentNames.get(path) ?? displayPath(root, path);
   // State that must not pollute the user's project lives in the chat's working directory.
   const stateDir = join(ctl.getWorkingDirectory(), ".coder-tools");
   const backups = new BackupStore(join(stateDir, "backups"));
@@ -93,7 +95,10 @@ export async function toolsProvider(ctl: ToolsProviderController) {
     }
     if (inRoot && (await stat(inRoot).then(() => true, () => false))) return inRoot;
     const attached = await findAttachment(ctl.getWorkingDirectory(), path);
-    if (attached && !attached.image) return attached.path;
+    if (attached && !attached.image) {
+      attachmentNames.set(attached.path, attached.name);
+      return attached.path;
+    }
     if (inRoot) return inRoot; // missing: the read reports it, with suggestions
     try {
       return await resolveSafe(stateDir, path);
@@ -105,7 +110,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
   /** Resolves a path a tool is about to change, refusing the toolkit's own chat state files. */
   const resolveWritable = async (path: string) => {
     const file = await resolveSafe(root, path);
-    if (isChatStateFile(ctl.getWorkingDirectory(), file)) {
+    if (await isChatStateFile(ctl.getWorkingDirectory(), file)) {
       throw new ToolError(`${show(file)} is managed by the toolkit and cannot be changed by a tool.`);
     }
     return file;
@@ -166,7 +171,11 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         const file = await resolveReadable(path);
         const windowed = offset !== undefined || limit !== undefined;
         const info = await assertReadableSize(file, show(file), maxReadBytes, windowed);
-        if (await looksBinary(file)) throw new ToolError(`"${path}" looks like a binary file.`);
+        if (await looksBinary(file)) {
+          // A PDF, attached or in the project, has a tool of its own.
+          const document = /\.pdf$/i.test(file) ? " For a PDF, use read_document_text (Documents group)." : "";
+          throw new ToolError(`"${path}" looks like a binary file.${document}`);
+        }
 
         const { lines, start, totalLines } = await readTextSlice(file, offset ?? 1, limit ?? 2000);
         const body = lines
