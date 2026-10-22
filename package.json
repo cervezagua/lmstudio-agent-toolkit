@@ -19,8 +19,9 @@
     "deps": "npm --prefix plugin install && npm --prefix standalone/feed-reader install && npm --prefix standalone/page-reader install && npm --prefix standalone/video-transcripts install",
     "sync-standalone": "node scripts/sync-standalone.mjs",
     "test": "node scripts/sync-standalone.mjs && vitest run",
-    "typecheck": "node scripts/sync-standalone.mjs && npm --prefix plugin run typecheck && npm --prefix standalone/feed-reader run typecheck && npm --prefix standalone/page-reader run typecheck && npm --prefix standalone/video-transcripts run typecheck",
+    "typecheck": "node scripts/sync-standalone.mjs && npm --prefix plugin run typecheck && npm --prefix standalone/feed-reader run typecheck && npm --prefix standalone/page-reader run typecheck && npm --prefix standalone/video-transcripts run typecheck && node plugin/node_modules/typescript/bin/tsc -p evals",
     "e2e": "node scripts/e2e.mjs",
+    "eval": "tsx evals/run.ts",
     "hub:push": "node scripts/hub-push.mjs"
   },
   "devDependencies": {
