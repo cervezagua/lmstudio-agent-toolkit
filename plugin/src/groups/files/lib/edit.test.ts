@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyEdit } from "./edit";
+import { applyEdit, closestMatch } from "./edit";
 import { ToolError } from "../../../shared/errors";
 
 describe("applyEdit", () => {
@@ -52,5 +52,50 @@ describe("applyEdit", () => {
       const result = applyEdit("\nx\nx", "\nx", "", true);
       expect(result).toEqual({ content: "", replacements: 2 });
     });
+  });
+});
+
+// In the evals, "old_string was not found" was the most common failed call in every phase: the model
+// misquotes a line, then re-reads the whole file to find it. The error now shows the nearest text.
+describe("closestMatch, when old_string is not found", () => {
+  const file = [
+    "function total(lines) {",
+    "  let sum = 0;",
+    "  for (const line of lines) {",
+    "    sum += line.price * line.quantity;",
+    "  }",
+    "  return sum;",
+    "}",
+  ].join("\n");
+
+  it("shows the nearest lines with their numbers", () => {
+    expect(() => applyEdit(file, "for (const line of lines) {\n    sum += line.price * line.qty;", "x")).toThrow(
+      "old_string was not found in the file. The closest text is at lines 3-4:\n" +
+        "3\t  for (const line of lines) {\n4\t    sum += line.price * line.quantity;\n" +
+        "Copy it exactly as old_string (without the line numbers and the tab after them).",
+    );
+  });
+
+  it("says when only the spacing differs", () => {
+    expect(() => applyEdit(file, "let  sum = 0;\n    for (const line of lines) {", "x")).toThrow(
+      /The text is at lines 2-3, but its spaces or indentation differ from yours:\n2\t  let sum = 0;/,
+    );
+  });
+
+  it("finds it in a CRLF file", () => {
+    expect(closestMatch(file.replace(/\n/g, "\r\n"), "return  summ;")).toMatchObject({ startLine: 6, endLine: 6, text: "  return sum;" });
+  });
+
+  it("keeps the plain message when nothing is close", () => {
+    expect(() => applyEdit(file, "const unrelated = require('zlib');", "x")).toThrow(
+      "old_string was not found in the file. Read the file again and copy the text exactly, including whitespace and indentation.",
+    );
+  });
+
+  it("stays quick on a big file", () => {
+    const big = Array.from({ length: 50_000 }, (_, i) => `  value_${i}: compute(${i}, "label ${i}"),`).join("\n");
+    const started = Date.now();
+    expect(closestMatch(big, `value_31337: compute(31337, "label 31338"),`)).toMatchObject({ startLine: 31338 });
+    expect(Date.now() - started).toBeLessThan(3000);
   });
 });

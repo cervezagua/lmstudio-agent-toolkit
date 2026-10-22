@@ -38,6 +38,90 @@ function countOccurrences(haystack: string, needle: string): number {
   return count;
 }
 
+const squash = (line: string) => line.trim().replace(/\s+/g, " ");
+
+/** How alike two lines are, from 0 to 1: shared letter pairs (Dice), after squashing whitespace. */
+function similarity(a: string, b: string): number {
+  const x = squash(a);
+  const y = squash(b);
+  if (x === y) return 1;
+  if (x.length < 2 || y.length < 2) return 0;
+  const pairs = new Map<string, number>();
+  for (let i = 0; i < x.length - 1; i++) pairs.set(x.slice(i, i + 2), (pairs.get(x.slice(i, i + 2)) ?? 0) + 1);
+  let shared = 0;
+  for (let i = 0; i < y.length - 1; i++) {
+    const pair = y.slice(i, i + 2);
+    const left = pairs.get(pair) ?? 0;
+    if (left > 0) {
+      shared++;
+      pairs.set(pair, left - 1);
+    }
+  }
+  return (2 * shared) / (x.length - 1 + (y.length - 1));
+}
+
+export interface ClosestMatch {
+  /** 1-based, inclusive. */
+  startLine: number;
+  endLine: number;
+  text: string;
+  /** The same text but for spaces, tabs and indentation. */
+  whitespaceOnly: boolean;
+}
+
+/**
+ * The lines of `content` most like `search`, when an exact match failed. Small models quote text
+ * slightly wrong (indentation, a changed word, a line they misremember) and then re-read the whole
+ * file to find it; showing them the nearest text lets them copy it on the next try.
+ *
+ * The search's most distinctive line anchors the comparison, so a big file costs one pass rather
+ * than one per window. Returns null when nothing is reasonably close.
+ */
+export function closestMatch(content: string, search: string): ClosestMatch | null {
+  const lines = content.split(/\r?\n/);
+  const wanted = search.replace(/\r\n/g, "\n").replace(/\n$/, "").split("\n");
+  if (wanted.length > 60 || lines.length > 200_000) return null;
+  const anchor = wanted.reduce((best, line, i) => (squash(line).length > squash(wanted[best]).length ? i : best), 0);
+  if (squash(wanted[anchor]).length < 4) return null;
+
+  const candidates = lines
+    .map((line, i) => ({ start: i - anchor, score: similarity(line, wanted[anchor]) }))
+    .filter(c => c.score >= 0.5 && c.start >= 0 && c.start + wanted.length <= lines.length)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 10);
+
+  let best: { start: number; score: number } | null = null;
+  for (const { start } of candidates) {
+    const score = wanted.reduce((sum, line, j) => sum + similarity(lines[start + j], line), 0) / wanted.length;
+    if (!best || score > best.score) best = { start, score };
+  }
+  if (!best || best.score < 0.6) return null;
+
+  const found = lines.slice(best.start, best.start + wanted.length);
+  return {
+    startLine: best.start + 1,
+    endLine: best.start + wanted.length,
+    text: found.join("\n"),
+    whitespaceOnly: found.every((line, j) => squash(line) === squash(wanted[j])),
+  };
+}
+
+/** The not-found error, with the nearest text when there is some. */
+function notFound(content: string, search: string): ToolError {
+  const base = "old_string was not found in the file.";
+  const match = closestMatch(content, search);
+  if (!match) return new ToolError(`${base} Read the file again and copy the text exactly, including whitespace and indentation.`);
+  const where = match.startLine === match.endLine ? `line ${match.startLine}` : `lines ${match.startLine}-${match.endLine}`;
+  const shown = match.text
+    .split("\n")
+    .map((line, i) => `${match.startLine + i}\t${line.length > 300 ? line.slice(0, 300) + "…" : line}`)
+    .join("\n");
+  const why = match.whitespaceOnly
+    ? `The text is at ${where}, but its spaces or indentation differ from yours:`
+    : `The closest text is at ${where}:`;
+  return new ToolError(`${base} ${why}\n${shown}\nCopy it exactly as old_string (without the line numbers and the tab after them).`);
+}
+
 export interface EditResult {
   content: string;
   replacements: number;
@@ -70,12 +154,7 @@ export function applyEdit(
     count = countOccurrences(content, search);
   }
 
-  if (count === 0) {
-    throw new ToolError(
-      "old_string was not found in the file. Read the file again and copy the text exactly, " +
-        "including whitespace and indentation.",
-    );
-  }
+  if (count === 0) throw notFound(content, oldString);
   if (count > 1 && !replaceAll) {
     throw new ToolError(
       `old_string occurs ${count} times. Include more surrounding lines to make it unique, ` +
