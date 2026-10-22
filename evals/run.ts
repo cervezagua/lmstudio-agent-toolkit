@@ -57,6 +57,8 @@ interface RunResult {
   problems: string[];
   seconds: number;
   rounds: number;
+  /** The most tokens one prediction was given: how full the context got. */
+  peakContext: number;
   calls: number;
   failedCalls: number;
   repeatedFailures: number;
@@ -97,53 +99,65 @@ async function runOnce(model: any, client: any, systemPrompt: string, name: stri
   // Each prompt is a new chat, with a working directory of its own as in LM Studio.
   const controller = (chatDir: string) => fakeController({ config, globalConfig, workingDirectory: chatDir, history, client });
   const prompts = Array.isArray(task.prompt) ? task.prompt : [task.prompt];
+  const limitMinutes = task.minutes ?? minutes;
 
   const calls: Call[] = [];
   const pending: { id?: string; name: string; args: string }[] = [];
+  const answers: string[] = [];
   let answer = "";
   let rounds = 0;
+  let peakContext = 0;
   const problems: string[] = [];
   const started = Date.now();
   const abort = new AbortController();
-  const timer = setTimeout(() => abort.abort(), minutes * 60_000);
+  const timer = setTimeout(() => abort.abort(), limitMinutes * 60_000);
   try {
     for (const [index, prompt] of prompts.entries()) {
       const chatDir = index === 0 ? chat : join(scratch, `chat-${index + 1}`);
       await mkdir(chatDir, { recursive: true });
-      const preprocessed = await promptPreprocessor(controller(chatDir), sdk.ChatMessage.from({ role: "user", content: prompt }));
-      const firstMessage = typeof preprocessed === "string" ? preprocessed : preprocessed.getText();
-      const tools = await toolsProvider(controller(chatDir));
-      answer = "";
-      await model.act(sdk.Chat.from([{ role: "system", content: systemPrompt }, { role: "user", content: firstMessage }]), tools, {
-        maxPredictionRounds: 40,
-        signal: abort.signal,
-        onRoundStart: () => rounds++,
-        onMessage: (message: any) => {
-          for (const request of message.getToolCallRequests()) {
-            pending.push({ id: request.id, name: request.name, args: JSON.stringify(request.arguments ?? {}) });
-          }
-          for (const result of message.getToolCallResults()) {
-            const found = pending.findIndex(p => result.toolCallId && p.id === result.toolCallId);
-            const request = pending.splice(found >= 0 ? found : 0, 1)[0] ?? { name: "?", args: "" };
-            const content = String(result.content);
-            const call = { ...request, result: content, failed: /^"?Error\b/.test(content) };
-            calls.push(call);
-            task.afterCall?.(call, project);
-          }
-          if (message.getRole() === "assistant") {
-            const text = withoutThinking(message.getText());
-            if (text) answer = text;
-          }
-        },
-      });
+      // The conversation so far, kept as LM Studio keeps it: follow-ups see every earlier turn.
+      const conversation = sdk.Chat.from([{ role: "system", content: systemPrompt }]);
+      const turns = index === prompts.length - 1 ? [prompt, ...(task.followUps ?? [])] : [prompt];
+      for (const turn of turns) {
+        const ctl = fakeController({ config, globalConfig, workingDirectory: chatDir, history: conversation, client });
+        const preprocessed = await promptPreprocessor(ctl, sdk.ChatMessage.from({ role: "user", content: turn }));
+        conversation.append("user", typeof preprocessed === "string" ? preprocessed : preprocessed.getText());
+        const tools = await toolsProvider(controller(chatDir));
+        answer = "";
+        await model.act(conversation, tools, {
+          maxPredictionRounds: task.maxRounds ?? 40,
+          signal: abort.signal,
+          onRoundStart: () => rounds++,
+          onPredictionCompleted: (result: any) => (peakContext = Math.max(peakContext, result.stats?.promptTokensCount ?? 0)),
+          onMessage: (message: any) => {
+            conversation.append(message);
+            for (const request of message.getToolCallRequests()) {
+              pending.push({ id: request.id, name: request.name, args: JSON.stringify(request.arguments ?? {}) });
+            }
+            for (const result of message.getToolCallResults()) {
+              const found = pending.findIndex(p => result.toolCallId && p.id === result.toolCallId);
+              const request = pending.splice(found >= 0 ? found : 0, 1)[0] ?? { name: "?", args: "" };
+              const content = String(result.content);
+              const call = { ...request, result: content, failed: /^"?Error\b/.test(content) };
+              calls.push(call);
+              task.afterCall?.(call, project);
+            }
+            if (message.getRole() === "assistant") {
+              const text = withoutThinking(message.getText());
+              if (text) answer = text;
+            }
+          },
+        });
+        answers.push(answer);
+      }
     }
   } catch (error: any) {
-    problems.push(abort.signal.aborted ? `stopped after ${minutes} minutes` : `the run failed: ${error?.message || error?.title || String(error)}`);
+    problems.push(abort.signal.aborted ? `stopped after ${limitMinutes} minutes` : `the run failed: ${error?.message || error?.title || String(error)}`);
   } finally {
     clearTimeout(timer);
   }
   const seconds = Math.round((Date.now() - started) / 1000);
-  problems.push(...(await task.check({ dir: project, answer, calls }).catch(error => [`the check failed: ${error.message}`])));
+  problems.push(...(await task.check({ dir: project, answer, answers, calls }).catch(error => [`the check failed: ${error.message}`])));
   await rm(scratch, { recursive: true, force: true }).catch(() => {});
 
   const failedBefore = new Set<string>();
@@ -160,6 +174,7 @@ async function runOnce(model: any, client: any, systemPrompt: string, name: stri
     problems,
     seconds,
     rounds,
+    peakContext,
     calls: calls.length,
     failedCalls: calls.filter(c => c.failed).length,
     repeatedFailures,
@@ -173,13 +188,18 @@ function report(results: RunResult[], previous: RunResult[] | null, title: strin
   const byTask = new Map<string, RunResult[]>();
   for (const result of results) byTask.set(result.task, [...(byTask.get(result.task) ?? []), result]);
   const mean = (values: number[]) => (values.reduce((a, b) => a + b, 0) / values.length).toFixed(1).replace(/\.0$/, "");
-  const lines = [`# ${title}`, "", "| Task | Area | Passed | Was | Seconds | Tool calls | Failed calls | Repeated failures |", "|---|---|---|---|---|---|---|---|"];
+  const lines = [
+    `# ${title}`,
+    "",
+    "| Task | Area | Passed | Was | Seconds | Tool calls | Failed calls | Repeated failures | Peak context |",
+    "|---|---|---|---|---|---|---|---|---|",
+  ];
   for (const [task, runsOfTask] of byTask) {
     const passed = runsOfTask.filter(r => r.passed).length;
     const before = previous?.filter(r => r.task === task);
     const was = before?.length ? `${before.filter(r => r.passed).length}/${before.length}` : "";
     lines.push(
-      `| ${task} | ${runsOfTask[0].area} | ${passed}/${runsOfTask.length} | ${was} | ${mean(runsOfTask.map(r => r.seconds))} | ${mean(runsOfTask.map(r => r.calls))} | ${mean(runsOfTask.map(r => r.failedCalls))} | ${mean(runsOfTask.map(r => r.repeatedFailures))} |`,
+      `| ${task} | ${runsOfTask[0].area} | ${passed}/${runsOfTask.length} | ${was} | ${mean(runsOfTask.map(r => r.seconds))} | ${mean(runsOfTask.map(r => r.calls))} | ${mean(runsOfTask.map(r => r.failedCalls))} | ${mean(runsOfTask.map(r => r.repeatedFailures))} | ${Math.max(...runsOfTask.map(r => r.peakContext ?? 0))} |`,
     );
   }
   const total = results.filter(r => r.passed).length;
@@ -206,7 +226,7 @@ async function selfTest() {
     try {
       if (existsSync(join(dir, "project"))) await cp(join(dir, "project"), scratch, { recursive: true });
       await task.setup?.(scratch);
-      const problems = await task.check({ dir: scratch, answer: "", calls: [] });
+      const problems = await task.check({ dir: scratch, answer: "", answers: [], calls: [] });
       if (problems.length === 0) bad++;
       console.log(`${problems.length ? "ok  " : "BAD "} ${name}: ${problems.join("; ") || "passes without anything being done"}`);
     } finally {

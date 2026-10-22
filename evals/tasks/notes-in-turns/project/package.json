@@ -1,0 +1,5 @@
+{
+  "name": "notes-service",
+  "private": true,
+  "scripts": { "test": "node test/run.js" }
+}
