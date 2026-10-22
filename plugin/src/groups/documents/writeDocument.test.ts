@@ -297,7 +297,9 @@ describe("htmlToPdfBuffer", () => {
         expect(text).toContain(expected);
       }
     },
-    60_000,
+    // The first test to start the browser pays for its cold start, which on a CI runner has taken
+    // over a minute.
+    180_000,
   );
 
   it.runIf(browserChannel)(
