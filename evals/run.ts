@@ -138,7 +138,7 @@ async function runOnce(model: any, client: any, systemPrompt: string, name: stri
       });
     }
   } catch (error: any) {
-    problems.push(abort.signal.aborted ? `stopped after ${minutes} minutes` : `the run failed: ${error?.message ?? error}`);
+    problems.push(abort.signal.aborted ? `stopped after ${minutes} minutes` : `the run failed: ${error?.message || error?.title || String(error)}`);
   } finally {
     clearTimeout(timer);
   }
@@ -221,7 +221,11 @@ async function main() {
   const client = new sdk.LMStudioClient();
   const loaded = (await client.llm.listLoaded()).some((m: any) => m.identifier === modelKey || m.modelKey === modelKey);
   console.log(`${loaded ? "Using the loaded" : "Loading"} model ${modelKey}...`);
-  const model = await client.llm.model(modelKey, loaded ? undefined : { config: { contextLength: 32768 }, verbose: false });
+  // Loaded explicitly, as from LM Studio's model list: a just-in-time load would be unloaded again the
+  // moment a tool loads a second model (LM Studio evicts other JIT models), ending the run.
+  const model = loaded
+    ? await client.llm.model(modelKey)
+    : await client.llm.load(modelKey, { config: { contextLength: 32768 }, verbose: false });
   const systemPrompt = await readFile(join(repo, "presets", "agent-toolkit-prompt", "system-prompt.md"), "utf-8");
   const tasks = await loadTasks();
   if (tasks.length === 0) throw new Error(`No task matches --only ${only?.join(",")}`);
