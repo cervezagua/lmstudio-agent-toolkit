@@ -16,8 +16,16 @@ export interface RunRecord {
 export interface EvalTask {
   /** What the task exercises: code, shell, git, documents, utilities, web, memory... `--only` takes these too. */
   area: string;
-  /** Written the way a user would ask: never name a tool. */
-  prompt: string;
+  /**
+   * Written the way a user would ask: never name a tool. Several prompts are separate chats, one after
+   * another, sharing the project and the memory folder (to see what carries over to a new chat).
+   */
+  prompt: string | string[];
+  /**
+   * Called as each tool result comes back, before the model sees it, to change the world under the
+   * model (say, a teammate editing a file it just read). Must be synchronous.
+   */
+  afterCall?: (call: Call, dir: string) => void;
   /** Settings that differ from the plugin's defaults, such as a group to switch on. */
   config?: Record<string, unknown>;
   /** Runs after the task's project/ folder is copied, for what cannot be a plain file (a git history, a PDF). */

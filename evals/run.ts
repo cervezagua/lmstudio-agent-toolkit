@@ -94,7 +94,9 @@ async function runOnce(model: any, client: any, systemPrompt: string, name: stri
   const config = { ...defaults(makeConfigSchematics()), projectFolder: project, subagentModel, researchModel: subagentModel, ...task.config };
   const globalConfig = { ...defaults(globalConfigSchematics), memoryDirectory: memory, skillsDirectory: skills };
   const history = sdk.Chat.from([{ role: "system", content: systemPrompt }]);
-  const controller = () => fakeController({ config, globalConfig, workingDirectory: chat, history, client });
+  // Each prompt is a new chat, with a working directory of its own as in LM Studio.
+  const controller = (chatDir: string) => fakeController({ config, globalConfig, workingDirectory: chatDir, history, client });
+  const prompts = Array.isArray(task.prompt) ? task.prompt : [task.prompt];
 
   const calls: Call[] = [];
   const pending: { id?: string; name: string; args: string }[] = [];
@@ -105,29 +107,36 @@ async function runOnce(model: any, client: any, systemPrompt: string, name: stri
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), minutes * 60_000);
   try {
-    const preprocessed = await promptPreprocessor(controller(), sdk.ChatMessage.from({ role: "user", content: task.prompt }));
-    const firstMessage = typeof preprocessed === "string" ? preprocessed : preprocessed.getText();
-    const tools = await toolsProvider(controller());
-    await model.act(sdk.Chat.from([{ role: "system", content: systemPrompt }, { role: "user", content: firstMessage }]), tools, {
-      maxPredictionRounds: 40,
-      signal: abort.signal,
-      onRoundStart: (index: number) => (rounds = index + 1),
-      onMessage: (message: any) => {
-        for (const request of message.getToolCallRequests()) {
-          pending.push({ id: request.id, name: request.name, args: JSON.stringify(request.arguments ?? {}) });
-        }
-        for (const result of message.getToolCallResults()) {
-          const index = pending.findIndex(p => result.toolCallId && p.id === result.toolCallId);
-          const request = pending.splice(index >= 0 ? index : 0, 1)[0] ?? { name: "?", args: "" };
-          const content = String(result.content);
-          calls.push({ ...request, result: content, failed: /^"?Error\b/.test(content) });
-        }
-        if (message.getRole() === "assistant") {
-          const text = withoutThinking(message.getText());
-          if (text) answer = text;
-        }
-      },
-    });
+    for (const [index, prompt] of prompts.entries()) {
+      const chatDir = index === 0 ? chat : join(scratch, `chat-${index + 1}`);
+      await mkdir(chatDir, { recursive: true });
+      const preprocessed = await promptPreprocessor(controller(chatDir), sdk.ChatMessage.from({ role: "user", content: prompt }));
+      const firstMessage = typeof preprocessed === "string" ? preprocessed : preprocessed.getText();
+      const tools = await toolsProvider(controller(chatDir));
+      answer = "";
+      await model.act(sdk.Chat.from([{ role: "system", content: systemPrompt }, { role: "user", content: firstMessage }]), tools, {
+        maxPredictionRounds: 40,
+        signal: abort.signal,
+        onRoundStart: () => rounds++,
+        onMessage: (message: any) => {
+          for (const request of message.getToolCallRequests()) {
+            pending.push({ id: request.id, name: request.name, args: JSON.stringify(request.arguments ?? {}) });
+          }
+          for (const result of message.getToolCallResults()) {
+            const found = pending.findIndex(p => result.toolCallId && p.id === result.toolCallId);
+            const request = pending.splice(found >= 0 ? found : 0, 1)[0] ?? { name: "?", args: "" };
+            const content = String(result.content);
+            const call = { ...request, result: content, failed: /^"?Error\b/.test(content) };
+            calls.push(call);
+            task.afterCall?.(call, project);
+          }
+          if (message.getRole() === "assistant") {
+            const text = withoutThinking(message.getText());
+            if (text) answer = text;
+          }
+        },
+      });
+    }
   } catch (error: any) {
     problems.push(abort.signal.aborted ? `stopped after ${minutes} minutes` : `the run failed: ${error?.message ?? error}`);
   } finally {

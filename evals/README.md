@@ -31,5 +31,8 @@ Make a folder in `evals/tasks/` with:
 
 - `project/`: the files the task starts with. Anything that can't be a plain file, such as a git history or a PDF, is made by `setup` instead.
 - `task.ts`: exports an `EvalTask` (see [lib/task.ts](lib/task.ts)) with `area`, `prompt`, any `config` that differs from the defaults, an optional `setup`, and `check`, which returns what is wrong (nothing means a pass).
+  - A list of prompts runs as separate chats on the same project and memory, to test what carries over (see `remember-preference`).
+  - `afterCall` runs as each tool result comes back, to change things under the model, such as a teammate editing a file it just read (see `teammate-edit`).
+  - Check behaviour with code the model never sees, rather than with the project's own tests, which a model can edit (see `python-durations`, `paging-bug`).
 
 Then run `npm run eval -- --self-test` to make sure the new check fails when nothing is done.

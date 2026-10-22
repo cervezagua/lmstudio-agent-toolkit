@@ -1,0 +1,6 @@
+{
+  "name": "todo-cli",
+  "private": true,
+  "bin": { "todo": "bin/todo.js" },
+  "scripts": { "test": "node test/format.test.js" }
+}
