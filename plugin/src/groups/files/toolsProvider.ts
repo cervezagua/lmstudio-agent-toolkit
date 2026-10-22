@@ -370,7 +370,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         line. Optionally restrict to a sub-path and/or a file glob like "*.py".
         output_mode "files_with_matches" lists only the files (cheapest way to answer "where is X
         used?"), "count" gives matches per file. context adds surrounding lines, offset pages
-        through results.
+        through results. Lines it shows count as read, so edit_file can change them directly.
       `,
       parameters: {
         pattern: z.string(),
@@ -430,6 +430,18 @@ export async function toolsProvider(ctl: ToolsProviderController) {
           truncated = result.truncated;
         }
         if (lines.length === 0) return skip > 0 ? "No more matches." : "No matches.";
+        // Lines grep shows count as read, as a partial read_file does: models find a line with grep and
+        // edit it straight away, and refusing that cost a round in most runs of the evals. An edit still
+        // has to quote the text it replaces, and a file that changes after this is still refused.
+        if (mode === "content") {
+          const shownFiles = new Set(lines.map(line => /^(.+?):\d+[:-] /.exec(line)?.[1]).filter((p): p is string => !!p));
+          for (const shownPath of [...shownFiles].slice(0, 50)) {
+            const file = await resolveSafe(root, shownPath).catch(() => null);
+            if (!file) continue;
+            const info = await stat(file).catch(() => null);
+            if (info?.isFile() && info.size <= MAX_EDIT_BYTES) await recordRead(file);
+          }
+        }
         const note = truncated
           ? `\n[stopped at ${maxResults} results; narrow the search, or pass offset ${skip + maxResults} for more]`
           : "";

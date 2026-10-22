@@ -292,6 +292,20 @@ describe("coder-tools toolsProvider", () => {
 
   // With ripgrep installed, searching one file found nothing: ripgrep leaves the path out then, and
   // the lines without one were dropped. A model in an eval searched a file 30 times for a line in it.
+  it("lets the model edit a line grep showed it, but not one grep only counted", async () => {
+    await writeFile(join(root, "found.txt"), "alpha\nbeta\ngamma\n");
+    await writeFile(join(root, "counted.txt"), "alpha\n");
+    expect(await callTool(tools, "grep", { pattern: "alpha", path: "counted.txt", output_mode: "count" })).toMatch(/counted\.txt: 1/);
+    expect(await callTool(tools, "edit_file", { path: "counted.txt", old_string: "alpha", new_string: "x" })).toMatch(/have not read/);
+    expect(await callTool(tools, "grep", { pattern: "beta" })).toContain("found.txt:2: beta");
+    expect(await callTool(tools, "edit_file", { path: "found.txt", old_string: "beta", new_string: "BETA" })).not.toMatch(/^Error/);
+    expect(await readFile(join(root, "found.txt"), "utf-8")).toBe("alpha\nBETA\ngamma\n");
+    // A change after grep showed the file is still refused.
+    await callTool(tools, "grep", { pattern: "gamma", path: "found.txt" });
+    await writeFile(join(root, "found.txt"), "alpha\nBETA\ngamma\ndelta\n");
+    expect(await callTool(tools, "edit_file", { path: "found.txt", old_string: "gamma", new_string: "G" })).toMatch(/changed on disk/);
+  });
+
   it("searches a single file", async () => {
     expect(await callTool(tools, "grep", { pattern: "line 4[01]$", path: "long.txt" })).toBe("long.txt:40: line 40\nlong.txt:41: line 41");
     expect(await callTool(tools, "grep", { pattern: "line", path: "long.txt", output_mode: "count" })).toMatch(/^long\.txt: \d+$/);
