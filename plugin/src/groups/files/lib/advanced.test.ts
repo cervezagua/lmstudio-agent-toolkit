@@ -222,6 +222,18 @@ describe("ShellSession", () => {
     expect((await session.currentDirectory())?.toLowerCase()).toContain("sub");
   }, 60000);
 
+  // A model's script stuck in a loop printed until Node threw "Invalid string length" and the whole
+  // plugin process died. The output is now capped, and the command's end is still found after it.
+  it("survives a command that prints far more than it keeps", async () => {
+    const session = getSession(spec, dir);
+    const flood = "node -e \"const s = 'y'.repeat(1e6); for (let i = 0; i < 6; i++) process.stdout.write(s); console.log('END')\"";
+    const result = await session.exec(flood, 60000);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("characters of output left out");
+    expect(result.stdout.endsWith("END")).toBe(true);
+    expect(result.stdout.length).toBeLessThan(4_100_000);
+  }, 90000);
+
   it("reports exit codes and stderr, and survives a failing command", async () => {
     const session = getSession(spec, dir);
     const fail = spec.kind === "powershell" ? "node -e \"process.exit(7)\"" : "node -e 'process.exit(7)'";

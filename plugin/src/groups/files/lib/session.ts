@@ -1,6 +1,6 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "child_process";
 import { ToolError } from "../../../shared/errors";
-import { commandEnv } from "../../../shared/process";
+import { CappedOutput, commandEnv } from "../../../shared/process";
 import { randomUUID } from "crypto";
 
 export interface ShellSpec {
@@ -92,8 +92,10 @@ export class ShellSession {
       const child = this.isRunning ? this.child! : this.start();
       const marker = `__LMS_${randomUUID().replace(/-/g, "")}__`;
       const stdoutMarker = new RegExp(String.raw`${marker}:(-?\d+)` + String.raw`\r?\n?`);
-      let stdout = "";
-      let stderr = "";
+      const stdout = new CappedOutput();
+      const stderr = new CappedOutput();
+      // The marker ends the output, so only the last few characters need searching for it.
+      const markerWindow = marker.length + 64;
 
       return await new Promise<SessionResult>((resolve, reject) => {
         let settled = false;
@@ -118,8 +120,8 @@ export class ShellSession {
           // Give stderr a moment to arrive; it is a separate stream from stdout.
           setTimeout(() => {
             finish({
-              stdout: stdout.replace(stdoutMarker, "").trimEnd(),
-              stderr: stderr.split(marker)[0].trimEnd(),
+              stdout: stdout.text().replace(stdoutMarker, "").trimEnd(),
+              stderr: stderr.text().split(marker)[0].trimEnd(),
               exitCode,
               timedOut,
             });
@@ -127,11 +129,11 @@ export class ShellSession {
         };
 
         const onStdout = (chunk: string) => {
-          stdout += chunk;
-          const match = stdoutMarker.exec(stdout);
+          stdout.push(chunk);
+          const match = stdoutMarker.exec(stdout.recent(markerWindow));
           if (match) done(Number(match[1]));
         };
-        const onStderr = (chunk: string) => (stderr += chunk);
+        const onStderr = (chunk: string) => stderr.push(chunk);
 
         const onAbort = () => {
           this.dispose();
