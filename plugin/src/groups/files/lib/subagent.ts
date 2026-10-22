@@ -9,19 +9,24 @@ export const SUBAGENT_SYSTEM_PROMPT = [
   "Finish with a compact report: the answer, the file paths and line numbers that matter, and anything the main agent still needs to decide.",
 ].join(" ");
 
-/** Picks the model to run the sub-agent on: the configured one, or the first loaded model. */
-export async function pickSubagentModel(client: LMStudioClient, configuredKey: string): Promise<LLM> {
+/** Picks the model to run the sub-agent (or research) on: the configured one, or the first loaded model. */
+export async function pickSubagentModel(
+  client: LMStudioClient,
+  configuredKey: string,
+  purpose = "the sub-agent",
+  setting = "Sub-agent Model",
+): Promise<LLM> {
   const key = configuredModelKey(configuredKey);
   if (key) {
     try {
       return await client.llm.model(key);
     } catch (error) {
-      throw new ToolError(`Could not load the sub-agent model "${key}": ${(error as Error).message}`);
+      throw new ToolError(`Could not load the model for ${purpose} "${key}": ${(error as Error).message}`);
     }
   }
   const loaded = await client.llm.listLoaded();
   if (loaded.length === 0) {
-    throw new ToolError("No model is loaded for the sub-agent. Load one, or choose a Sub-agent Model in agent-toolkit's settings.");
+    throw new ToolError(`No model is loaded for ${purpose}. Load one, or choose a ${setting} in agent-toolkit's settings.`);
   }
   return loaded[0] as LLM;
 }

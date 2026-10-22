@@ -47,6 +47,8 @@ const baseConfig = {
   maxSearchResults: 5,
   maxPageChars: 8000,
   browserFallback: false,
+  enableResearch: false,
+  researchModel: "",
   enableBrowser: false,
   browserChannel: "msedge",
   headless: true,

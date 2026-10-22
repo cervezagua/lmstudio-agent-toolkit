@@ -127,6 +127,8 @@ describe("selector", () => {
             maxSearchResults: 8,
             maxPageChars: 15000,
             browserFallback: false,
+            enableResearch: false,
+            researchModel: "",
             enableBrowser: false,
             browserChannel: "msedge",
             headless: true,

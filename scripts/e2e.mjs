@@ -76,6 +76,8 @@ const allGroupsOff = {
   maxSearchResults: 5,
   maxPageChars: 8000,
   browserFallback: false,
+  enableResearch: false,
+  researchModel: "",
   enableBrowser: true,
   browserChannel: "msedge",
   headless: true,

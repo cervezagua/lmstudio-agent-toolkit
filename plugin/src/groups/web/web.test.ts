@@ -514,6 +514,8 @@ const baseConfig = {
   maxSearchResults: 8,
   maxPageChars: 15000,
   browserFallback: false,
+  enableResearch: false,
+  researchModel: "",
   enableBrowser: true,
   browserChannel: "msedge",
   headless: true,
@@ -540,6 +542,11 @@ describe("web-tools toolsProvider", () => {
         workingDirectory,
       }),
     );
+
+  it("offers research only when it is switched on", async () => {
+    expect((await provider()).map(t => t.name)).not.toContain("research");
+    expect((await provider({ enableResearch: true })).map(t => t.name)).toContain("research");
+  });
 
   it("registers tools and hides browser tools when disabled", async () => {
     // video_transcript is only offered where yt-dlp is installed.

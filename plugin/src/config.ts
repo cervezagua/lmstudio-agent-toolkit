@@ -497,6 +497,29 @@ export function makeConfigSchematics(choices?: ModelChoices) {
     },
     true,
   )
+  .field(
+    "enableResearch",
+    "boolean",
+    {
+      displayName: "Research",
+      subtitle:
+        "Adds research: searches, reads several pages and answers with a source for each claim. Takes a minute or so of generation on your GPU. Off by default.",
+      dependencies: onlyWhen("enableWeb"),
+    },
+    false,
+  )
+  .field(
+    ...modelField(
+      "researchModel",
+      {
+        displayName: "Research Model",
+        purpose: "that reads the pages and writes the answer",
+        auto: "the first loaded model",
+        dependencies: onlyWhen("enableWeb", "enableResearch"),
+      },
+      choices?.subagent,
+    ),
+  )
 
   // ── Documents ────────────────────────────────────────────────────────────────────────────────
   .field(

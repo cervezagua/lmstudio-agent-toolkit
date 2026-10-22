@@ -49,7 +49,7 @@ This only registers a task for your user. It changes no global WSL settings and 
 
 - **JSON output enabled** (`search.formats`): the Web group requests `format=json`.
 - **Limiter off, not a public instance**: the limiter is anti-bot protection for public servers and would block the plugin's requests. That's safe here because the service listens only on loopback, so only your PC can reach it (WSL forwards `localhost` to Windows).
-- **Engines**: chosen by testing from one Windows machine in September 2026. Brave, Bing and Google returned results; DuckDuckGo and Qwant answered with CAPTCHAs, Google CSE timed out, and Yep and PrivacyWall denied access. So DuckDuckGo and Google CSE are disabled and Bing and Google are enabled. Engines behave differently on other networks and IP addresses; to test one yourself, run:
+- **Engines**: chosen by testing from one Windows machine in September 2026. Brave, Bing and Google returned results; DuckDuckGo and Qwant answered with CAPTCHAs, Google CSE timed out, and Yep and PrivacyWall denied access. So DuckDuckGo and Google CSE are disabled and Bing and Google are enabled. Yahoo was added in October 2026: with Google and Brave suspended, Bing gave the same few general pages for every query on a topic, and Yahoo found the specific ones. If you set SearXNG up before then, run `setup-wsl.sh` again to get it. Engines behave differently on other networks and IP addresses; to test one yourself, run:
 
   ```powershell
   Invoke-RestMethod "http://localhost:8888/search?q=test&format=json&engines=mojeek" | Select-Object -ExpandProperty unresponsive_engines
