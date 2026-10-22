@@ -1,4 +1,4 @@
-import { readFile, stat } from "fs/promises";
+import { readdir, readFile, stat } from "fs/promises";
 import { join } from "path";
 import { ToolError } from "../../../shared/errors";
 import { commandEnv, findExecutable, runProcess } from "../../../shared/process";
@@ -23,6 +23,21 @@ async function packageJsonHas(root: string, ...keys: string[]): Promise<boolean>
   } catch {
     return false;
   }
+}
+
+/** Where a project with no checker keeps its tests, said as the command to run them. */
+export async function testHint(root: string): Promise<string> {
+  try {
+    const pkg = JSON.parse(await readFile(join(root, "package.json"), "utf-8"));
+    if (pkg.scripts?.test) return `Run its tests instead: run_command "npm test" (${pkg.scripts.test}).`;
+  } catch {
+    // no package.json, or not JSON
+  }
+  const python = await readdir(root).then(names => names.some(n => /^test_.*\.py$|^tests?$/.test(n)), () => false);
+  if (python && (await readdir(root).then(names => names.some(n => n.endsWith(".py")), () => false))) {
+    return 'Run its tests instead: run_command "python -m unittest" (or pytest).';
+  }
+  return "Run the project's tests or the program itself with run_command to check your work.";
 }
 
 /**

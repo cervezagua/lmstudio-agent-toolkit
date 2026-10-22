@@ -11,7 +11,7 @@ import { assertReadableSize, looksBinary, readTextSlice } from "./lib/readText";
 import { writeFileAtomic } from "../../shared/safeWrite";
 import { overflowNote, storeOverflow } from "./lib/overflow";
 import { notFoundMessage } from "./lib/suggest";
-import { availableCheckers, runChecker } from "./lib/diagnostics";
+import { availableCheckers, runChecker, testHint } from "./lib/diagnostics";
 import { editNotebook, parseNotebook, renderNotebook } from "./lib/notebook";
 import { pickSubagentModel, runSubagent } from "./lib/subagent";
 import { assertPatternStaysInside, globFiles, grepFiles, parseRipgrepOutput } from "./lib/search";
@@ -99,7 +99,8 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       attachmentNames.set(attached.path, attached.name);
       return attached.path;
     }
-    if (inRoot) return inRoot; // missing: the read reports it, with suggestions
+    // Missing: say so with the files the model probably meant, not the system's ENOENT and full path.
+    if (inRoot) throw new ToolError(await notFoundMessage(root, path, `${show(inRoot)} does not exist.`));
     try {
       return await resolveSafe(stateDir, path);
     } catch {
@@ -333,6 +334,11 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       parameters: { path: z.string().optional() },
       implementation: safe(async ({ path }) => {
         const dir = await resolveSafe(root, path ?? ".");
+        const info = await stat(dir).catch(() => null);
+        if (!info) {
+          throw new ToolError(await notFoundMessage(root, path ?? ".", `${show(dir)} does not exist (write_file creates missing folders).`, true));
+        }
+        if (!info.isDirectory()) throw new ToolError(`${show(dir)} is a file, not a folder; use read_file.`);
         const entries = await readdir(dir, { withFileTypes: true });
         entries.sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name));
         const shown = entries.slice(0, 500).map(e => (e.isDirectory() ? `${e.name}/` : e.name));
@@ -725,8 +731,10 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         implementation: safe(async ({ checker, timeout_seconds }, ctx) => {
           const available = await availableCheckers(root);
           if (available.length === 0) {
+            // Models call this to check their work; point them at the check the project does have.
             throw new ToolError(
-              "No checker was detected for this project (looked for tsconfig.json, ESLint config, pyproject.toml, Cargo.toml, go.mod).",
+              "No checker was detected for this project (looked for tsconfig.json, ESLint config, pyproject.toml, Cargo.toml, go.mod). " +
+                (await testHint(root)),
             );
           }
           const selected = checker ? available.filter(c => c.name === checker.trim().toLowerCase()) : available;

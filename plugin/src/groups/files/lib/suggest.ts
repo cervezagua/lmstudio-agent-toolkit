@@ -8,12 +8,12 @@ import { DEFAULT_IGNORES } from "./search";
  * different extension, or the tail of the path somewhere else in the project. Small models get
  * extensions and folder depth wrong constantly, and a suggestion saves a guessing round.
  */
-export async function suggestPaths(root: string, requested: string, limit = 3): Promise<string[]> {
-  const normalized = requested.replace(/\\/g, "/").replace(/^\.\//, "");
+export async function suggestPaths(root: string, requested: string, limit = 3, folders = false): Promise<string[]> {
+  const normalized = requested.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
   const name = basename(normalized);
   if (!name) return [];
 
-  const patterns = [`**/${basename(name, extname(name))}.*`];
+  const patterns = [folders ? `**/${name}` : `**/${basename(name, extname(name))}.*`];
   const segments = normalized.split("/").filter(Boolean);
   if (segments.length > 1) patterns.push(`**/${segments.slice(-2).join("/")}`);
 
@@ -22,7 +22,8 @@ export async function suggestPaths(root: string, requested: string, limit = 3): 
       cwd: root,
       absolute: true,
       dot: true,
-      onlyFiles: true,
+      onlyFiles: !folders,
+      onlyDirectories: folders,
       ignore: DEFAULT_IGNORES,
       suppressErrors: true,
       followSymbolicLinks: false,
@@ -37,8 +38,8 @@ export async function suggestPaths(root: string, requested: string, limit = 3): 
 }
 
 /** Appends "Did you mean ...?" to a not-found message when there are candidates. */
-export async function notFoundMessage(root: string, requested: string, base: string): Promise<string> {
-  const suggestions = await suggestPaths(root, requested);
+export async function notFoundMessage(root: string, requested: string, base: string, folders = false): Promise<string> {
+  const suggestions = await suggestPaths(root, requested, 3, folders);
   if (suggestions.length === 0) return base;
   return `${base} Did you mean: ${suggestions.join(", ")}?`;
 }

@@ -72,8 +72,30 @@ describe("coder-tools toolsProvider", () => {
     expect(tools.map(t => t.name)).not.toContain("run_subagent");
   });
 
-  it("reports when no checker fits the project", async () => {
-    expect(await callTool(tools, "diagnostics", {})).toMatch(/^Error: No checker was detected/);
+  it("reports when no checker fits the project, and points at its tests", async () => {
+    expect(await callTool(tools, "diagnostics", {})).toMatch(/^Error: No checker was detected.*Run the project's tests/);
+    await writeFile(join(root, "package.json"), JSON.stringify({ scripts: { test: "node test.js" } }));
+    try {
+      expect(await callTool(tools, "diagnostics", {})).toContain('Run its tests instead: run_command "npm test" (node test.js).');
+    } finally {
+      await rm(join(root, "package.json"));
+    }
+  });
+
+  // In the evals, models asked about "signup.js" looked for it in the root first, and got the
+  // system's ENOENT with a full path; a suggestion takes them straight to it.
+  it("says where a missing file or folder probably is", async () => {
+    await mkdir(join(root, "app", "forms"), { recursive: true });
+    await writeFile(join(root, "app", "forms", "signup.js"), "// form\n");
+    try {
+      expect(await callTool(tools, "read_file", { path: "signup.js" })).toBe("Error: signup.js does not exist. Did you mean: app/forms/signup.js?");
+      expect(await callTool(tools, "list_dir", { path: "forms" })).toBe(
+        "Error: forms does not exist (write_file creates missing folders). Did you mean: app/forms?",
+      );
+      expect(await callTool(tools, "list_dir", { path: "app/forms/signup.js" })).toMatch(/is a file, not a folder/);
+    } finally {
+      await rm(join(root, "app"), { recursive: true, force: true });
+    }
   });
 
   it("omits run_command when shell is disabled and falls back to the working directory", async () => {
@@ -110,7 +132,7 @@ describe("coder-tools toolsProvider", () => {
 
   it("returns recoverable errors as strings", async () => {
     expect(await callTool(tools, "read_file", { path: "../../outside.txt" })).toMatch(/^Error: .*outside the allowed root/);
-    expect(await callTool(tools, "read_file", { path: "nope.txt" })).toMatch(/^Error: ENOENT/);
+    expect(await callTool(tools, "read_file", { path: "nope.txt" })).toBe("Error: nope.txt does not exist.");
     await callTool(tools, "read_file", { path: "long.txt" }); // edits need a prior read
     expect(await callTool(tools, "edit_file", { path: "long.txt", old_string: "line", new_string: "row" })).toMatch(
       /^Error: old_string occurs/,
