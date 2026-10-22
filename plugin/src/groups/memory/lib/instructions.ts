@@ -78,7 +78,7 @@ export function buildContextBlock(options: {
   // Local models have no idea what day it is, which quietly ruins anything date-related.
   const today = (options.today ?? new Date()).toISOString().slice(0, 10);
   return [
-    `<context source="memory-tools" project="${options.projectFolder}">`,
+    `<context source="agent-toolkit" project="${options.projectFolder}">`,
     `Today is ${today}. The following was loaded automatically; follow the project instructions.`,
     "",
     sections.join("\n\n"),

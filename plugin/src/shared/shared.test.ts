@@ -197,14 +197,14 @@ describe("macOS PATH", () => {
 describe("isChatStateFile", () => {
   const dir = join(tmpdir(), "chat");
 
-  it("recognises the mode file", () => {
-    expect(isChatStateFile(dir, join(dir, ".agent-mode.json"))).toBe(true);
-    expect(isChatStateFile(dir, join(dir, "notes.json"))).toBe(false);
+  it("recognises the mode file", async () => {
+    expect(await isChatStateFile(dir, join(dir, ".agent-mode.json"))).toBe(true);
+    expect(await isChatStateFile(dir, join(dir, "notes.json"))).toBe(false);
   });
 
   // Windows and macOS ignore case by default, so a differently-cased name is the same file there.
-  it.runIf(process.platform === "win32" || process.platform === "darwin")("ignores case where the filesystem does", () => {
-    expect(isChatStateFile(dir, join(dir, ".Agent-Mode.JSON"))).toBe(true);
+  it.runIf(process.platform === "win32" || process.platform === "darwin")("ignores case where the filesystem does", async () => {
+    expect(await isChatStateFile(dir, join(dir, ".Agent-Mode.JSON"))).toBe(true);
   });
 });
 

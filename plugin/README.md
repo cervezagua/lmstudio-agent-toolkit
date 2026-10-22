@@ -130,6 +130,10 @@ Small models guess at sums and don't know what day it is. These two tools give t
 | Project Folder | *(empty)* | The folder every group works in. |
 | Max Output Characters | 20000 | Longer results keep their beginning and end. |
 | Redact Secrets | on | Hides API keys, tokens and private keys in what tools return. Your files are never changed. |
+| Read Attached Files | on | Puts the text of a PDF, Word or text file you attach to a message into that message. |
+| Max Attachment Characters | 40000 | How much of it; never more than half of what the chat's model has left. |
+
+**Attached files.** Attach a document to a message and ask about it: its text goes into the message, so "summarize this" means the document. A long one is cut at the limit, and the model is told how to read the rest; a scanned PDF is read with `ocr_document`. The tools can open what you attached in that chat by its name, and nothing else from LM Studio's own folder. LM Studio's RAG plugin reads attachments too: use one of the two in a chat, not both.
 
 **Files & Shell**
 

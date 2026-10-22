@@ -1,4 +1,4 @@
-import { type ChatMessage, type PromptPreprocessorController } from "@lmstudio/sdk";
+import { type PromptPreprocessorController } from "@lmstudio/sdk";
 import { configSchematics, globalConfigSchematics } from "../../config";
 import { buildContextBlock, loadInstructionFiles } from "./lib/instructions";
 import { defaultMemoryDirectory, INDEX_FILE, MemoryStore } from "./lib/memoryStore";
@@ -10,10 +10,12 @@ import { describeRedaction, redactSecrets } from "../../shared/redact";
 import { projectRoot } from "../../shared/projectFolder";
 
 /**
- * On the first user message of a chat, prepends project instructions (AGENTS.md etc.) and the
- * saved-memory index. Later messages pass through untouched, so the context is added only once.
+ * What the Memory group adds to a message, or null. On the first user message of a chat: project
+ * instructions (AGENTS.md etc.), the saved-memory index, skills and the git snapshot, so the context
+ * is added only once. On later ones only a reminder while planning mode is on. The plugin's prompt
+ * preprocessor (src/index.ts) puts it in front of the user's words, with anything else it adds.
  */
-export async function preprocess(ctl: PromptPreprocessorController, userMessage: ChatMessage) {
+export async function memoryContext(ctl: PromptPreprocessorController): Promise<string | null> {
   const history = await ctl.pullHistory();
   const hasEarlierUserMessage = history.getMessagesArray().some(message => message.getRole() === "user");
   const config = ctl.getPluginConfig(configSchematics);
@@ -21,9 +23,9 @@ export async function preprocess(ctl: PromptPreprocessorController, userMessage:
   if (hasEarlierUserMessage) {
     // Later in a chat, the only thing worth repeating is that planning mode is still on.
     if (config.get("enablePlanMode") && (await readMode(ctl.getWorkingDirectory())).planning) {
-      userMessage.replaceText(`<context source="memory-tools">${PLANNING_NOTE}</context>\n\n${userMessage.getText()}`);
+      return `<context source="agent-toolkit">${PLANNING_NOTE}</context>`;
     }
-    return userMessage;
+    return null;
   }
 
   const { root: projectFolder } = projectRoot(config.get("projectFolder"), () => ctl.getWorkingDirectory());
@@ -71,7 +73,7 @@ export async function preprocess(ctl: PromptPreprocessorController, userMessage:
     maxChars: config.get("maxInjectedChars"),
   });
   for (const notice of notices) ctl.createStatus({ status: "error", text: `agent-toolkit did not load ${notice}` });
-  if (!built) return userMessage;
+  if (!built) return null;
 
   // The same protection the tools have: a key pasted into AGENTS.md or a memory reaches the model as
   // a marker. Only the loaded context is touched, never the user's own message or the files.
@@ -94,7 +96,5 @@ export async function preprocess(ctl: PromptPreprocessorController, userMessage:
     ...(snapshot ? ["git status"] : []),
   ];
   ctl.createStatus({ status: "done", text: `agent-toolkit loaded ${loaded.join(", ")}` });
-  // replaceText keeps attached files/images on the message.
-  userMessage.replaceText(`${block}\n\n${userMessage.getText()}`);
-  return userMessage;
+  return block;
 }

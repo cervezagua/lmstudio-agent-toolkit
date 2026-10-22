@@ -1,6 +1,4 @@
 import { readdir, readFile, stat } from "fs/promises";
-import { existsSync, readFileSync } from "fs";
-import { homedir } from "os";
 import { basename, join } from "path";
 import { ToolError } from "../../../shared/errors";
 
@@ -21,16 +19,7 @@ const MAX_CHATS = 200;
 const MAX_BYTES = 5 * 1024 * 1024;
 const EXCERPT_CHARS = 240;
 
-/** LM Studio records where its data lives in ~/.lmstudio-home-pointer; ~/.lmstudio is the default. */
-export function lmStudioHome(home = homedir()): string {
-  try {
-    const pointed = readFileSync(join(home, ".lmstudio-home-pointer"), "utf-8").trim();
-    if (pointed && existsSync(pointed)) return pointed;
-  } catch {
-    // no pointer file: use the default
-  }
-  return join(home, ".lmstudio");
-}
+export { lmStudioHome } from "../../../shared/lmStudioHome";
 
 /**
  * What the user typed and what the assistant answered, in order. Left out on purpose: the model's

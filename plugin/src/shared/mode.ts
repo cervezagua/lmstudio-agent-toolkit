@@ -1,5 +1,7 @@
 import { mkdir, readFile, writeFile } from "fs/promises";
-import { join, resolve } from "path";
+import { dirname, join, resolve } from "path";
+import { attachmentsFile } from "./attachments";
+import { isInside, realpathOfNearestExisting } from "./paths";
 
 /**
  * The chat's current mode, shared between plugins through a small file in the chat's working
@@ -19,17 +21,39 @@ export function modeFile(workingDirectory: string): string {
 }
 
 /**
- * Files in the chat's working directory that the toolkit owns. The file tools refuse to change
- * them: when no project folder is set the root *is* the working directory, so without this the
- * model could turn planning off by writing the file instead of calling exit_plan_mode.
+ * The folders in the chat's working directory where the toolkit keeps its own state: the list of
+ * attached files, background tasks and their logs, undo backups, the todo list.
  */
-export function isChatStateFile(workingDirectory: string, file: string): boolean {
-  const a = resolve(file);
-  const b = resolve(modeFile(workingDirectory));
+export function stateFolders(workingDirectory: string): string[] {
+  return [dirname(attachmentsFile(workingDirectory)), join(workingDirectory, ".coder-tools"), join(workingDirectory, ".memory-tools")];
+}
+
+function owns(workingDirectory: string, file: string): boolean {
   // Windows and macOS filesystems ignore case by default, so ".Agent-Mode.json" is the same file
   // there. On a case-sensitive volume this only errs towards refusing, which is the safe side.
   const ignoreCase = process.platform === "win32" || process.platform === "darwin";
-  return ignoreCase ? a.toLowerCase() === b.toLowerCase() : a === b;
+  const fold = (path: string) => (ignoreCase ? resolve(path).toLowerCase() : resolve(path));
+  const target = fold(file);
+  return target === fold(modeFile(workingDirectory)) || stateFolders(workingDirectory).some(folder => isInside(fold(folder), target));
+}
+
+/**
+ * Whether `file` is one of the toolkit's own files in the chat's working directory, which the file
+ * tools refuse to change. When no project folder is set the root *is* the working directory, so
+ * without this the model could turn planning off by writing the mode file instead of calling
+ * exit_plan_mode, make any file on disk "attached" by writing the list of attachments, or point a
+ * background task's record at another process for task_stop to kill.
+ *
+ * The real paths are compared as well as the given ones: on Windows an 8.3 short name such as
+ * "AGENT-~1" is the same folder under a different spelling.
+ */
+export async function isChatStateFile(workingDirectory: string, file: string): Promise<boolean> {
+  if (owns(workingDirectory, file)) return true;
+  const [realWorkingDirectory, realFile] = await Promise.all([
+    realpathOfNearestExisting(resolve(workingDirectory)),
+    realpathOfNearestExisting(resolve(file)),
+  ]);
+  return owns(realWorkingDirectory, realFile);
 }
 
 export async function readMode(workingDirectory: string): Promise<ChatMode> {

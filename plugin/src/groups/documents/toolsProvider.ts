@@ -9,6 +9,7 @@ import { buildViewPrompt, looksLikeUrl, parseImageUrl, withDownloadedImage } fro
 import { markdownToDocxBuffer } from "./lib/writeDocx";
 import { htmlToPdfBuffer, markdownToPrintHtml } from "./lib/writePdf";
 import { DEFAULT_OCR_PROMPT, IMAGE_EXTENSIONS, ocrImageFile, pickVisionModel, visionModelName } from "./lib/vision";
+import { findAttachment } from "../../shared/attachments";
 import { safe, ToolError } from "../../shared/errors";
 import { isChatStateFile, readMode } from "../../shared/mode";
 import { displayPath, resolveSafe } from "../../shared/paths";
@@ -20,24 +21,42 @@ export async function toolsProvider(ctl: ToolsProviderController) {
   const config = ctl.getPluginConfig(configSchematics);
   const { root } = projectRoot(config.get("projectFolder"), () => ctl.getWorkingDirectory());
   const maxOutputChars = config.get("maxOutputChars");
-  const show = (path: string) => displayPath(root, path);
+  // An attachment is shown by the name it was attached under, not by where LM Studio keeps it.
+  const attachmentNames = new Map<string, string>();
+  const show = (path: string) => attachmentNames.get(path) ?? displayPath(root, path);
 
   const rootStat = await stat(root).catch(() => null);
   if (!rootStat?.isDirectory()) {
     throw new Error(`Project Folder "${root}" does not exist or is not a directory.`);
   }
 
+  /**
+   * A document in the project folder, or one the user attached to a message in this chat, by its
+   * name. Attachments live in LM Studio's own folder; only those attached in this chat are reachable.
+   */
   const resolveDocument = async (path: string) => {
-    const file = await resolveSafe(root, path);
-    const info = await stat(file).catch(() => null);
-    if (!info?.isFile()) throw new ToolError(`"${path}" is not a file.`);
-    return file;
+    let file: string | null = null;
+    let outside: unknown = null;
+    try {
+      file = await resolveSafe(root, path);
+    } catch (error) {
+      outside = error;
+    }
+    const info = file ? await stat(file).catch(() => null) : null;
+    if (file && info?.isFile()) return file;
+    const attached = await findAttachment(ctl.getWorkingDirectory(), path);
+    if (attached && (await stat(attached.path).then(found => found.isFile(), () => false))) {
+      attachmentNames.set(attached.path, attached.name);
+      return attached.path;
+    }
+    if (outside) throw outside;
+    throw new ToolError(`"${path}" is not a file in the project folder, nor a file attached in this chat.`);
   };
 
   /** Resolves a path a tool is about to change, refusing the toolkit's own chat state files. */
   const resolveWritable = async (path: string) => {
     const file = await resolveSafe(root, path);
-    if (isChatStateFile(ctl.getWorkingDirectory(), file)) {
+    if (await isChatStateFile(ctl.getWorkingDirectory(), file)) {
       throw new ToolError(`${show(file)} is managed by the toolkit and cannot be changed by a tool.`);
     }
     return file;
@@ -51,7 +70,8 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       description: text`
         Read the text layer of a PDF: fast, exact and free, but blank for scanned documents and
         images. Always try this first for a PDF; it tells you if the document is scanned, in which
-        case use ocr_document. Use pages ("1-3,7") for long documents.
+        case use ocr_document. Use pages ("1-3,7") for long documents. path can also be the name of
+        a file the user attached in this chat.
       `,
       parameters: { path: z.string(), pages: z.string().optional() },
       implementation: safe(async ({ path, pages }, ctx) => {

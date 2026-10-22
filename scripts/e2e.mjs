@@ -41,6 +41,8 @@ const allGroupsOff = {
   projectFolder: "",
   maxOutputChars: 20000,
   redactSecrets: true,
+  readAttachments: true,
+  maxAttachmentChars: 40000,
   enableFiles: false,
   allowShell: true,
   shell: "auto",

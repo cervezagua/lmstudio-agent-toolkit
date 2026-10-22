@@ -18,6 +18,7 @@ import { assertPatternStaysInside, globFiles, grepFiles, parseRipgrepOutput } fr
 import { getSession, resetSession, type ShellSpec } from "./lib/session";
 import { DEFAULT_MAX_ROWS, MAX_MAX_ROWS, sqliteAvailable, sqliteQuery } from "./lib/sqlite";
 import { formatTaskLine, TaskManager } from "./lib/tasks";
+import { findAttachment } from "../../shared/attachments";
 import { safe, ToolError } from "../../shared/errors";
 import { isChatStateFile, PLANNING_NOTE, readMode } from "../../shared/mode";
 import { displayPath, resolveSafe } from "../../shared/paths";
@@ -71,29 +72,45 @@ export async function toolsProvider(ctl: ToolsProviderController) {
   if (!rootStat?.isDirectory()) {
     throw new Error(`Project Folder "${root}" does not exist or is not a directory.`);
   }
-  const show = (path: string) => displayPath(root, path);
+  // A file the user attached is shown by the name it was attached under, not by where LM Studio keeps it.
+  const attachmentNames = new Map<string, string>();
+  const show = (path: string) => attachmentNames.get(path) ?? displayPath(root, path);
   // State that must not pollute the user's project lives in the chat's working directory.
   const stateDir = join(ctl.getWorkingDirectory(), ".coder-tools");
   const backups = new BackupStore(join(stateDir, "backups"));
   const readIfExists = (file: string) => readFile(file, "utf-8").catch(() => null);
 
-  /** Paths resolve inside the project root, or inside the plugin's own state folder (overflow output). */
+  /**
+   * Paths resolve inside the project root, or inside the plugin's own state folder (overflow output).
+   * A name that is not in the project can also be a file the user attached in this chat: read only,
+   * and only a file that was attached here (see shared/attachments.ts).
+   */
   const resolveReadable = async (path: string) => {
+    let inRoot: string | null = null;
+    let rootError: unknown = null;
     try {
-      return await resolveSafe(root, path);
+      inRoot = await resolveSafe(root, path);
     } catch (error) {
-      try {
-        return await resolveSafe(stateDir, path);
-      } catch {
-        throw error; // report the project-root error, which is the one the model needs
-      }
+      rootError = error;
+    }
+    if (inRoot && (await stat(inRoot).then(() => true, () => false))) return inRoot;
+    const attached = await findAttachment(ctl.getWorkingDirectory(), path);
+    if (attached && !attached.image) {
+      attachmentNames.set(attached.path, attached.name);
+      return attached.path;
+    }
+    if (inRoot) return inRoot; // missing: the read reports it, with suggestions
+    try {
+      return await resolveSafe(stateDir, path);
+    } catch {
+      throw rootError; // report the project-root error, which is the one the model needs
     }
   };
 
   /** Resolves a path a tool is about to change, refusing the toolkit's own chat state files. */
   const resolveWritable = async (path: string) => {
     const file = await resolveSafe(root, path);
-    if (isChatStateFile(ctl.getWorkingDirectory(), file)) {
+    if (await isChatStateFile(ctl.getWorkingDirectory(), file)) {
       throw new ToolError(`${show(file)} is managed by the toolkit and cannot be changed by a tool.`);
     }
     return file;
@@ -154,7 +171,11 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         const file = await resolveReadable(path);
         const windowed = offset !== undefined || limit !== undefined;
         const info = await assertReadableSize(file, show(file), maxReadBytes, windowed);
-        if (await looksBinary(file)) throw new ToolError(`"${path}" looks like a binary file.`);
+        if (await looksBinary(file)) {
+          // A PDF, attached or in the project, has a tool of its own.
+          const document = /\.pdf$/i.test(file) ? " For a PDF, use read_document_text (Documents group)." : "";
+          throw new ToolError(`"${path}" looks like a binary file.${document}`);
+        }
 
         const { lines, start, totalLines } = await readTextSlice(file, offset ?? 1, limit ?? 2000);
         const body = lines
@@ -273,9 +294,10 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       implementation: safe(async ({ path, after_line, content, preview }) => {
         // Inserting into a file that does not exist yet is allowed, so only existing files go
         // through the read-before-edit check.
-        const existing = await readIfExists(await resolveSafe(root, path));
-        const { file, content: original } =
-          existing === null ? { file: await resolveSafe(root, path), content: "" } : await openForEdit(path);
+        // resolveWritable for a new file too: the toolkit's own state files must not be created here.
+        const target = await resolveWritable(path);
+        const existing = await readIfExists(target);
+        const { file, content: original } = existing === null ? { file: target, content: "" } : await openForEdit(path);
         const updated = insertLines(original, after_line, content);
         if (preview) return `Preview of ${show(file)} (nothing written):\n${previewDiff(original, updated)}`;
         await backups.save(file, existing === null ? null : original);
