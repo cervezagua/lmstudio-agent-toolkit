@@ -13,6 +13,7 @@ import {
   findAttachment,
   MAX_FILES_PER_MESSAGE,
   readAttachments,
+  readAttachmentText,
   recordAttachments,
   setUserFilesDirectory,
   type AttachedFile,
@@ -37,6 +38,29 @@ afterEach(async () => {
   setUserFilesDirectory(null);
   await rm(base, { recursive: true, force: true });
 });
+
+/** A small PDF with real text, one string per page. */
+function makePdf(...pageTexts: string[]): Buffer {
+  const pageIds = pageTexts.map((_, i) => 3 + i * 2);
+  const objects: string[] = ["<< /Type /Catalog /Pages 2 0 R >>", `<< /Type /Pages /Kids [${pageIds.map(id => `${id} 0 R`).join(" ")}] /Count ${pageTexts.length} >>`];
+  const fontId = 3 + pageTexts.length * 2;
+  pageTexts.forEach((text, i) => {
+    const stream = `BT /F1 12 Tf 20 150 Td (${text}) Tj ET`;
+    objects[pageIds[i] - 1] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 200] /Contents ${pageIds[i] + 1} 0 R /Resources << /Font << /F1 ${fontId} 0 R >> >> >>`;
+    objects[pageIds[i]] = `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`;
+  });
+  objects[fontId - 1] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>";
+  let pdf = "%PDF-1.4\n";
+  const offsets: number[] = [];
+  objects.forEach((body, index) => {
+    offsets.push(pdf.length);
+    pdf += `${index + 1} 0 obj\n${body}\nendobj\n`;
+  });
+  const xref = pdf.length;
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, "0")} 00000 n \n`).join("")}`;
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return Buffer.from(pdf, "latin1");
+}
 
 let stored = 0;
 
@@ -95,7 +119,9 @@ function controller(fakeClient: unknown, contextLength: number | null = null, ex
   return Object.assign(ctl, extra);
 }
 
-const options = { maxChars: 40000, usedChars: 0, documentTools: true, fileTools: true };
+/** Reads through the fake parser, so these tests choose each file's text by its name. */
+const fakeRead = async (ctl: any, file: AttachedFile) => (await ctl.client.files.parseDocument(file)).content as string;
+const options = { maxChars: 40000, usedChars: 0, documentTools: true, fileTools: true, readText: fakeRead };
 
 describe("attachmentContext", () => {
   it("puts a document's text in the message and takes the file off it", async () => {
@@ -367,6 +393,42 @@ describe("the chat's list of attachments", () => {
   });
 });
 
+describe("readAttachmentText", () => {
+  // LM Studio froze when asked to parse a 6.5 MB PDF in its own process, so PDFs and text files
+  // are read without it, and its parser is kept for small Word files only.
+  const neverParse = { parseDocument: async () => expect.fail("LM Studio's parser must not be used for this file") };
+  const ctl = { client: { files: neverParse }, abortSignal: new AbortController().signal };
+
+  it("reads a PDF with the toolkit's own reader, page by page", async () => {
+    const path = join(filesDir, "two.pdf");
+    await writeFile(path, makePdf("First page words", "Second page words"));
+    expect(await readAttachmentText(ctl, attached("two.pdf", "application/pdf"), path)).toBe(
+      "--- page 1 of 2 ---\nFirst page words\n\n--- page 2 of 2 ---\nSecond page words",
+    );
+  }, 60000);
+
+  it("reads a text file straight from disk", async () => {
+    const path = join(filesDir, "notes.txt");
+    await writeFile(path, "plain notes\nsecond line");
+    expect(await readAttachmentText(ctl, attached("notes.txt", "text/plain"), path)).toBe("plain notes\nsecond line");
+  });
+
+  it("uses LM Studio's parser only for a Word file, and not for a big one", async () => {
+    const word = attached("letter.docx", "application/word");
+    const parsing = { client: { files: { parseDocument: async () => ({ content: "Dear reader" }) } }, abortSignal: new AbortController().signal };
+    expect(await readAttachmentText(parsing, word, join(filesDir, "x.docx"))).toBe("Dear reader");
+    await expect(readAttachmentText(ctl, { ...word, sizeBytes: 50 * 1024 * 1024 }, join(filesDir, "x.docx"))).rejects.toThrow(/50 MB, more than is read/);
+  });
+
+  it("names the page to carry on from when a PDF is cut", async () => {
+    const path = join(filesDir, "pages.pdf");
+    await writeFile(path, makePdf(...Array.from({ length: 30 }, (_, i) => `Page ${i + 1} ${"text ".repeat(40)}`)));
+    const file = attached("pages.pdf", "application/pdf", "pages.pdf");
+    const added = await attachmentContext(controller(client({})), message("q", [file]), { ...options, readText: undefined, maxChars: 1000 });
+    expect(added).toMatch(/read on with read_document_text, path "pages\.pdf", pages "\d+-30"/);
+  }, 60000);
+});
+
 describe("composeMessage", () => {
   it("leaves a message alone when nothing was added", () => {
     expect(composeMessage([], "hi")).toBe("hi");
@@ -390,15 +452,18 @@ describe("the prompt preprocessor", () => {
     enablePlanMode: false,
     ...overrides,
   });
+  // These run the real reader: the toolkit's own PDF reader, in its own process.
+  beforeEach(() => writeFile(join(filesDir, "main-stored.pdf"), makePdf("The PDF own words, in full")));
+
   const run = (msg: unknown, overrides: Record<string, unknown> = {}, history = Chat.empty()) =>
     promptPreprocessor(
-      fakeController({ config: config(overrides), workingDirectory: chatDir, client: client({ "main.pdf": "The PDF's own words." }), history }),
+      fakeController({ config: config(overrides), workingDirectory: chatDir, client: client({}), history }),
       msg as ChatMessage,
     );
 
   it("answers \"summarize this\" with the document, using a real message from the SDK", async () => {
     // The chat that prompted this: a PDF and "summarize this", and no plugin to read the PDF.
-    await writeFile(join(filesDir, "1792647278075 - 72.pdf"), "%PDF");
+    await writeFile(join(filesDir, "1792647278075 - 72.pdf"), makePdf("The PDF own words, in full"));
     const msg = ChatMessage.from({
       role: "user",
       content: [
@@ -409,7 +474,7 @@ describe("the prompt preprocessor", () => {
     } as any);
     await run(msg);
     const text = msg.getText();
-    expect(text).toContain('<attachment name="main.pdf" characters="20">\nThe PDF\'s own words.\n</attachment>');
+    expect(text).toContain('<attachment name="main.pdf" characters="46">\n--- page 1 of 1 ---\nThe PDF own words, in full\n</attachment>');
     expect(text.endsWith("The user's message:\nsummarize this")).toBe(true);
     // The document was taken off the message and the image kept, for a model that can see.
     expect(msg.getFiles(client({}) as any).map(file => file.name)).toEqual(["photo.png"]);
@@ -417,14 +482,14 @@ describe("the prompt preprocessor", () => {
   });
 
   it("leaves the message alone with the setting off", async () => {
-    const msg = message("summarize this", [attached("main.pdf", "application/pdf")]);
+    const msg = message("summarize this", [attached("main.pdf", "application/pdf", "main-stored.pdf")]);
     await run(msg, { readAttachments: false });
     expect(msg.getText()).toBe("summarize this");
     expect(msg.remaining()).toHaveLength(1);
   });
 
   it("puts the Memory group's block first, then the document, then the user's words", async () => {
-    const msg = message("summarize this", [attached("main.pdf", "application/pdf")]);
+    const msg = message("summarize this", [attached("main.pdf", "application/pdf", "main-stored.pdf")]);
     await writeFile(join(base, "AGENTS.md"), "Answer briefly.");
     await run(msg, {
       enableMemory: true,
@@ -437,7 +502,7 @@ describe("the prompt preprocessor", () => {
       maxInjectedChars: 12000,
     });
     const text = msg.getText();
-    const order = ['<context source="agent-toolkit"', "Answer briefly.", "</context>", '<attachment name="main.pdf"', "The PDF's own words.", "not part of the user's message", "The user's message:\nsummarize this"].map(part =>
+    const order = ['<context source="agent-toolkit"', "Answer briefly.", "</context>", '<attachment name="main.pdf"', "The PDF own words, in full", "not part of the user's message", "The user's message:\nsummarize this"].map(part =>
       text.indexOf(part),
     );
     expect(order.every(index => index >= 0)).toBe(true);
@@ -447,7 +512,7 @@ describe("the prompt preprocessor", () => {
   it("keeps the planning reminder on a later message with a file, and adds the boundary once", async () => {
     const { writeMode } = await import("./mode");
     await writeMode(chatDir, { planning: true });
-    const msg = message("and this one?", [attached("main.pdf", "application/pdf")]);
+    const msg = message("and this one?", [attached("main.pdf", "application/pdf", "main-stored.pdf")]);
     const later = Chat.from([
       { role: "user", content: "hello" },
       { role: "assistant", content: "hi" },
@@ -455,7 +520,7 @@ describe("the prompt preprocessor", () => {
     await run(msg, { enableMemory: true, enablePlanMode: true }, later);
     const text = msg.getText();
     expect(text).toMatch(/^<context source="agent-toolkit">PLANNING MODE is on/);
-    expect(text).toContain("The PDF's own words.");
+    expect(text).toContain("The PDF own words, in full");
     expect(text.match(/The user's message:/g)).toHaveLength(1);
   });
 

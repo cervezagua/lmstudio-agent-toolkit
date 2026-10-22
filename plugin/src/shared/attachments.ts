@@ -1,5 +1,6 @@
-import { mkdir, readFile, realpath, stat } from "fs/promises";
+import { mkdir, open, readFile, realpath, stat } from "fs/promises";
 import { basename, join } from "path";
+import { extractPdfText } from "../groups/documents/lib/pdf";
 import { scanForInjection } from "./injectionScan";
 import { lmStudioHome } from "./lmStudioHome";
 import { isInside } from "./paths";
@@ -127,6 +128,8 @@ export interface AttachmentContextOptions {
   documentTools: boolean;
   /** Whether read_file is offered, which can read the rest of a long text attachment. */
   fileTools: boolean;
+  /** How a file's text is read; tests replace it. */
+  readText?: (ctl: AttachmentController, file: AttachedFile, path: string) => Promise<string>;
 }
 
 /** What a preprocessor needs from its controller here. */
@@ -209,6 +212,40 @@ function looksScanned(text: string, sizeBytes: number): boolean {
   return text.length < 20 || (text.length < 200 && sizeBytes > 50_000);
 }
 
+/** More than this is not read from one attached file: the budget is far smaller anyway. */
+const MAX_READ_BYTES = 5 * 1024 * 1024;
+
+/**
+ * An attached file's text. Nothing heavy runs inside LM Studio: a PDF is read by the toolkit's own
+ * reader in a separate process with a time limit, the one read_document_text uses, and a text file
+ * is read directly. Asking LM Studio to parse a large PDF made the whole app stop responding, as
+ * that runs in its own process. Its parser is left only for Word files, and only small ones.
+ */
+export async function readAttachmentText(ctl: Pick<AttachmentController, "client" | "abortSignal">, file: AttachedFile, path: string): Promise<string> {
+  const kind = kindOf(file);
+  if (kind === "PDF") {
+    if (!path) throw new Error("LM Studio did not say where the file is kept");
+    const result = await extractPdfText(path, undefined, ctl.abortSignal);
+    if (result.pages.every(page => !page.text)) return "";
+    return result.pages.map(page => `--- page ${page.page} of ${result.totalPages} ---\n${page.text}`).join("\n\n");
+  }
+  if (kind === "text file" && path) {
+    const handle = await open(path, "r");
+    try {
+      const buffer = Buffer.alloc(Math.min(MAX_READ_BYTES, (await handle.stat()).size));
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+      return buffer.subarray(0, bytesRead).toString("utf-8");
+    } finally {
+      await handle.close();
+    }
+  }
+  if (file.sizeBytes > MAX_READ_BYTES) {
+    throw new Error(`it is ${Math.round(file.sizeBytes / 1024 / 1024)} MB, more than is read from an attachment here`);
+  }
+  const { content } = await ctl.client.files.parseDocument(file, { signal: ctl.abortSignal });
+  return content ?? "";
+}
+
 /** The text LM Studio's RAG plugin puts in a message, which means it has handled the files already. */
 const RAG_PLUGIN_MARKERS = [
   "The following citations were found in the files provided by the user",
@@ -218,9 +255,13 @@ const RAG_PLUGIN_MARKERS = [
 function readOnHint(file: AttachedFile, name: string, shown: string, options: AttachmentContextOptions): string {
   const kind = kindOf(file);
   if (kind === "PDF") {
-    return options.documentTools
-      ? `read it with read_document_text, path "${name}", choosing pages`
-      : "the Documents group has to be switched on to read it; tell the user";
+    if (!options.documentTools) return "the Documents group has to be switched on to read it; tell the user";
+    // The text is marked page by page, so the page it stopped in is where to carry on.
+    const markers = [...shown.matchAll(/--- page (\d+) of (\d+) ---/g)];
+    const last = markers.at(-1);
+    return last
+      ? `read on with read_document_text, path "${name}", pages "${last[1]}-${last[2]}"`
+      : `read it with read_document_text, path "${name}", choosing pages`;
   }
   if (kind === "text file" && options.fileTools) {
     // read_file counts lines, so the line where this stops is where to carry on.
@@ -298,7 +339,7 @@ export async function attachmentContext(
 
     let content: string;
     try {
-      ({ content } = await ctl.client.files.parseDocument(file, { signal: ctl.abortSignal }));
+      content = await (options.readText ?? readAttachmentText)(ctl, file, (await file.getFilePath().catch(() => null)) ?? "");
     } catch (error: any) {
       if (ctl.abortSignal.aborted) throw error;
       const why = shownName(String(error?.message ?? error).split("\n")[0]);
@@ -306,11 +347,13 @@ export async function attachmentContext(
       continue;
     }
     const full = (content ?? "").trim();
-    const scanned = kind === "PDF" && looksScanned(full, file.sizeBytes);
+    // Page markers alone are not text.
+    const words = full.replace(/--- page \d+ of \d+ ---/g, "").trim();
+    const scanned = kind === "PDF" && looksScanned(words, file.sizeBytes);
     const ocr = options.documentTools
       ? `Read it with ocr_document, path "${name}".`
       : "To read it, the Documents group has to be switched on in agent-toolkit's settings; tell the user.";
-    if (!full) {
+    if (!words) {
       sections.push(
         `<attachment name="${name}">\n[${scanned ? `This PDF has no text layer: it is probably scanned. ${ocr}` : "This file has no text."}]\n</attachment>`,
       );
