@@ -245,7 +245,8 @@ describe("coder-tools toolsProvider", () => {
       setUserFilesDirectory(null);
       await rm(store, { recursive: true, force: true }).catch(() => {});
     }
-  });
+    // Starting PowerShell for the short name took over 20 s on a cold Windows CI machine.
+  }, 60_000);
 
   it("names a working folder that does not exist, instead of blaming the shell", async () => {
     for (const name of ["run_command", "task_run"]) {
