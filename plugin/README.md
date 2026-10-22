@@ -91,6 +91,9 @@ Skills use the standard `SKILL.md` layout, the same as Claude Code, Codex and LM
 | `browser_open` · `browser_click` · `browser_type` · `browser_back` · `browser_snapshot` · `browser_screenshot` · `browser_close` | Drives your own Edge or Chrome. Pages run their JavaScript, and the model clicks by number. |
 | `wikipedia` | Finds a Wikipedia article and returns its text, in any language edition. |
 | `web_doctor` | Checks what's set up (SearXNG, the browser, yt-dlp) and says how to fix what isn't. Also says when a newer agent-toolkit release is out. |
+| `research` | Answers a question from several pages, with a numbered source for each claim. Off by default. |
+
+**`research`** searches with a few queries, reads up to five pages and has the model note what each says about the question, then writes the answer from those notes alone. Each step is a small, single question, which small models handle well. Citations of sources that don't exist are removed, and the answer says when it cites nothing. It takes a minute or so of generation, on the first loaded model or the Research Model you choose. Its answers are only as good as the search behind them, so it works best with SearXNG or Brave.
 
 Search works best with a private [SearXNG](https://github.com/searxng/searxng). Without one it falls back to DuckDuckGo, which answers a couple of searches and then turns automated requests away for a while; the toolkit spaces its requests out and pauses for two minutes once refused. More result pages need SearXNG or Brave. `video_transcript` appears once yt-dlp is installed.
 
@@ -161,7 +164,7 @@ Small models guess at sums and don't know what day it is. These two tools give t
 
 **Git & GitHub:** Allow Push *(off)* · Enable GitHub Tools *(on)*.
 
-**Web:** Search Backend *(auto)* · SearXNG URL *(`http://localhost:8888`)* · Safe Search *(moderate)* · Default Search Results *(8)* · Max Page Characters *(15000)* · Browser Fallback *(on)* · Enable Browser Tools *(on)* · Browser *(Edge on Windows, Chrome elsewhere)* · Headless *(on)*.
+**Web:** Search Backend *(auto)* · SearXNG URL *(`http://localhost:8888`)* · Safe Search *(moderate)* · Default Search Results *(8)* · Max Page Characters *(15000)* · Browser Fallback *(on)* · Enable Browser Tools *(on)* · Browser *(Edge on Windows, Chrome elsewhere)* · Headless *(on)* · Research *(off)* · Research Model *(Auto, chosen from your models)*.
 
 **Documents:** Vision Model *(Auto, chosen from your models)* · PDF Render Scale *(2)* · Max Pages Per Call *(10)*.
 

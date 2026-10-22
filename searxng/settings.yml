@@ -37,8 +37,12 @@ outgoing:
 # Web engines, chosen by testing from one Windows machine (September 2026): brave, bing and google
 # returned results; duckduckgo and qwant answered with CAPTCHAs, google cse timed out, and
 # yep/privacywall denied access. Results vary by network. Unlisted engines keep SearXNG's defaults.
+# Yahoo was added in October 2026: with google and brave suspended, bing alone answered most
+# queries with the same few pages about the topic, and yahoo found the specific ones.
 engines:
   - name: bing
+    disabled: false
+  - name: yahoo
     disabled: false
   - name: google
     disabled: false

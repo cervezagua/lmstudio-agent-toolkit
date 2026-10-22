@@ -10,6 +10,9 @@ import { runWebDoctor } from "./lib/doctor";
 import { makeReadFeedTools } from "./lib/feeds";
 import { makeVideoTranscriptTools } from "./lib/transcript";
 import { makeWikipediaTools } from "./lib/wikipedia";
+import { fetchPage } from "./lib/fetchPage";
+import { research } from "./lib/research";
+import { pickSubagentModel } from "../files/lib/subagent";
 import { findExecutable } from "../../shared/process";
 import { safe, ToolError } from "../../shared/errors";
 import { truncate } from "../../shared/truncate";
@@ -162,6 +165,59 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         implementation: safe(async () => {
           await browserSession.close();
           return "Browser closed.";
+        }),
+      }),
+    );
+  }
+
+  if (config.get("enableResearch")) {
+    tools.push(
+      tool({
+        name: "research",
+        description: text`
+          Research a question on the web: searches, reads several pages, and returns a short answer
+          with a numbered source for each claim. Takes a minute or so. Use it for questions that need
+          more than one page; to read one known page, use fetch_url.
+        `,
+        parameters: { question: z.string().min(3), sources: z.number().int().min(2).max(8).optional() },
+        implementation: safe(async ({ question, sources }, ctx) => {
+          ctx.status("Starting research");
+          const model = await pickSubagentModel(ctl.client, config.get("researchModel"), "research", "Research Model");
+          return research(
+            question,
+            {
+              ask: async (system, prompt, maxTokens) => {
+                const result = await model.respond(
+                  [
+                    { role: "system", content: system },
+                    { role: "user", content: prompt },
+                  ],
+                  { maxTokens, temperature: 0.2, signal: ctx.signal },
+                );
+                return result.nonReasoningContent ?? result.content;
+              },
+              search: async query =>
+                (
+                  await runSearch({
+                    backend,
+                    query,
+                    count: 6,
+                    safeSearch: config.get("safeSearch") as SafeSearch,
+                    searxngUrl: config.get("searxngUrl"),
+                    braveApiKey: backend === "brave" ? ctl.getGlobalPluginConfig(globalConfigSchematics).get("braveApiKey") : "",
+                    signal: ctx.signal,
+                  })
+                ).results,
+              fetch: async url => {
+                const page = await fetchPage(url, { signal: ctx.signal, timeoutMs: 15_000, retries: 0 });
+                return { title: page.title, text: page.markdown };
+              },
+              status: message => ctx.status(message),
+              signal: ctx.signal,
+            },
+            // A page's notes are taken in one go, so a long page is cut sooner than fetch_url cuts it.
+            { maxSources: sources ?? 5, maxPageChars: Math.min(maxPageChars, 12_000) },
+          );
         }),
       }),
     );
