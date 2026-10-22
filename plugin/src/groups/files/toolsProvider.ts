@@ -398,8 +398,9 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         let lines: string[];
         let truncated: boolean;
         if (rg) {
-          // --null ends every path with a NUL, so the path can be split off exactly.
-          const args = ["--color", "never", "--max-columns", "300", "--null"];
+          // --null ends every path with a NUL, so the path can be split off exactly. --with-filename
+          // because ripgrep leaves the path out when searching one file, and the lines would be lost.
+          const args = ["--color", "never", "--max-columns", "300", "--null", "--with-filename"];
           if (mode === "files_with_matches") args.push("--files-with-matches");
           else if (mode === "count") args.push("--count");
           else args.push("--line-number", "--no-heading");

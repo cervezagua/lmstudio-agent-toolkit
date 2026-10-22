@@ -290,6 +290,16 @@ describe("coder-tools toolsProvider", () => {
     );
   });
 
+  // With ripgrep installed, searching one file found nothing: ripgrep leaves the path out then, and
+  // the lines without one were dropped. A model in an eval searched a file 30 times for a line in it.
+  it("searches a single file", async () => {
+    expect(await callTool(tools, "grep", { pattern: "line 4[01]$", path: "long.txt" })).toBe("long.txt:40: line 40\nlong.txt:41: line 41");
+    expect(await callTool(tools, "grep", { pattern: "line", path: "long.txt", output_mode: "count" })).toMatch(/^long\.txt: \d+$/);
+    expect(await callTool(tools, "grep", { pattern: "line 7$", path: "long.txt", context: 1 })).toBe(
+      "long.txt:6- line 6\nlong.txt:7: line 7\nlong.txt:8- line 8",
+    );
+  });
+
   it("runs shell commands in the root and enforces the blocklist", async () => {
     const output = await callTool(tools, "run_command", { command: "node -e \"console.log(process.cwd())\"" });
     expect(output).toContain("exit_code: 0");
