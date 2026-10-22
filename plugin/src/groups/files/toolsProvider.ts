@@ -18,6 +18,7 @@ import { assertPatternStaysInside, globFiles, grepFiles, parseRipgrepOutput } fr
 import { getSession, resetSession, type ShellSpec } from "./lib/session";
 import { DEFAULT_MAX_ROWS, MAX_MAX_ROWS, sqliteAvailable, sqliteQuery } from "./lib/sqlite";
 import { formatTaskLine, TaskManager } from "./lib/tasks";
+import { findAttachment } from "../../shared/attachments";
 import { safe, ToolError } from "../../shared/errors";
 import { isChatStateFile, PLANNING_NOTE, readMode } from "../../shared/mode";
 import { displayPath, resolveSafe } from "../../shared/paths";
@@ -77,16 +78,27 @@ export async function toolsProvider(ctl: ToolsProviderController) {
   const backups = new BackupStore(join(stateDir, "backups"));
   const readIfExists = (file: string) => readFile(file, "utf-8").catch(() => null);
 
-  /** Paths resolve inside the project root, or inside the plugin's own state folder (overflow output). */
+  /**
+   * Paths resolve inside the project root, or inside the plugin's own state folder (overflow output).
+   * A name that is not in the project can also be a file the user attached in this chat: read only,
+   * and only a file that was attached here (see shared/attachments.ts).
+   */
   const resolveReadable = async (path: string) => {
+    let inRoot: string | null = null;
+    let rootError: unknown = null;
     try {
-      return await resolveSafe(root, path);
+      inRoot = await resolveSafe(root, path);
     } catch (error) {
-      try {
-        return await resolveSafe(stateDir, path);
-      } catch {
-        throw error; // report the project-root error, which is the one the model needs
-      }
+      rootError = error;
+    }
+    if (inRoot && (await stat(inRoot).then(() => true, () => false))) return inRoot;
+    const attached = await findAttachment(ctl.getWorkingDirectory(), path);
+    if (attached && !attached.image) return attached.path;
+    if (inRoot) return inRoot; // missing: the read reports it, with suggestions
+    try {
+      return await resolveSafe(stateDir, path);
+    } catch {
+      throw rootError; // report the project-root error, which is the one the model needs
     }
   };
 
@@ -273,9 +285,10 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       implementation: safe(async ({ path, after_line, content, preview }) => {
         // Inserting into a file that does not exist yet is allowed, so only existing files go
         // through the read-before-edit check.
-        const existing = await readIfExists(await resolveSafe(root, path));
-        const { file, content: original } =
-          existing === null ? { file: await resolveSafe(root, path), content: "" } : await openForEdit(path);
+        // resolveWritable for a new file too: the toolkit's own state files must not be created here.
+        const target = await resolveWritable(path);
+        const existing = await readIfExists(target);
+        const { file, content: original } = existing === null ? { file: target, content: "" } : await openForEdit(path);
         const updated = insertLines(original, after_line, content);
         if (preview) return `Preview of ${show(file)} (nothing written):\n${previewDiff(original, updated)}`;
         await backups.save(file, existing === null ? null : original);

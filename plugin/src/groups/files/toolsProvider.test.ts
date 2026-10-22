@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { basename, join } from "path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { readAttachments, recordAttachments } from "../../shared/attachments";
 import { callTool, fakeController } from "../../shared/testing/fake-controller";
 import { toolsProvider } from "./toolsProvider";
 
@@ -191,6 +192,30 @@ describe("coder-tools toolsProvider", () => {
       expect(await callTool(confined, "grep", { pattern: "marker" })).toBe("in.txt:1: marker inside");
     } finally {
       await rm(outer, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }).catch(() => {});
+    }
+  });
+
+  it("reads a text file the user attached, and never changes the list of attachments", async () => {
+    const store = await mkdtemp(join(tmpdir(), "coder-tools-user-files-"));
+    try {
+      await writeFile(join(store, "1792647278075 - 9.txt"), "attached notes\n");
+      await recordAttachments(work, [{ name: "notes.txt", path: join(store, "1792647278075 - 9.txt"), image: false }]);
+      expect(await callTool(tools, "read_file", { path: "notes.txt" })).toBe("1\tattached notes");
+      // Read only: the attachment is not in the project, so it cannot be edited or overwritten.
+      expect(await callTool(tools, "edit_file", { path: "notes.txt", old_string: "attached", new_string: "x" })).toMatch(/does not exist/);
+
+      // With no Project Folder the tools work in the chat's folder, where the list is kept. A model
+      // that could write it could make any file "attached".
+      const scratch = await toolsProvider(fakeController({ config: { ...baseConfig, projectFolder: "" }, workingDirectory: work }));
+      for (const [name, params] of [
+        ["write_file", { path: ".agent-toolkit/attachments.json", content: "[]" }],
+        ["insert_lines", { path: ".agent-toolkit/attachments.json", after_line: 0, content: "[]" }],
+      ] as const) {
+        expect(await callTool(scratch, name, params)).toMatch(/is managed by the toolkit and cannot be changed by a tool/);
+      }
+      expect(await readAttachments(work)).toHaveLength(1);
+    } finally {
+      await rm(store, { recursive: true, force: true }).catch(() => {});
     }
   });
 

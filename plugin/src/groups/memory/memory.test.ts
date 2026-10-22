@@ -116,10 +116,12 @@ describe("prompt preprocessor", () => {
     });
     const result = (await preprocess(ctl, first)) as ChatMessage;
     const text = result.getText();
-    expect(text).toMatch(/^<context source="memory-tools"/);
+    expect(text).toMatch(/^<context source="agent-toolkit"/);
     expect(text).toContain("Always answer in French.");
     expect(text).toContain("User is Sam");
-    expect(text.endsWith("\n\nhello")).toBe(true);
+    // A clear line between what was added and what the user wrote, so "summarize this" is not
+    // taken to mean the added block.
+    expect(text.endsWith("</context>\n\nEverything above was added automatically by agent-toolkit; it is not part of the user's message.\n\nThe user's message:\nhello")).toBe(true);
     expect(ctl.statuses[0]).toMatchObject({ text: "agent-toolkit loaded AGENTS.md, MEMORY.md" });
 
     const later = ChatMessage.from({ role: "user", content: "second" });

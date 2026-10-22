@@ -143,6 +143,7 @@ Small models often know how to call a tool but not when to stop. [**agent-toolki
 | A web tool fails, or `video_transcript` is missing | Something the Web group needs isn't set up | Ask the model to run `web_doctor`: it checks SearXNG, the browser and yt-dlp, and says how to fix each |
 | *"agent-toolkit did not load AGENTS.md…"* | The file contains a line that looks written to steer the model, such as "ignore previous instructions" | Read the quoted line. Fix the file, or switch off **Scan Loaded Files** if it's a false alarm |
 | *"agent-toolkit hid 2 secrets from the model"*, or the model sees `[redacted: …]` | A tool's result contained something that looks like an API key, token or private key. Your file is untouched; only what the model sees is masked | Nothing, usually. If the model really needs the value, switch off **Redact Secrets** |
+| The model ignores a file you attached, or summarises something else | Nothing turned the file into text. LM Studio leaves that to a plugin | Keep **Read Attached Files** on (the default), or LM Studio's RAG plugin. A scanned PDF needs the **Documents** group for `ocr_document` |
 | A model you just downloaded is missing from a dropdown | The list is read when the plugin starts | Turn the plugin off and on |
 
 ### Platform notes

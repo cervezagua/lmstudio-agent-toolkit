@@ -81,6 +81,32 @@ export function makeConfigSchematics(choices?: ModelChoices) {
     },
     true,
   )
+  .field(
+    "readAttachments",
+    "boolean",
+    {
+      displayName: "Read Attached Files",
+      subtitle:
+        "Put the text of a PDF, Word or text file you attach to a message into that message, so the model can work with it. " +
+        "LM Studio's RAG plugin does the same; with both on, whichever runs first reads the file.",
+    },
+    true,
+  )
+  .field(
+    "maxAttachmentChars",
+    "numeric",
+    {
+      int: true,
+      min: 2000,
+      max: 1000000,
+      displayName: "Max Attachment Characters",
+      subtitle:
+        "How much of attached files' text goes into a message. Never more than about 40% of the loaded model's context; " +
+        "the model is told how to read the rest.",
+      dependencies: onlyWhen("readAttachments"),
+    },
+    40000,
+  )
 
   // ── Files & shell ────────────────────────────────────────────────────────────────────────────
   .field(

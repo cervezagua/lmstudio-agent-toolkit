@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { recordAttachments } from "../../shared/attachments";
 import { callTool, fakeController } from "../../shared/testing/fake-controller";
 import { extractPdfText, parsePageRange, renderPdfPages, workerCandidates } from "./lib/pdf";
 import { DEFAULT_OCR_PROMPT, ocrImageFile, pickVisionModel } from "./lib/vision";
@@ -201,6 +202,40 @@ describe("ocr-tools toolsProvider", () => {
     expect(output).toContain("doc.pdf (3 pages)");
     expect(output).toContain("Invoice number 42");
     expect(output).toContain("it is probably scanned");
+  });
+
+  describe("a file the user attached in this chat", () => {
+    // Attachments live in LM Studio's own folder, outside the project. The preprocessor lists the
+    // chat's attachments; only those can be opened, by the name they were attached under.
+    let store: string;
+    beforeEach(async () => {
+      store = await mkdtemp(join(tmpdir(), "ocr-user-files-"));
+      await writeFile(join(store, "1792647278075 - 72.pdf"), makePdf(["Attached invoice 77"]));
+      await writeFile(join(store, "1792647278075 - 73.pdf"), makePdf(["Someone else's file"]));
+      await recordAttachments(work, [{ name: "main.pdf", path: join(store, "1792647278075 - 72.pdf"), image: false }]);
+    });
+    afterEach(() => rm(store, { recursive: true, force: true }).catch(() => {}));
+
+    it("is read by the name it was attached under, or the name LM Studio stored it as", async () => {
+      const tools = await provider();
+      const output = await callTool(tools, "read_document_text", { path: "main.pdf" });
+      expect(output).toMatch(/^main\.pdf \(1 pages\)/); // shown by its name, not by where it is kept
+      expect(output).toContain("Attached invoice 77");
+      expect(await callTool(tools, "read_document_text", { path: "1792647278075 - 72.pdf" })).toContain("Attached invoice 77");
+    });
+
+    it("prefers a file in the project folder with the same name", async () => {
+      await writeFile(join(root, "main.pdf"), makePdf(["Project copy of main.pdf"]));
+      expect(await callTool(await provider(), "read_document_text", { path: "main.pdf" })).toContain("Project copy of main.pdf");
+    });
+
+    it("is the only thing outside the project that can be reached", async () => {
+      const tools = await provider();
+      expect(await callTool(tools, "read_document_text", { path: "1792647278075 - 73.pdf" })).toMatch(
+        /^Error: "1792647278075 - 73\.pdf" is not a file in the project folder, nor a file attached in this chat\./,
+      );
+      expect(await callTool(tools, "read_document_text", { path: join(store, "1792647278075 - 73.pdf") })).toMatch(/^Error: .*outside the allowed root/);
+    });
   });
 
   it("renders pages to files inside the root", async () => {

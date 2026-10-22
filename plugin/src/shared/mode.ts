@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { join, resolve } from "path";
+import { attachmentsFile } from "./attachments";
 
 /**
  * The chat's current mode, shared between plugins through a small file in the chat's working
@@ -24,12 +25,14 @@ export function modeFile(workingDirectory: string): string {
  * model could turn planning off by writing the file instead of calling exit_plan_mode.
  */
 export function isChatStateFile(workingDirectory: string, file: string): boolean {
-  const a = resolve(file);
-  const b = resolve(modeFile(workingDirectory));
+  // The list of attached files is one too: it says which files outside the project the tools may
+  // open, so a model able to write it could widen that to anything.
+  const owned = [modeFile(workingDirectory), attachmentsFile(workingDirectory)].map(path => resolve(path));
+  const target = resolve(file);
   // Windows and macOS filesystems ignore case by default, so ".Agent-Mode.json" is the same file
   // there. On a case-sensitive volume this only errs towards refusing, which is the safe side.
   const ignoreCase = process.platform === "win32" || process.platform === "darwin";
-  return ignoreCase ? a.toLowerCase() === b.toLowerCase() : a === b;
+  return owned.some(path => (ignoreCase ? path.toLowerCase() === target.toLowerCase() : path === target));
 }
 
 export async function readMode(workingDirectory: string): Promise<ChatMode> {
