@@ -1,0 +1,7 @@
+{
+  "name": "inventory",
+  "private": true,
+  "scripts": {
+    "report": "node scripts/report.js data/stock.csv"
+  }
+}

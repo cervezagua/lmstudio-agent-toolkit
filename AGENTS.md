@@ -9,6 +9,7 @@ Instructions for anyone — person or model — changing this toolkit. The Memor
 - `standalone/<name>/` — small plugins that each ship one tool. Their code is copied from `plugin/src/` by `npm run sync-standalone`; edit it there, never in `standalone/`.
 - `presets/<name>/` — LM Studio presets. Edit `system-prompt.md`, then run `node scripts/build-preset.mjs` to rewrite `preset.json`.
 - `scripts/` — install, publish and end-to-end helpers.
+- `evals/` — real tasks run against a local model and scored by outcome (`npm run eval`); see its README. Run the tasks a change affects before and after it.
 - `searxng/` — optional local search setup (Windows + WSL).
 
 ## Before you finish

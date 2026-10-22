@@ -11,7 +11,7 @@ import { assertReadableSize, looksBinary, readTextSlice } from "./lib/readText";
 import { writeFileAtomic } from "../../shared/safeWrite";
 import { overflowNote, storeOverflow } from "./lib/overflow";
 import { notFoundMessage } from "./lib/suggest";
-import { availableCheckers, runChecker } from "./lib/diagnostics";
+import { availableCheckers, runChecker, testHint } from "./lib/diagnostics";
 import { editNotebook, parseNotebook, renderNotebook } from "./lib/notebook";
 import { pickSubagentModel, runSubagent } from "./lib/subagent";
 import { assertPatternStaysInside, globFiles, grepFiles, parseRipgrepOutput } from "./lib/search";
@@ -99,7 +99,8 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       attachmentNames.set(attached.path, attached.name);
       return attached.path;
     }
-    if (inRoot) return inRoot; // missing: the read reports it, with suggestions
+    // Missing: say so with the files the model probably meant, not the system's ENOENT and full path.
+    if (inRoot) throw new ToolError(await notFoundMessage(root, path, `${show(inRoot)} does not exist.`));
     try {
       return await resolveSafe(stateDir, path);
     } catch {
@@ -333,6 +334,11 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       parameters: { path: z.string().optional() },
       implementation: safe(async ({ path }) => {
         const dir = await resolveSafe(root, path ?? ".");
+        const info = await stat(dir).catch(() => null);
+        if (!info) {
+          throw new ToolError(await notFoundMessage(root, path ?? ".", `${show(dir)} does not exist (write_file creates missing folders).`, true));
+        }
+        if (!info.isDirectory()) throw new ToolError(`${show(dir)} is a file, not a folder; use read_file.`);
         const entries = await readdir(dir, { withFileTypes: true });
         entries.sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name));
         const shown = entries.slice(0, 500).map(e => (e.isDirectory() ? `${e.name}/` : e.name));
@@ -370,7 +376,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         line. Optionally restrict to a sub-path and/or a file glob like "*.py".
         output_mode "files_with_matches" lists only the files (cheapest way to answer "where is X
         used?"), "count" gives matches per file. context adds surrounding lines, offset pages
-        through results.
+        through results. Lines it shows count as read, so edit_file can change them directly.
       `,
       parameters: {
         pattern: z.string(),
@@ -398,8 +404,9 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         let lines: string[];
         let truncated: boolean;
         if (rg) {
-          // --null ends every path with a NUL, so the path can be split off exactly.
-          const args = ["--color", "never", "--max-columns", "300", "--null"];
+          // --null ends every path with a NUL, so the path can be split off exactly. --with-filename
+          // because ripgrep leaves the path out when searching one file, and the lines would be lost.
+          const args = ["--color", "never", "--max-columns", "300", "--null", "--with-filename"];
           if (mode === "files_with_matches") args.push("--files-with-matches");
           else if (mode === "count") args.push("--count");
           else args.push("--line-number", "--no-heading");
@@ -429,6 +436,18 @@ export async function toolsProvider(ctl: ToolsProviderController) {
           truncated = result.truncated;
         }
         if (lines.length === 0) return skip > 0 ? "No more matches." : "No matches.";
+        // Lines grep shows count as read, as a partial read_file does: models find a line with grep and
+        // edit it straight away, and refusing that cost a round in most runs of the evals. An edit still
+        // has to quote the text it replaces, and a file that changes after this is still refused.
+        if (mode === "content") {
+          const shownFiles = new Set(lines.map(line => /^(.+?):\d+[:-] /.exec(line)?.[1]).filter((p): p is string => !!p));
+          for (const shownPath of [...shownFiles].slice(0, 50)) {
+            const file = await resolveSafe(root, shownPath).catch(() => null);
+            if (!file) continue;
+            const info = await stat(file).catch(() => null);
+            if (info?.isFile() && info.size <= MAX_EDIT_BYTES) await recordRead(file);
+          }
+        }
         const note = truncated
           ? `\n[stopped at ${maxResults} results; narrow the search, or pass offset ${skip + maxResults} for more]`
           : "";
@@ -712,8 +731,10 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         implementation: safe(async ({ checker, timeout_seconds }, ctx) => {
           const available = await availableCheckers(root);
           if (available.length === 0) {
+            // Models call this to check their work; point them at the check the project does have.
             throw new ToolError(
-              "No checker was detected for this project (looked for tsconfig.json, ESLint config, pyproject.toml, Cargo.toml, go.mod).",
+              "No checker was detected for this project (looked for tsconfig.json, ESLint config, pyproject.toml, Cargo.toml, go.mod). " +
+                (await testHint(root)),
             );
           }
           const selected = checker ? available.filter(c => c.name === checker.trim().toLowerCase()) : available;

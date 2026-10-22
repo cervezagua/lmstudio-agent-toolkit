@@ -1,0 +1,5 @@
+{
+  "name": "customer-export",
+  "private": true,
+  "scripts": { "export": "node src/export.js" }
+}

@@ -6,3 +6,5 @@ dist
 # Copied from plugin/src by scripts/sync-standalone.mjs; edit the originals there.
 standalone/*/src/groups/
 standalone/*/src/shared/
+# Eval results name the models they ran on.
+evals/results/

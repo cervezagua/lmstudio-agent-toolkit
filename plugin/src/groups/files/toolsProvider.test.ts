@@ -72,8 +72,30 @@ describe("coder-tools toolsProvider", () => {
     expect(tools.map(t => t.name)).not.toContain("run_subagent");
   });
 
-  it("reports when no checker fits the project", async () => {
-    expect(await callTool(tools, "diagnostics", {})).toMatch(/^Error: No checker was detected/);
+  it("reports when no checker fits the project, and points at its tests", async () => {
+    expect(await callTool(tools, "diagnostics", {})).toMatch(/^Error: No checker was detected.*Run the project's tests/);
+    await writeFile(join(root, "package.json"), JSON.stringify({ scripts: { test: "node test.js" } }));
+    try {
+      expect(await callTool(tools, "diagnostics", {})).toContain('Run its tests instead: run_command "npm test" (node test.js).');
+    } finally {
+      await rm(join(root, "package.json"));
+    }
+  });
+
+  // In the evals, models asked about "signup.js" looked for it in the root first, and got the
+  // system's ENOENT with a full path; a suggestion takes them straight to it.
+  it("says where a missing file or folder probably is", async () => {
+    await mkdir(join(root, "app", "forms"), { recursive: true });
+    await writeFile(join(root, "app", "forms", "signup.js"), "// form\n");
+    try {
+      expect(await callTool(tools, "read_file", { path: "signup.js" })).toBe("Error: signup.js does not exist. Did you mean: app/forms/signup.js?");
+      expect(await callTool(tools, "list_dir", { path: "forms" })).toBe(
+        "Error: forms does not exist (write_file creates missing folders). Did you mean: app/forms?",
+      );
+      expect(await callTool(tools, "list_dir", { path: "app/forms/signup.js" })).toMatch(/is a file, not a folder/);
+    } finally {
+      await rm(join(root, "app"), { recursive: true, force: true });
+    }
   });
 
   it("omits run_command when shell is disabled and falls back to the working directory", async () => {
@@ -110,7 +132,7 @@ describe("coder-tools toolsProvider", () => {
 
   it("returns recoverable errors as strings", async () => {
     expect(await callTool(tools, "read_file", { path: "../../outside.txt" })).toMatch(/^Error: .*outside the allowed root/);
-    expect(await callTool(tools, "read_file", { path: "nope.txt" })).toMatch(/^Error: ENOENT/);
+    expect(await callTool(tools, "read_file", { path: "nope.txt" })).toBe("Error: nope.txt does not exist.");
     await callTool(tools, "read_file", { path: "long.txt" }); // edits need a prior read
     expect(await callTool(tools, "edit_file", { path: "long.txt", old_string: "line", new_string: "row" })).toMatch(
       /^Error: old_string occurs/,
@@ -245,7 +267,8 @@ describe("coder-tools toolsProvider", () => {
       setUserFilesDirectory(null);
       await rm(store, { recursive: true, force: true }).catch(() => {});
     }
-  });
+    // Starting PowerShell for the short name took over 20 s on a cold Windows CI machine.
+  }, 60_000);
 
   it("names a working folder that does not exist, instead of blaming the shell", async () => {
     for (const name of ["run_command", "task_run"]) {
@@ -287,6 +310,30 @@ describe("coder-tools toolsProvider", () => {
     expect(await callTool(tools, "glob", { pattern: "**/*.txt" })).toContain("src/hello.txt");
     expect(await callTool(tools, "grep", { pattern: "line 4\\d", max_results: 3 })).toBe(
       "long.txt:40: line 40\nlong.txt:41: line 41\nlong.txt:42: line 42\n[stopped at 3 results; narrow the search, or pass offset 3 for more]",
+    );
+  });
+
+  // With ripgrep installed, searching one file found nothing: ripgrep leaves the path out then, and
+  // the lines without one were dropped. A model in an eval searched a file 30 times for a line in it.
+  it("lets the model edit a line grep showed it, but not one grep only counted", async () => {
+    await writeFile(join(root, "found.txt"), "alpha\nbeta\ngamma\n");
+    await writeFile(join(root, "counted.txt"), "alpha\n");
+    expect(await callTool(tools, "grep", { pattern: "alpha", path: "counted.txt", output_mode: "count" })).toMatch(/counted\.txt: 1/);
+    expect(await callTool(tools, "edit_file", { path: "counted.txt", old_string: "alpha", new_string: "x" })).toMatch(/have not read/);
+    expect(await callTool(tools, "grep", { pattern: "beta" })).toContain("found.txt:2: beta");
+    expect(await callTool(tools, "edit_file", { path: "found.txt", old_string: "beta", new_string: "BETA" })).not.toMatch(/^Error/);
+    expect(await readFile(join(root, "found.txt"), "utf-8")).toBe("alpha\nBETA\ngamma\n");
+    // A change after grep showed the file is still refused.
+    await callTool(tools, "grep", { pattern: "gamma", path: "found.txt" });
+    await writeFile(join(root, "found.txt"), "alpha\nBETA\ngamma\ndelta\n");
+    expect(await callTool(tools, "edit_file", { path: "found.txt", old_string: "gamma", new_string: "G" })).toMatch(/changed on disk/);
+  });
+
+  it("searches a single file", async () => {
+    expect(await callTool(tools, "grep", { pattern: "line 4[01]$", path: "long.txt" })).toBe("long.txt:40: line 40\nlong.txt:41: line 41");
+    expect(await callTool(tools, "grep", { pattern: "line", path: "long.txt", output_mode: "count" })).toMatch(/^long\.txt: \d+$/);
+    expect(await callTool(tools, "grep", { pattern: "line 7$", path: "long.txt", context: 1 })).toBe(
+      "long.txt:6- line 6\nlong.txt:7: line 7\nlong.txt:8- line 8",
     );
   });
 
