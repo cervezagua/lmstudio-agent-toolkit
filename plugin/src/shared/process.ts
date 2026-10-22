@@ -102,6 +102,46 @@ function killTree(pid: number) {
   }
 }
 
+/** Characters kept from each end of a command's output. Far more than a model is ever shown. */
+export const OUTPUT_KEEP_CHARS = 2_000_000;
+
+/**
+ * Collects a stream's text, keeping its first and last `keep` characters. A command that prints
+ * without end (a loop in a script the model wrote) otherwise grows one string until Node throws
+ * "Invalid string length" inside a stream handler, which takes the whole plugin down.
+ */
+export class CappedOutput {
+  private head = "";
+  private tail = "";
+  private dropped = 0;
+
+  constructor(private readonly keep = OUTPUT_KEEP_CHARS) {}
+
+  push(chunk: string): void {
+    if (this.head.length < this.keep) {
+      const room = this.keep - this.head.length;
+      this.head += chunk.slice(0, room);
+      chunk = chunk.slice(room);
+    }
+    if (!chunk) return;
+    this.tail += chunk;
+    if (this.tail.length > this.keep) {
+      this.dropped += this.tail.length - this.keep;
+      this.tail = this.tail.slice(-this.keep);
+    }
+  }
+
+  /** The last `n` characters, for finding a marker printed at the end without scanning it all. */
+  recent(n: number): string {
+    return (this.tail.length >= n ? this.tail : this.head + this.tail).slice(-n);
+  }
+
+  text(): string {
+    if (!this.dropped) return this.head + this.tail;
+    return `${this.head}\n[... ${this.dropped} characters of output left out ...]\n${this.tail}`;
+  }
+}
+
 /**
  * Runs a process to completion. Never rejects for a non-zero exit code; the caller decides what
  * that means. Rejects only if the executable cannot be started.
@@ -116,14 +156,14 @@ export function runProcess(file: string, args: string[], options: RunOptions): P
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    let stdout = "";
-    let stderr = "";
+    const stdout = new CappedOutput();
+    const stderr = new CappedOutput();
     let timedOut = false;
     let aborted = false;
     child.stdout.setEncoding("utf-8");
     child.stderr.setEncoding("utf-8");
-    child.stdout.on("data", chunk => (stdout += chunk));
-    child.stderr.on("data", chunk => (stderr += chunk));
+    child.stdout.on("data", chunk => stdout.push(chunk));
+    child.stderr.on("data", chunk => stderr.push(chunk));
 
     const timer = setTimeout(() => {
       timedOut = true;
@@ -144,7 +184,7 @@ export function runProcess(file: string, args: string[], options: RunOptions): P
     child.on("close", exitCode => {
       clearTimeout(timer);
       options.signal?.removeEventListener("abort", onAbort);
-      resolvePromise({ exitCode, stdout, stderr, timedOut, aborted });
+      resolvePromise({ exitCode, stdout: stdout.text(), stderr: stderr.text(), timedOut, aborted });
     });
 
     // A process can exit before we finish writing (e.g. a command that fails immediately), which

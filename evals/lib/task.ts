@@ -9,7 +9,10 @@ export interface Call {
 /** What a check gets after a run: the project folder as the model left it, its calls and its last answer. */
 export interface RunRecord {
   dir: string;
+  /** The model's last answer. */
   answer: string;
+  /** Its final answer to each turn, in order. */
+  answers: string[];
   calls: Call[];
 }
 
@@ -21,6 +24,11 @@ export interface EvalTask {
    * another, sharing the project and the memory folder (to see what carries over to a new chat).
    */
   prompt: string | string[];
+  /** More messages in the same chat after the (last) prompt, each sent once the model has answered. */
+  followUps?: string[];
+  /** Prediction rounds per message (40), and minutes for the whole run (the --minutes option). */
+  maxRounds?: number;
+  minutes?: number;
   /**
    * Called as each tool result comes back, before the model sees it, to change the world under the
    * model (say, a teammate editing a file it just read). Must be synchronous.

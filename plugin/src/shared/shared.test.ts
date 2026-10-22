@@ -4,7 +4,7 @@ import { join } from "path";
 import { describe, expect, it } from "vitest";
 import { isChatStateFile } from "./mode";
 import { projectRoot } from "./projectFolder";
-import { commandEnv, findExecutable, formatRunResult, runProcess } from "./process";
+import { CappedOutput, commandEnv, findExecutable, formatRunResult, runProcess } from "./process";
 import { truncate } from "./truncate";
 
 describe("truncate", () => {
@@ -21,7 +21,36 @@ describe("truncate", () => {
   });
 });
 
+describe("CappedOutput", () => {
+  it("keeps everything while it fits", () => {
+    const out = new CappedOutput(10);
+    out.push("abc");
+    out.push("def");
+    expect(out.text()).toBe("abcdef");
+    expect(out.recent(4)).toBe("cdef");
+  });
+
+  it("keeps the start and the end of too much, and says how much is missing", () => {
+    const out = new CappedOutput(5);
+    for (const chunk of ["12345", "678", "90abc", "defgh"]) out.push(chunk);
+    expect(out.text()).toBe("12345\n[... 8 characters of output left out ...]\ndefgh");
+    expect(out.recent(3)).toBe("fgh");
+  });
+});
+
 describe("runProcess", () => {
+  it("keeps a flood of output to its start and end", async () => {
+    const result = await runProcess(
+      process.execPath,
+      ["-e", "process.stdout.write('S'); const s = 'x'.repeat(1e6); for (let i = 0; i < 6; i++) process.stdout.write(s); process.stdout.write('E')"],
+      { cwd: process.cwd(), timeoutMs: 30000 },
+    );
+    expect(result.stdout.startsWith("S")).toBe(true);
+    expect(result.stdout.endsWith("E")).toBe(true);
+    expect(result.stdout).toContain("characters of output left out");
+    expect(result.stdout.length).toBeLessThan(4_100_000);
+  }, 60000);
+
   it("captures output and exit code", async () => {
     const result = await runProcess(process.execPath, ["-e", "console.log('out'); console.error('err'); process.exit(3)"], {
       cwd: process.cwd(),

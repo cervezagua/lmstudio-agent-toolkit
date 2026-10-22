@@ -1,0 +1,5 @@
+{
+  "name": "user-admin",
+  "private": true,
+  "scripts": { "test": "node test/users.test.js" }
+}
