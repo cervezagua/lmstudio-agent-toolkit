@@ -9,13 +9,14 @@
 <p align="center">
   <a href="https://github.com/cervezagua/lmstudio-agent-toolkit/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/cervezagua/lmstudio-agent-toolkit/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <img alt="Tests" src="https://img.shields.io/badge/tests-290%20passing-brightgreen">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-860%20passing-brightgreen">
   <img alt="Tested on Windows, macOS and Linux" src="https://img.shields.io/badge/tested%20on-Windows%20%7C%20macOS%20%7C%20Linux-informational">
   <a href="https://lmstudio.ai/cervezagua/agent-toolkit"><img alt="LM Studio Hub" src="https://img.shields.io/badge/LM%20Studio%20Hub-cervezagua%2Fagent--toolkit-7c3aed"></a>
 </p>
 
 <p align="center">
   <a href="#-quickstart">Quickstart</a> ·
+  <a href="#-whats-new">What's new</a> ·
   <a href="#-what-your-model-can-do">What it can do</a> ·
   <a href="#-tips--tricks">Tips &amp; tricks</a> ·
   <a href="#-safety">Safety</a> ·
@@ -63,6 +64,17 @@ LM Studio fetches the dependencies itself. Re-run `npm run setup` after `git pul
 > [!IMPORTANT]
 > **Upgrading from the five separate plugins?** Remove `coder-tools`, `memory-tools`, `git-tools`, `web-tools` and `ocr-tools` from your chats — enabling them next to `agent-toolkit` gives the model two copies of every tool. Then set **Project Folder** once, and if you used `web-tools` or `ocr-tools`, switch on **Web** or **Documents**: they start off.
 
+## 🆕 What's new
+
+| Version | What changed |
+|---|---|
+| [**0.5.2**](https://github.com/cervezagua/lmstudio-agent-toolkit/releases/tag/v0.5.2) | When an edit can't find the text it should replace, the error shows the closest lines in the file, so the model can copy them instead of reading the whole file again. |
+| [**0.5.1**](https://github.com/cervezagua/lmstudio-agent-toolkit/releases/tag/v0.5.1) | A command that prints without end can no longer crash the plugin: output is capped at its first and last 2 million characters. |
+| [**0.5.0**](https://github.com/cervezagua/lmstudio-agent-toolkit/releases/tag/v0.5.0) | **`research`**: answers from several web pages, with a source for each claim. `grep` on a single file works with ripgrep installed. Lines `grep` shows can be edited directly. A missing file says where it probably is. |
+| [**0.4.1**](https://github.com/cervezagua/lmstudio-agent-toolkit/releases/tag/v0.4.1) | Files you attach to a message are read: "summarize this" now means the PDF you attached. |
+
+The fixes in 0.5 were found by [evals](evals/README.md): real tasks given to local models, checked by their outcome. All releases are on the [releases page](https://github.com/cervezagua/lmstudio-agent-toolkit/releases).
+
 ## 🧩 What your model can do
 
 One plugin, six groups. Each group is a switch in the plugin's settings, because a long tool list makes small models choose worse.
@@ -104,6 +116,7 @@ Small models often know how to call a tool but not when to stop. [**agent-toolki
 - **Tell it to prove its work.** *"…and run the tests to show it passes"* turns a guess into a checked result.
 - **Read only the part of a page you need.** *"Fetch the pricing page, just the table"* lets the model pass a CSS selector to `fetch_url` instead of reading the whole page into its context.
 - **Summarise a video instead of watching it.** With yt-dlp installed: *"What does this talk say about caching? <YouTube link>"*.
+- **Ask for research, not a single search.** With **Web** and **Research** on: *"Research what changed in Node 24, with sources"*. It reads several pages and answers with a numbered source after each claim. It works best with SearXNG.
 - **Follow a blog or a project's releases.** *"What's new on https://example.com/blog?"* reads its feed, even from the home page.
 - **Ask for file names before contents.** A model can `grep` for just the files that match, or just the counts, which costs a fraction of the context of full results.
 - **Made a mistake? Ask for `undo_edit`.** It restores a file to how it was before the chat's last change to it.
@@ -121,7 +134,7 @@ Small models often know how to call a tool but not when to stop. [**agent-toolki
 - **Bigger tool-use models plan multi-step work far better** than small ones. Checked end to end with `qwen/qwen3.8-27b`.
 - **Switch off the groups you don't need.** Fewer tools means better choices, especially on small models.
 - **Models with their safety training stripped out** ("uncensored", "abliterated") are often worse at following tool formats and may drift between languages. If one starts answering in the wrong language, add *"Always reply in English."* to the chat's system prompt.
-- **Pick the models for OCR and the research sub-agent from a dropdown** in the Documents and Files settings. It lists the models you have; after downloading a new one, turn the plugin off and on to refresh the list.
+- **Pick the models for OCR, the sub-agent and `research` from a dropdown** in the Documents, Files and Web settings. It lists the models you have; after downloading a new one, turn the plugin off and on to refresh the list.
 
 ### Make the tools faster
 
@@ -160,7 +173,7 @@ Small models often know how to call a tool but not when to stop. [**agent-toolki
 | Guard | What it does |
 |---|---|
 | **Project Folder** | File tools resolve every path inside your project folder, after following symlinks and junctions, so a link can't lead out of it. |
-| **Read before edit** | A file must be read in this chat before it can be edited, and the edit is refused if the file changed since. The model can't overwrite what it never saw. |
+| **Read before edit** | A file must be read in this chat before it can be edited (lines `grep` showed count), and the edit is refused if the file changed since. The model can't overwrite what it never saw. |
 | **Atomic writes** | Files are written to a temporary file and renamed, so an interrupted write can't truncate your work. |
 | **Blocked commands** | Catastrophic ones (`rm -rf /`, `format C:`, `diskpart`…) are refused. A seatbelt, not a sandbox: a shell command can still do anything your account can. |
 | **Opt-in danger** | `git_push` is off by default and never force-pushes; the shell can be switched off entirely. |
@@ -176,7 +189,8 @@ For untrusted projects, switch off **Allow Shell Commands** or run LM Studio in 
 
 - **Mistakes come back as text, not failures.** A bad path, ambiguous edit or git error returns `Error: …`, so the model can correct itself instead of the chat dying.
 - **Edits are exact replacements** that must match once, so a model never rewrites a whole file to change one line. LF text matches CRLF files, and any edit can be previewed as a diff or undone.
-- **Nothing is silently lost.** Long command output is written whole to a file and its path returned; long documents and search results page with `offset`.
+- **Nothing is silently lost.** Long command output is written to a file and its path returned; long documents and search results page with `offset`. A command that floods output keeps its first and last 2 million characters, instead of crashing the plugin.
+- **Near misses point the way.** A missing file comes back as *"signup.js does not exist. Did you mean: src/signup.js?"*, and an edit whose text isn't found shows the closest lines in the file, so the next try can copy them.
 - **Cheap answers first.** `grep` can return just file names or counts, `read_document_text` reads a PDF's text layer without a model, and fetched pages are cached for a few minutes.
 - **The same answers on every machine.** `grep` returns identical lines with or without ripgrep.
 - **Skills are read whole.** A description that wraps, is quoted across lines, or uses YAML's `>` or `|` blocks keeps the part that says when to use the skill.
@@ -197,7 +211,7 @@ For untrusted projects, switch off **Allow Shell Commands** or run LM Studio in 
 
 ## 🤝 Contributing
 
-Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers the layout, the tests and how to add a tool. CI runs the tests on Windows, macOS and Linux.
+Issues and pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers the layout, the tests and how to add a tool. CI runs the tests on Windows, macOS and Linux. To see whether a change helps real use, run the [evals](evals/README.md) it affects against a local model before and after.
 
 ## 📜 License
 

@@ -2,7 +2,7 @@
 
 **Turn a local model into a working coding agent.** It reads and edits your code, runs your tests, remembers your project, uses git, searches the web and reads your documents. It all runs on your machine: no API keys, nothing uploaded.
 
-[Project home](https://github.com/cervezagua/lmstudio-agent-toolkit) · [Tips & tricks](https://github.com/cervezagua/lmstudio-agent-toolkit#-tips--tricks) · [Report a problem](https://github.com/cervezagua/lmstudio-agent-toolkit/issues)
+[Project home](https://github.com/cervezagua/lmstudio-agent-toolkit) · [What's new](https://github.com/cervezagua/lmstudio-agent-toolkit#-whats-new) · [Tips & tricks](https://github.com/cervezagua/lmstudio-agent-toolkit#-tips--tricks) · [Report a problem](https://github.com/cervezagua/lmstudio-agent-toolkit/issues)
 
 ---
 
@@ -13,7 +13,7 @@
 | 📁 | [Files & Shell](#-files--shell) | on | Read, write and edit files, search the project, run commands |
 | 🧠 | [Memory & Context](#-memory--context) | on | Remember things between chats, follow your `AGENTS.md`, plan before changing |
 | 🌿 | [Git & GitHub](#-git--github) | on | Status, diffs, commits, branches, pull requests and issues |
-| 🌐 | [Web](#-web) | off | Search, read pages and feeds, video transcripts, a real browser |
+| 🌐 | [Web](#-web) | off | Search, read pages and feeds, video transcripts, a real browser, research with sources |
 | 📄 | [Documents](#-documents) | off | Read PDFs, scans and images, look at pictures, write Word and PDF files |
 | 🧮 | [Utilities](#-utilities) | off | Exact arithmetic, and today's date and time |
 
@@ -36,12 +36,12 @@ Without a Project Folder, the model works in the chat's own empty folder and is 
 |---|---|
 | `read_file` | Reads a file with line numbers; `offset` and `limit` page through big ones. |
 | `write_file` | Creates or overwrites a file. |
-| `edit_file` | Replaces one exact piece of text. It must match once, so nothing else changes. |
+| `edit_file` | Replaces one exact piece of text. It must match once, so nothing else changes. If the text isn't found, it shows the closest lines. |
 | `multi_edit` | Several replacements in one file; if any fails, none are written. |
 | `insert_lines` | Inserts text after a line number. |
 | `undo_edit` | Puts a file back as it was before the chat's last change to it. |
 | `list_dir` · `glob` | List a folder, or find files by pattern. |
-| `grep` | Searches file contents, returning lines, just file names, or counts. |
+| `grep` | Searches file contents, returning lines, just file names, or counts. Lines it shows can be edited straight away. |
 | `run_command` | Runs a shell command and returns its real exit code and output. |
 | `shell_reset` | Starts the shell session afresh. |
 | `task_run` · `task_list` · `task_output` · `task_stop` | Run dev servers, watchers and long builds in the background. |
@@ -50,7 +50,7 @@ Without a Project Folder, the model works in the chat's own empty folder and is 
 | `run_subagent` | Answers a search-heavy question in a read-only helper agent. Off by default. |
 | `sqlite_query` | Shows a SQLite database's tables, or runs one read-only query. Off by default. |
 
-Long command output is saved to a file and its path returned, so nothing is lost. `grep` gives the same results whether or not [ripgrep](https://github.com/BurntSushi/ripgrep) is installed; ripgrep just makes it faster.
+Long command output is saved to a file and its path returned, so nothing is lost; a command that floods output keeps its first and last 2 million characters. A path that doesn't exist comes back with the likely one (*"Did you mean: src/signup.js?"*). `grep` gives the same results whether or not [ripgrep](https://github.com/BurntSushi/ripgrep) is installed; ripgrep just makes it faster.
 
 ## 🧠 Memory & Context
 
