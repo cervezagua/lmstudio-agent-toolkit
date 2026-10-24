@@ -1,6 +1,7 @@
 // Measures how well a local model gets real tasks done through agent-toolkit.
 //
 // Usage: npm run eval -- --model <key> [--runs 3] [--only fix-bug,git] [--minutes 10] [--subagent-model <key>]
+//                        [--all-groups] [--context 16384] [--installed]
 //        npm run eval -- --self-test     (no model: checks that every task fails when nothing is done)
 //
 // Each task is a folder in evals/tasks: a project/ to work in, and task.ts with the prompt, the
@@ -18,6 +19,7 @@ import { globalConfigSchematics, makeConfigSchematics } from "../plugin/src/conf
 import { promptPreprocessor } from "../plugin/src/index";
 import { fakeController } from "../plugin/src/shared/testing/fake-controller";
 import { toolsProvider } from "../plugin/src/toolsProvider";
+import { errorStats } from "./lib/hints";
 import { type Call, type EvalTask } from "./lib/task";
 
 const repo = join(__dirname, "..");
@@ -38,6 +40,57 @@ const only = option("only")?.split(",");
 const minutes = Number(option("minutes") ?? 10);
 /** The model for tools that run a second model (run_subagent, research); the plugin's Auto otherwise. */
 const subagentModel = option("subagent-model") ?? "";
+/** Every group and optional tool on, whatever the task asks for: the long tool list some users run. */
+const allGroups = args.includes("--all-groups");
+/** A context length to load a separate copy of the model with, to see how a small context copes. */
+const contextLength = option("context") ? Number(option("context")) : undefined;
+/**
+ * Use the plugin LM Studio has installed, through its API, instead of the source code: this catches
+ * what only breaks once packaged (a file left out, a dependency missing). Needs an API token with
+ * permission to use plugins, in LM_API_TOKEN.
+ */
+const installed = args.includes("--installed");
+/** Results are compared only with earlier runs under the same conditions. */
+const conditions = `${installed ? "-installed" : ""}${allGroups ? "-all" : ""}${contextLength ? `-ctx${contextLength}` : ""}`;
+
+/**
+ * The API can set the installed plugin's chat settings but not its global ones, so its memory and
+ * skills folders are the user's real ones. Nothing that writes there, or reads their past chats, runs.
+ */
+const INSTALLED_OFF = { enableMemory: false, allowSkillSave: false, enableChatSearch: false };
+
+/** SDK 2 for --installed: it carries the API token, which the plugin's own SDK 1.5 cannot. */
+const sdk2 = installed ? createRequire(join(repo, "package.json"))("@lmstudio/sdk") : null;
+
+/** Tools from the installed plugin, with this run's settings, for one chat. */
+async function installedTools(client: any, chatDir: string, config: Record<string, unknown>) {
+  const schematics: any = makeConfigSchematics();
+  const pluginConfig = { fields: [...schematics.fields.entries()].map(([key, field]: [string, any]) => ({ key: field.fullKey, value: config[key] })) };
+  const session = await client.plugins.pluginTools("local/agent-toolkit", { workingDirectory: chatDir, pluginConfig });
+  return { tools: session.tools, dispose: () => session[Symbol.dispose]() };
+}
+
+const ALL_ON = [
+  "enableFiles",
+  "allowShell",
+  "enableBackgroundTasks",
+  "enableDiagnostics",
+  "enableNotebookTools",
+  "enableSqlite",
+  "enableSubagent",
+  "enableMemory",
+  "enableSkills",
+  "enablePlanMode",
+  "allowSkillSave",
+  "enableChatSearch",
+  "enableGit",
+  "enableGitHub",
+  "enableWeb",
+  "enableBrowser",
+  "enableResearch",
+  "enableDocuments",
+  "enableUtilities",
+];
 
 const defaults = (schematics: any) =>
   Object.fromEntries([...schematics.fields.entries()].map(([key, field]: [string, any]) => [key, field.defaultValue]));
@@ -65,8 +118,8 @@ interface RunResult {
   toolsUsed: string[];
   /** The calls that returned an error, to see what tripped the model up. */
   failures: { name: string; args: string; result: string }[];
-  /** Every call of a failed run, in order, to see where it went wrong. */
-  trace?: { name: string; args: string; result: string }[];
+  /** Every call, in order: to see where a failed run went wrong, and what a hint led to. */
+  trace?: { name: string; args: string; result: string; failed?: boolean }[];
   answer?: string;
 }
 
@@ -93,7 +146,19 @@ async function runOnce(model: any, client: any, systemPrompt: string, name: stri
   else await mkdir(project);
   await task.setup?.(project);
 
-  const config = { ...defaults(makeConfigSchematics()), projectFolder: project, subagentModel, researchModel: subagentModel, ...task.config };
+  const base = defaults(makeConfigSchematics());
+  const everything = allGroups ? Object.fromEntries(ALL_ON.filter(key => key in base).map(key => [key, true])) : {};
+  const config: Record<string, unknown> = {
+    ...base,
+    projectFolder: project,
+    subagentModel,
+    researchModel: subagentModel,
+    ...task.config,
+    ...everything,
+    ...(installed ? INSTALLED_OFF : {}),
+  };
+  // The conversation runs on the same SDK as the model and tools: the plugin's, or SDK 2 for --installed.
+  const chatSdk = sdk2 ?? sdk;
   const globalConfig = { ...defaults(globalConfigSchematics), memoryDirectory: memory, skillsDirectory: skills };
   const history = sdk.Chat.from([{ role: "system", content: systemPrompt }]);
   // Each prompt is a new chat, with a working directory of its own as in LM Studio.
@@ -116,38 +181,44 @@ async function runOnce(model: any, client: any, systemPrompt: string, name: stri
       const chatDir = index === 0 ? chat : join(scratch, `chat-${index + 1}`);
       await mkdir(chatDir, { recursive: true });
       // The conversation so far, kept as LM Studio keeps it: follow-ups see every earlier turn.
-      const conversation = sdk.Chat.from([{ role: "system", content: systemPrompt }]);
+      const conversation = chatSdk.Chat.from([{ role: "system", content: systemPrompt }]);
       const turns = index === prompts.length - 1 ? [prompt, ...(task.followUps ?? [])] : [prompt];
       for (const turn of turns) {
         const ctl = fakeController({ config, globalConfig, workingDirectory: chatDir, history: conversation, client });
         const preprocessed = await promptPreprocessor(ctl, sdk.ChatMessage.from({ role: "user", content: turn }));
         conversation.append("user", typeof preprocessed === "string" ? preprocessed : preprocessed.getText());
-        const tools = await toolsProvider(controller(chatDir));
+        const { tools, dispose } = installed
+          ? await installedTools(client, chatDir, config)
+          : { tools: await toolsProvider(controller(chatDir)), dispose: () => {} };
         answer = "";
-        await model.act(conversation, tools, {
-          maxPredictionRounds: task.maxRounds ?? 40,
-          signal: abort.signal,
-          onRoundStart: () => rounds++,
-          onPredictionCompleted: (result: any) => (peakContext = Math.max(peakContext, result.stats?.promptTokensCount ?? 0)),
-          onMessage: (message: any) => {
-            conversation.append(message);
-            for (const request of message.getToolCallRequests()) {
-              pending.push({ id: request.id, name: request.name, args: JSON.stringify(request.arguments ?? {}) });
-            }
-            for (const result of message.getToolCallResults()) {
-              const found = pending.findIndex(p => result.toolCallId && p.id === result.toolCallId);
-              const request = pending.splice(found >= 0 ? found : 0, 1)[0] ?? { name: "?", args: "" };
-              const content = String(result.content);
-              const call = { ...request, result: content, failed: /^"?Error\b/.test(content) };
-              calls.push(call);
-              task.afterCall?.(call, project);
-            }
-            if (message.getRole() === "assistant") {
-              const text = withoutThinking(message.getText());
-              if (text) answer = text;
-            }
-          },
-        });
+        try {
+          await model.act(conversation, tools, {
+            maxPredictionRounds: task.maxRounds ?? 40,
+            signal: abort.signal,
+            onRoundStart: () => rounds++,
+            onPredictionCompleted: (result: any) => (peakContext = Math.max(peakContext, result.stats?.promptTokensCount ?? 0)),
+            onMessage: (message: any) => {
+              conversation.append(message);
+              for (const request of message.getToolCallRequests()) {
+                pending.push({ id: request.id, name: request.name, args: JSON.stringify(request.arguments ?? {}) });
+              }
+              for (const result of message.getToolCallResults()) {
+                const found = pending.findIndex(p => result.toolCallId && p.id === result.toolCallId);
+                const request = pending.splice(found >= 0 ? found : 0, 1)[0] ?? { name: "?", args: "" };
+                const content = String(result.content);
+                const call = { ...request, result: content, failed: /^"?Error\b/.test(content) };
+                calls.push(call);
+                task.afterCall?.(call, project);
+              }
+              if (message.getRole() === "assistant") {
+                const text = withoutThinking(message.getText());
+                if (text) answer = text;
+              }
+            },
+          });
+        } finally {
+          dispose();
+        }
         answers.push(answer);
       }
     }
@@ -180,7 +251,8 @@ async function runOnce(model: any, client: any, systemPrompt: string, name: stri
     repeatedFailures,
     toolsUsed: [...new Set(calls.map(c => c.name))],
     failures: calls.filter(c => c.failed).map(c => ({ name: c.name, args: c.args.slice(0, 300), result: c.result.slice(0, 500) })),
-    ...(problems.length ? { trace: calls.map(c => ({ name: c.name, args: c.args.slice(0, 300), result: c.result.slice(0, 300) })), answer } : {}),
+    trace: calls.map(c => ({ name: c.name, args: c.args.slice(0, 300), result: c.result.slice(0, 300), failed: c.failed })),
+    ...(problems.length ? { answer } : {}),
   };
 }
 
@@ -215,6 +287,15 @@ function report(results: RunResult[], previous: RunResult[] | null, title: strin
     const oneLine = (text: string) => text.replace(/\s+/g, " ").slice(0, 200);
     for (const f of failures) lines.push(`- **${f.task}**: \`${f.name} ${oneLine(f.args)}\` → ${oneLine(f.result)}`);
   }
+  // What each kind of error led to: compare a hinted error with the plain one of the same sort.
+  const stats = errorStats(results.map(r => r.trace ?? []));
+  if (stats.length) {
+    lines.push("", "## After an error", "", "| Error | Seen | Next try with that tool worked | Calls to the next success | Never recovered |", "|---|---|---|---|---|");
+    for (const s of stats) {
+      const calls = s.callsToSuccess.length ? mean(s.callsToSuccess) : "";
+      lines.push(`| ${s.kind} | ${s.seen} | ${s.nextTryWorked} | ${calls} | ${s.neverRecovered} |`);
+    }
+  }
   return lines.join("\n");
 }
 
@@ -238,16 +319,28 @@ async function selfTest() {
 
 async function main() {
   if (args.includes("--self-test")) return selfTest();
-  const client = new sdk.LMStudioClient();
-  const loaded = (await client.llm.listLoaded()).some((m: any) => m.identifier === modelKey || m.modelKey === modelKey);
-  console.log(`${loaded ? "Using the loaded" : "Loading"} model ${modelKey}...`);
+  if (installed && !process.env.LM_API_TOKEN) {
+    throw new Error(
+      "--installed needs an LM Studio API token that may use plugins, in LM_API_TOKEN. Create one in LM Studio: " +
+        "Developer > Server Settings > Manage Tokens.",
+    );
+  }
+  const client = installed ? new sdk2.LMStudioClient() : new sdk.LMStudioClient();
+  // A context length of its own needs a copy of the model loaded for this run, under its own name.
+  const loaded = !contextLength && (await client.llm.listLoaded()).some((m: any) => m.identifier === modelKey || m.modelKey === modelKey);
+  console.log(`${loaded ? "Using the loaded" : "Loading"} model ${modelKey}${contextLength ? ` with a ${contextLength}-token context` : ""}...`);
   // Loaded explicitly, as from LM Studio's model list: a just-in-time load would be unloaded again the
   // moment a tool loads a second model (LM Studio evicts other JIT models), ending the run.
   const model = loaded
     ? await client.llm.model(modelKey)
-    : await client.llm.load(modelKey, { config: { contextLength: 32768 }, verbose: false });
+    : await client.llm.load(modelKey, {
+        identifier: contextLength ? `${modelKey}@eval-${contextLength}` : undefined,
+        config: { contextLength: contextLength ?? 32768 },
+        verbose: false,
+      });
   const systemPrompt = await readFile(join(repo, "presets", "agent-toolkit-prompt", "system-prompt.md"), "utf-8");
-  const tasks = await loadTasks();
+  // Installed, memory would go to the user's real memory folder (see INSTALLED_OFF).
+  const tasks = (await loadTasks()).filter(t => !(installed && t.task.area === "memory"));
   if (tasks.length === 0) throw new Error(`No task matches --only ${only?.join(",")}`);
 
   const results: RunResult[] = [];
@@ -255,6 +348,10 @@ async function main() {
     for (const { name, dir, task } of tasks) {
       for (let i = 1; i <= runs; i++) {
         const result = await runOnce(model, client, systemPrompt, name, dir, task);
+        // Every run after this would fail at once, and count against the model when it is not its fault.
+        if (result.problems.some(p => /model might have already been unloaded|Cannot find model of instance/.test(p))) {
+          throw new Error(`The model was unloaded during ${name} (by LM Studio or by hand), so the run stopped. Nothing was saved.`);
+        }
         results.push(result);
         console.log(
           `[${result.passed ? "PASS" : "FAIL"}] ${name} ${i}/${runs} (${result.seconds}s, ${result.calls} calls, ${result.failedCalls} failed)` +
@@ -268,11 +365,16 @@ async function main() {
 
   const resultsDir = join(repo, "evals", "results");
   await mkdir(resultsDir, { recursive: true });
-  const safeModel = modelKey!.replace(/[^\w.-]+/g, "_");
+  const safeModel = modelKey!.replace(/[^\w.-]+/g, "_") + conditions;
   const earlier = (await readdir(resultsDir)).filter(f => f.endsWith(`-${safeModel}.json`)).sort();
   const previous: RunResult[] | null = earlier.length ? JSON.parse(await readFile(join(resultsDir, earlier.at(-1)!), "utf-8")) : null;
   const stamp = new Date().toISOString().slice(0, 16).replace(/[-:T]/g, "");
-  const text = report(results, previous, `${modelKey}, ${new Date().toISOString().slice(0, 16).replace("T", " ")}, ${runs} run(s) per task`);
+  const setup = [allGroups ? "every group on" : "", contextLength ? `${contextLength}-token context` : ""].filter(Boolean).join(", ");
+  const text = report(
+    results,
+    previous,
+    `${modelKey}${setup ? ` (${setup})` : ""}, ${new Date().toISOString().slice(0, 16).replace("T", " ")}, ${runs} run(s) per task`,
+  );
   await writeFile(join(resultsDir, `${stamp}-${safeModel}.json`), JSON.stringify(results, null, 2));
   await writeFile(join(resultsDir, `${stamp}-${safeModel}.md`), text);
   console.log(`\n${text}\n\nSaved to evals/results/${stamp}-${safeModel}.md`);

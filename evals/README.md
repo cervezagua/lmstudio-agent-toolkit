@@ -23,7 +23,12 @@ It needs LM Studio running with the model available, so it is not part of `npm t
 | `--runs <n>` | Runs per task. |
 | `--minutes <n>` | Stops a run after this long (10). |
 | `--subagent-model <key>` | The model for `run_subagent` and `research`; the plugin's Auto otherwise. |
+| `--all-groups` | Every group and optional tool on, whatever the task asks for: the long tool list some users run. About 7,900 tokens of tool definitions on every message, against 4,500 with the defaults. |
+| `--context <n>` | Loads a separate copy of the model with this context length for the run, then unloads it. Try 16384 to see how a small context copes. |
+| `--installed` | Uses the plugin LM Studio has installed (`npm run setup`) instead of the source, to catch what breaks only once packaged. Needs an API token that may use plugins in `LM_API_TOKEN` (LM Studio: Developer > Server Settings > Manage Tokens). The API can't set the plugin's global settings, so its memory folder would be your real one: memory, saved skills and past-chat search are switched off, and the memory task is skipped. |
 | `--self-test` | No model: checks that every task fails when nothing is done, so a check can't pass by accident. |
+
+Each report also has an **After an error** table: for each kind of error a tool gives, how often the model's next call to that tool worked and how many calls it took. A hint that helps (the closest text, a likely path) shows as better numbers than the plain error of the same sort. Results are compared only with earlier runs under the same options.
 
 ## Adding a task
 
