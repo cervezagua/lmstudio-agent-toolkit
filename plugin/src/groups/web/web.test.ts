@@ -3,7 +3,7 @@ import { mkdtemp, rm, stat } from "fs/promises";
 import { createServer, type Server } from "http";
 import { tmpdir } from "os";
 import { join } from "path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { callTool, fakeController } from "../../shared/testing/fake-controller";
 import { browserSession, formatSnapshot } from "./lib/browser";
 import { clearFetchCache, fetchPage, htmlToMarkdown } from "./lib/fetchPage";
@@ -509,6 +509,7 @@ describe("formatSnapshot", () => {
 
 const baseConfig = {
   searchBackend: "searxng",
+  braveApiKey: "",
   searxngUrl: "",
   safeSearch: "moderate",
   maxSearchResults: 8,
@@ -538,7 +539,6 @@ describe("web-tools toolsProvider", () => {
     toolsProvider(
       fakeController({
         config: { ...baseConfig, searxngUrl: `${baseUrl}/searx`, ...overrides },
-        globalConfig: { braveApiKey: "" },
         workingDirectory,
       }),
     );
@@ -584,6 +584,21 @@ describe("web-tools toolsProvider", () => {
     const fetched = await callTool(tools, "fetch_url", { url: `${baseUrl}/article`, max_chars: 500 });
     expect(fetched).toMatch(/^URL: http:\/\/127\.0\.0\.1:\d+\/article\nTitle: Fallback Title\n\n/);
     expect(fetched).toMatch(/\[\d+ characters left; call again with offset 500\]$/);
+  });
+
+  it("sends the chat's Brave key to Brave", async () => {
+    const keysSent: string[] = [];
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      keysSent.push(new Headers(init?.headers).get("X-Subscription-Token") ?? "");
+      return new Response(JSON.stringify({ web: { results: [] } }), { status: 200 });
+    });
+    try {
+      const brave = await provider({ searchBackend: "brave", braveApiKey: " chat-key " });
+      await callTool(brave, "web_search", { query: "brave key" });
+      expect(keysSent).toEqual(["chat-key"]);
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 
   it("passes page and the Safe Search setting to the search, and marks a cached answer", async () => {
@@ -663,7 +678,6 @@ describe.runIf(process.env.LIVE_WEB === "1")("live network (LIVE_WEB=1)", () => 
     const tools = await toolsProvider(
       fakeController({
         config: { ...baseConfig, searchBackend: "duckduckgo", enableBrowser: false },
-        globalConfig: { braveApiKey: "" },
         workingDirectory: tmpdir(),
       }),
     );

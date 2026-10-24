@@ -42,6 +42,7 @@ const baseConfig = {
   enableGitHub: false,
   enableWeb: false,
   searchBackend: "auto",
+  braveApiKey: "",
   searxngUrl: "",
   safeSearch: "moderate",
   maxSearchResults: 5,
@@ -58,7 +59,7 @@ const baseConfig = {
   maxPages: 10,
   enableUtilities: false,
 };
-const globalConfig = { memoryDirectory: "", skillsDirectory: "", braveApiKey: "" };
+const globalConfig = { memoryDirectory: "", skillsDirectory: "" };
 
 let project: string;
 let work: string;

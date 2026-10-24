@@ -408,11 +408,22 @@ export function makeConfigSchematics(choices?: ModelChoices) {
       displayName: "Search Backend",
       subtitle:
         "auto = SearXNG if reachable, else DuckDuckGo. searxng = your instance only (JSON format enabled). " +
-        "duckduckgo needs no setup but often hits bot checks. brave needs an API key (global settings).",
+        "duckduckgo needs no setup but often hits bot checks. brave needs an API key (below).",
       options: ["auto", "searxng", "duckduckgo", "brave"],
       dependencies: onlyWhen("enableWeb"),
     },
     "auto",
+  )
+  .field(
+    "braveApiKey",
+    "string",
+    {
+      displayName: "Brave Search API Key",
+      subtitle: "Only needed when Search Backend is brave.",
+      isProtected: true,
+      dependencies: onlyWhen("enableWeb"),
+    },
+    "",
   )
   .field(
     "searxngUrl",
@@ -611,16 +622,6 @@ export const globalConfigSchematics = createConfigSchematics()
       subtitle:
         "Folder of skills: either <name>/SKILL.md (with supporting files) or <name>.md. Empty = ~/.lmstudio-agent-skills",
       placeholder: "~/.lmstudio-agent-skills",
-    },
-    "",
-  )
-  .field(
-    "braveApiKey",
-    "string",
-    {
-      displayName: "Brave Search API Key",
-      subtitle: "Only needed when a chat uses the brave search backend.",
-      isProtected: true,
     },
     "",
   )
