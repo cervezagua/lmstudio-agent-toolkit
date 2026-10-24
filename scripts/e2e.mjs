@@ -71,6 +71,7 @@ const allGroupsOff = {
   enableGitHub: false,
   enableWeb: false,
   searchBackend: "duckduckgo",
+  braveApiKey: "",
   searxngUrl: "",
   safeSearch: "moderate",
   maxSearchResults: 5,
@@ -97,7 +98,7 @@ async function getTools(name, workingDirectory) {
   const { fakeController } = await importTs("plugin/src/shared/testing/fake-controller.ts");
   const { toolsProvider } = await importTs("plugin/src/toolsProvider.ts");
   const config = { ...allGroupsOff, [groupFor[name]]: true };
-  const globalConfig = { memoryDirectory: scratchMemoryDir, skillsDirectory: "", braveApiKey: "" };
+  const globalConfig = { memoryDirectory: scratchMemoryDir, skillsDirectory: "" };
   const tools = await toolsProvider(fakeController({ config, globalConfig, workingDirectory }));
   // A browser left open by the web scenario is closed when this process exits.
   return { tools, dispose: () => {} };

@@ -109,7 +109,7 @@ export async function runWebDoctor(input: DoctorInput): Promise<string> {
   const lines: string[] = [];
 
   if (input.backend === "brave") {
-    lines.push(input.braveKeySet ? "✓ Search: Brave, with an API key set." : "✗ Search: Brave is selected, but no API key is set (global settings).");
+    lines.push(input.braveKeySet ? "✓ Search: Brave, with an API key set." : "✗ Search: Brave is selected, but no API key is set (Brave Search API Key, under Search Backend).");
   } else if (input.backend === "duckduckgo") {
     lines.push("~ Search: DuckDuckGo only. It needs no setup, but often answers automated requests with a bot check.");
   } else {
