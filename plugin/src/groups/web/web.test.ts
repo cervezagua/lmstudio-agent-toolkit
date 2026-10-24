@@ -133,6 +133,9 @@ beforeAll(async () => {
         return send(200, "application/json", JSON.stringify({ results: [{ title: " Result  One ", url: "https://one.example", content: "First" }] }));
       case "/nojson/search":
         return send(200, "text/html", "<html>json disabled</html>");
+      // What SearXNG's stock Docker image answers, with its JSON format off.
+      case "/forbidden/search":
+        return send(403, "text/html", "<!doctype html><title>403 Forbidden</title><h1>Forbidden</h1>");
       default:
         return send(404, "text/plain", "not found");
     }
@@ -160,6 +163,9 @@ describe("search parsing", () => {
   it("queries SearXNG JSON and explains a disabled json format", async () => {
     expect(await searchSearxng(`${baseUrl}/searx`, "q", 5)).toEqual([{ title: "Result One", url: "https://one.example", snippet: "First" }]);
     await expect(searchSearxng(`${baseUrl}/nojson`, "q", 5)).rejects.toThrow(/Enable the json format/);
+    const refused = await searchSearxng(`${baseUrl}/forbidden`, "q", 5).catch((error: Error) => error.message);
+    expect(refused).toMatch(/refused the search \(HTTP 403\): its JSON format is switched off\. Enable "json"/);
+    expect(refused).not.toContain("<!doctype");
     await expect(searchSearxng("", "q", 5)).rejects.toThrow(/no SearXNG URL/);
   });
 
