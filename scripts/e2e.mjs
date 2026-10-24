@@ -71,6 +71,7 @@ const allGroupsOff = {
   enableGitHub: false,
   enableWeb: false,
   searchBackend: "duckduckgo",
+  braveApiKey: "",
   searxngUrl: "",
   safeSearch: "moderate",
   maxSearchResults: 5,
@@ -97,7 +98,7 @@ async function getTools(name, workingDirectory) {
   const { fakeController } = await importTs("plugin/src/shared/testing/fake-controller.ts");
   const { toolsProvider } = await importTs("plugin/src/toolsProvider.ts");
   const config = { ...allGroupsOff, [groupFor[name]]: true };
-  const globalConfig = { memoryDirectory: scratchMemoryDir, skillsDirectory: "", braveApiKey: "" };
+  const globalConfig = { memoryDirectory: scratchMemoryDir, skillsDirectory: "" };
   const tools = await toolsProvider(fakeController({ config, globalConfig, workingDirectory }));
   // A browser left open by the web scenario is closed when this process exits.
   return { tools, dispose: () => {} };
@@ -137,9 +138,13 @@ async function runScenario(name, prompt, check) {
 }
 
 const client = new LMStudioClient();
-const alreadyLoaded = (await client.llm.listLoaded()).some(m => m.modelKey === modelKey);
+// The argument may be a model key or an instance identifier ("key@name"). Only an instance that
+// was not loaded before the run is unloaded afterwards, so a model someone else is using stays up.
+const loadedBefore = await client.llm.listLoaded();
+const alreadyLoaded = loadedBefore.some(m => m.identifier === modelKey || m.modelKey === modelKey);
 console.log(`${alreadyLoaded ? "Using loaded" : "Loading"} model ${modelKey} (${inProcess ? "in-process tools" : "installed plugins"})...`);
 const model = await client.llm.model(modelKey, { config: { contextLength: 16384 }, verbose: false });
+const loadedHere = !loadedBefore.some(m => m.identifier === model.identifier);
 
 const outcomes = [];
 try {
@@ -210,8 +215,8 @@ try {
     ),
   );
 } finally {
-  if (!alreadyLoaded) {
-    console.log(`\nUnloading ${modelKey}.`);
+  if (loadedHere) {
+    console.log(`\nUnloading ${model.identifier}.`);
     await model.unload().catch(error => console.error(`Could not unload: ${error.message}`));
   }
   await rm(scratchMemoryDir, { recursive: true, force: true }).catch(() => {});

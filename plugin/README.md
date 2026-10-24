@@ -164,11 +164,11 @@ Small models guess at sums and don't know what day it is. These two tools give t
 
 **Git & GitHub:** Allow Push *(off)* · Enable GitHub Tools *(on)*.
 
-**Web:** Search Backend *(auto)* · SearXNG URL *(`http://localhost:8888`)* · Safe Search *(moderate)* · Default Search Results *(8)* · Max Page Characters *(15000)* · Browser Fallback *(on)* · Enable Browser Tools *(on)* · Browser *(Edge on Windows, Chrome elsewhere)* · Headless *(on)* · Research *(off)* · Research Model *(Auto, chosen from your models)*.
+**Web:** Search Backend *(auto)* · Brave Search API Key *(needed for brave)* · SearXNG URL *(`http://localhost:8888`)* · Safe Search *(moderate)* · Default Search Results *(8)* · Max Page Characters *(15000)* · Browser Fallback *(on)* · Enable Browser Tools *(on)* · Browser *(Edge on Windows, Chrome elsewhere)* · Headless *(on)* · Research *(off)* · Research Model *(Auto, chosen from your models)*.
 
 **Documents:** Vision Model *(Auto, chosen from your models)* · PDF Render Scale *(2)* · Max Pages Per Call *(10)*.
 
-**Shared by every chat:** Memory Directory · Skills Directory · Brave Search API Key.
+**Shared by every chat:** Memory Directory · Skills Directory.
 
 ## Safety
 

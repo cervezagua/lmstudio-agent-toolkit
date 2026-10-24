@@ -122,6 +122,7 @@ describe("selector", () => {
         fakeController({
           config: {
             searchBackend: "searxng",
+            braveApiKey: "",
             searxngUrl: "",
             safeSearch: "moderate",
             maxSearchResults: 8,
@@ -133,7 +134,6 @@ describe("selector", () => {
             browserChannel: "msedge",
             headless: true,
           },
-          globalConfig: { braveApiKey: "" },
           workingDirectory,
         }),
       );

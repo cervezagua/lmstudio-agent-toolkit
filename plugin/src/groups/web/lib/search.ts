@@ -236,7 +236,7 @@ export function braveSearchUrl(query: string, count: number, page = 1, safeSearc
 }
 
 export async function searchBrave(apiKey: string, query: string, count: number, options: BackendOptions = {}): Promise<SearchResult[]> {
-  if (!apiKey.trim()) throw new ToolError("Search backend is brave but no Brave API key is set in the plugin's global settings.");
+  if (!apiKey.trim()) throw new ToolError("Search backend is brave but no Brave API key is set (Brave Search API Key, under Search Backend in the plugin's settings).");
   const url = braveSearchUrl(query, count, options.page, options.safeSearch);
   const data = await getJson(url.href, {
     headers: { Accept: "application/json", "X-Subscription-Token": apiKey.trim() },

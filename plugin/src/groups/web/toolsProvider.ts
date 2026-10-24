@@ -2,7 +2,7 @@ import { text, tool, type Tool, type ToolsProviderController } from "@lmstudio/s
 import { mkdir } from "fs/promises";
 import { join } from "path";
 import { z } from "zod";
-import { configSchematics, globalConfigSchematics } from "../../config";
+import { configSchematics } from "../../config";
 import { browserSession, type BrowserChannel } from "./lib/browser";
 import { makeFetchUrlTools, type RenderInBrowser } from "./lib/fetchUrlTool";
 import { formatResults, runSearch, type SafeSearch, type SearchBackend } from "./lib/search";
@@ -46,7 +46,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
           page,
           safeSearch: config.get("safeSearch") as SafeSearch,
           searxngUrl: config.get("searxngUrl"),
-          braveApiKey: backend === "brave" ? ctl.getGlobalPluginConfig(globalConfigSchematics).get("braveApiKey") : "",
+          braveApiKey: backend === "brave" ? config.get("braveApiKey") : "",
           signal,
         });
         if (note && !cached) ctx.warn(note);
@@ -204,7 +204,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
                     count: 6,
                     safeSearch: config.get("safeSearch") as SafeSearch,
                     searxngUrl: config.get("searxngUrl"),
-                    braveApiKey: backend === "brave" ? ctl.getGlobalPluginConfig(globalConfigSchematics).get("braveApiKey") : "",
+                    braveApiKey: backend === "brave" ? config.get("braveApiKey") : "",
                     signal: ctx.signal,
                   })
                 ).results,
@@ -239,7 +239,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         runWebDoctor({
           backend,
           searxngUrl: config.get("searxngUrl"),
-          braveKeySet: ctl.getGlobalPluginConfig(globalConfigSchematics).get("braveApiKey").trim() !== "",
+          braveKeySet: config.get("braveApiKey").trim() !== "",
           browserEnabled: config.get("enableBrowser"),
           channel: config.get("browserChannel"),
           ytDlp: findExecutable("yt-dlp"),

@@ -59,9 +59,6 @@ const conditions = `${installed ? "-installed" : ""}${allGroups ? "-all" : ""}${
  */
 const INSTALLED_OFF = { enableMemory: false, allowSkillSave: false, enableChatSearch: false };
 
-/** SDK 2 for --installed: it carries the API token, which the plugin's own SDK 1.5 cannot. */
-const sdk2 = installed ? createRequire(join(repo, "package.json"))("@lmstudio/sdk") : null;
-
 /** Tools from the installed plugin, with this run's settings, for one chat. */
 async function installedTools(client: any, chatDir: string, config: Record<string, unknown>) {
   const schematics: any = makeConfigSchematics();
@@ -157,8 +154,6 @@ async function runOnce(model: any, client: any, systemPrompt: string, name: stri
     ...everything,
     ...(installed ? INSTALLED_OFF : {}),
   };
-  // The conversation runs on the same SDK as the model and tools: the plugin's, or SDK 2 for --installed.
-  const chatSdk = sdk2 ?? sdk;
   const globalConfig = { ...defaults(globalConfigSchematics), memoryDirectory: memory, skillsDirectory: skills };
   const history = sdk.Chat.from([{ role: "system", content: systemPrompt }]);
   // Each prompt is a new chat, with a working directory of its own as in LM Studio.
@@ -181,7 +176,7 @@ async function runOnce(model: any, client: any, systemPrompt: string, name: stri
       const chatDir = index === 0 ? chat : join(scratch, `chat-${index + 1}`);
       await mkdir(chatDir, { recursive: true });
       // The conversation so far, kept as LM Studio keeps it: follow-ups see every earlier turn.
-      const conversation = chatSdk.Chat.from([{ role: "system", content: systemPrompt }]);
+      const conversation = sdk.Chat.from([{ role: "system", content: systemPrompt }]);
       const turns = index === prompts.length - 1 ? [prompt, ...(task.followUps ?? [])] : [prompt];
       for (const turn of turns) {
         const ctl = fakeController({ config, globalConfig, workingDirectory: chatDir, history: conversation, client });
@@ -325,7 +320,8 @@ async function main() {
         "Developer > Server Settings > Manage Tokens.",
     );
   }
-  const client = installed ? new sdk2.LMStudioClient() : new sdk.LMStudioClient();
+  // The SDK reads the API token for --installed from LM_API_TOKEN itself.
+  const client = new sdk.LMStudioClient();
   // A context length of its own needs a copy of the model loaded for this run, under its own name.
   const loaded = !contextLength && (await client.llm.listLoaded()).some((m: any) => m.identifier === modelKey || m.modelKey === modelKey);
   console.log(`${loaded ? "Using the loaded" : "Loading"} model ${modelKey}${contextLength ? ` with a ${contextLength}-token context` : ""}...`);
