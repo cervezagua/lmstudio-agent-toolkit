@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/cervezagua/lmstudio-agent-toolkit/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/cervezagua/lmstudio-agent-toolkit/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <img alt="Tests" src="https://img.shields.io/badge/tests-860%20passing-brightgreen">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-861%20passing-brightgreen">
   <img alt="Tested on Windows, macOS and Linux" src="https://img.shields.io/badge/tested%20on-Windows%20%7C%20macOS%20%7C%20Linux-informational">
   <a href="https://lmstudio.ai/cervezagua/agent-toolkit"><img alt="LM Studio Hub" src="https://img.shields.io/badge/LM%20Studio%20Hub-cervezagua%2Fagent--toolkit-7c3aed"></a>
 </p>
@@ -68,6 +68,7 @@ LM Studio fetches the dependencies itself. Re-run `npm run setup` after `git pul
 
 | Version | What changed |
 |---|---|
+| [**0.6.0**](https://github.com/cervezagua/lmstudio-agent-toolkit/releases/tag/v0.6.0) | Runs on LM Studio SDK 2.1, which fixes a hang with newer LM Studio: model lists in the settings are filled again, and the vision tools no longer wait forever when no vision model is loaded. **Brave Search API Key** moved under Search Backend and is now set per chat: enter your key again there. |
 | [**0.5.2**](https://github.com/cervezagua/lmstudio-agent-toolkit/releases/tag/v0.5.2) | When an edit can't find the text it should replace, the error shows the closest lines in the file, so the model can copy them instead of reading the whole file again. |
 | [**0.5.1**](https://github.com/cervezagua/lmstudio-agent-toolkit/releases/tag/v0.5.1) | A command that prints without end can no longer crash the plugin: output is capped at its first and last 2 million characters. |
 | [**0.5.0**](https://github.com/cervezagua/lmstudio-agent-toolkit/releases/tag/v0.5.0) | **`research`**: answers from several web pages, with a source for each claim. `grep` on a single file works with ripgrep installed. Lines `grep` shows can be edited directly. A missing file says where it probably is. |
