@@ -19,6 +19,7 @@ const baseConfig = {
   enableBackgroundTasks: true,
   enableNotebookTools: true,
   enableDiagnostics: true,
+  autoCheckEdits: true,
   enableSqlite: false,
   enableSubagent: false,
   subagentModel: "",
@@ -139,6 +140,16 @@ describe("coder-tools toolsProvider", () => {
     );
     expect(await callTool(tools, "grep", { pattern: "([bad" })).toMatch(/^Error: Invalid regular expression/);
   });
+
+  it("says in the edit's own result when the edit broke the file's syntax", async () => {
+    await writeFile(join(root, "calc.js"), "function add(a, b) {\n  return a + b;\n}\n");
+    await callTool(tools, "read_file", { path: "calc.js" });
+    const broken = await callTool(tools, "edit_file", { path: "calc.js", old_string: "  return a + b;\n}", new_string: "  return a + b;" });
+    expect(broken).toMatch(/^Edited calc\.js: 1 replacement\.\n\nThe file was written, but node --check found a problem:/);
+    const fixed = await callTool(tools, "edit_file", { path: "calc.js", old_string: "  return a + b;", new_string: "  return a + b;\n}" });
+    expect(fixed).toBe("Edited calc.js: 1 replacement.");
+    await rm(join(root, "calc.js"));
+  }, 30000);
 
   it("refuses to edit a file it has not read, and one that changed underneath", async () => {
     await writeFile(join(root, "unseen.txt"), "first\n");

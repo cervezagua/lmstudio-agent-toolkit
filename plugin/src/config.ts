@@ -207,6 +207,16 @@ export function makeConfigSchematics(choices?: ModelChoices) {
     true,
   )
   .field(
+    "autoCheckEdits",
+    "boolean",
+    {
+      displayName: "Check Edits",
+      subtitle: "After a write or edit, checks the file's syntax (JavaScript, Python, JSON) and reports a problem in the same result.",
+      dependencies: onlyWhen("enableFiles"),
+    },
+    true,
+  )
+  .field(
     "enableNotebookTools",
     "boolean",
     {

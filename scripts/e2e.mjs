@@ -52,6 +52,7 @@ const allGroupsOff = {
   maxReadBytes: 262144,
   enableBackgroundTasks: false,
   enableDiagnostics: false,
+  autoCheckEdits: true,
   enableNotebookTools: false,
   enableSqlite: false,
   enableSubagent: false,

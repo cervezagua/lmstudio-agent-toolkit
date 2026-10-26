@@ -11,6 +11,7 @@ import { assertReadableSize, looksBinary, readTextSlice } from "./lib/readText";
 import { writeFileAtomic } from "../../shared/safeWrite";
 import { overflowNote, storeOverflow } from "./lib/overflow";
 import { notFoundMessage } from "./lib/suggest";
+import { quickCheck } from "./lib/quickCheck";
 import { availableCheckers, runChecker, testHint } from "./lib/diagnostics";
 import { editNotebook, parseNotebook, renderNotebook } from "./lib/notebook";
 import { pickSubagentModel, runSubagent } from "./lib/subagent";
@@ -149,6 +150,17 @@ export async function toolsProvider(ctl: ToolsProviderController) {
     await assertFresh(file, show(file), content);
     return { file, content };
   };
+  /**
+   * The result of a write, with the file's quick check added when it found a problem: a broken
+   * edit is reported where it happened, while the model still has the change in mind.
+   */
+  const autoCheck = config.get("autoCheckEdits");
+  const checked = async (file: string, message: string, signal?: AbortSignal) => {
+    if (!autoCheck) return message;
+    const problem = await quickCheck(file, { cwd: root, signal }).catch(() => null);
+    return problem ? `${message}\n\nThe file was written, but ${problem}` : message;
+  };
+
   // memory-tools' plan mode: while planning, the tools that change things are not offered at all.
   const planning = (await readMode(ctl.getWorkingDirectory())).planning;
 
@@ -210,7 +222,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         The previous content is kept, so undo_edit can restore it.
       `,
       parameters: { path: z.string(), content: z.string() },
-      implementation: safe(async ({ path, content }) => {
+      implementation: safe(async ({ path, content }, { signal }) => {
         const file = await resolveWritable(path);
         const info = await stat(file).catch(() => null);
         if (info?.isDirectory()) throw new ToolError(`"${path}" is a directory.`);
@@ -219,7 +231,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         await backups.save(file, existing);
         await writeFileAtomic(file, content);
         await recordWrite(file, content);
-        return `${existing === null ? "Created" : "Overwrote"} ${show(file)} (${Buffer.byteLength(content)} bytes).`;
+        return checked(file, `${existing === null ? "Created" : "Overwrote"} ${show(file)} (${Buffer.byteLength(content)} bytes).`, signal);
       }),
     }),
   );
@@ -240,14 +252,14 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         replace_all: z.boolean().optional(),
         preview: z.boolean().optional(),
       },
-      implementation: safe(async ({ path, old_string, new_string, replace_all, preview }) => {
+      implementation: safe(async ({ path, old_string, new_string, replace_all, preview }, { signal }) => {
         const { file, content: original } = await openForEdit(path);
         const { content, replacements } = applyEdit(original, old_string, new_string, replace_all ?? false);
         if (preview) return `Preview of ${show(file)} (nothing written):\n${previewDiff(original, content)}`;
         await backups.save(file, original);
         await writeFileAtomic(file, content);
         await recordWrite(file, content);
-        return `Edited ${show(file)}: ${replacements} replacement${replacements === 1 ? "" : "s"}.`;
+        return checked(file, `Edited ${show(file)}: ${replacements} replacement${replacements === 1 ? "" : "s"}.`, signal);
       }),
     }),
   );
@@ -267,14 +279,14 @@ export async function toolsProvider(ctl: ToolsProviderController) {
           .min(1),
         preview: z.boolean().optional(),
       },
-      implementation: safe(async ({ path, edits, preview }) => {
+      implementation: safe(async ({ path, edits, preview }, { signal }) => {
         const { file, content: original } = await openForEdit(path);
         const { content, replacements } = applyEdits(original, edits);
         if (preview) return `Preview of ${show(file)} (nothing written):\n${previewDiff(original, content)}`;
         await backups.save(file, original);
         await writeFileAtomic(file, content);
         await recordWrite(file, content);
-        return `Edited ${show(file)}: ${edits.length} edits, ${replacements} replacements.`;
+        return checked(file, `Edited ${show(file)}: ${edits.length} edits, ${replacements} replacements.`, signal);
       }),
     }),
   );
@@ -292,7 +304,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         content: z.string(),
         preview: z.boolean().optional(),
       },
-      implementation: safe(async ({ path, after_line, content, preview }) => {
+      implementation: safe(async ({ path, after_line, content, preview }, { signal }) => {
         // Inserting into a file that does not exist yet is allowed, so only existing files go
         // through the read-before-edit check.
         // resolveWritable for a new file too: the toolkit's own state files must not be created here.
@@ -304,7 +316,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         await backups.save(file, existing === null ? null : original);
         await writeFileAtomic(file, updated);
         await recordWrite(file, updated);
-        return `Inserted ${content.split(/\r?\n/).length} line(s) into ${show(file)} after line ${after_line}.`;
+        return checked(file, `Inserted ${content.split(/\r?\n/).length} line(s) into ${show(file)} after line ${after_line}.`, signal);
       }),
     }),
   );
