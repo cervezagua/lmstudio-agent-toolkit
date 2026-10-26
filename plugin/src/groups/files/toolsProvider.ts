@@ -4,6 +4,7 @@ import { dirname, join, relative } from "path";
 import { z } from "zod";
 import { configSchematics } from "../../config";
 import { BackupStore } from "./lib/backups";
+import { recordChange } from "../../shared/checkpoints";
 import { findBlockedPattern, parsePatterns } from "./lib/blocklist";
 import { applyEdit, applyEdits, insertLines, previewDiff } from "./lib/edit";
 import { assertFresh, forget, recordRead, recordWrite } from "./lib/fileState";
@@ -79,6 +80,12 @@ export async function toolsProvider(ctl: ToolsProviderController) {
   // State that must not pollute the user's project lives in the chat's working directory.
   const stateDir = join(ctl.getWorkingDirectory(), ".coder-tools");
   const backups = new BackupStore(join(stateDir, "backups"));
+  // Every change is kept twice: the last one per file for undo_edit, and the first one per turn for /rewind.
+  const checkpointsOn = config.get("enableCheckpoints");
+  const remember = async (file: string, previous: string | null) => {
+    await backups.save(file, previous);
+    if (checkpointsOn) await recordChange(ctl.getWorkingDirectory(), file, previous).catch(() => {});
+  };
   const readIfExists = (file: string) => readFile(file, "utf-8").catch(() => null);
 
   /**
@@ -228,7 +235,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         if (info?.isDirectory()) throw new ToolError(`"${path}" is a directory.`);
         const existing = await readIfExists(file);
         await mkdir(dirname(file), { recursive: true });
-        await backups.save(file, existing);
+        await remember(file, existing);
         await writeFileAtomic(file, content);
         await recordWrite(file, content);
         return checked(file, `${existing === null ? "Created" : "Overwrote"} ${show(file)} (${Buffer.byteLength(content)} bytes).`, signal);
@@ -256,7 +263,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         const { file, content: original } = await openForEdit(path);
         const { content, replacements } = applyEdit(original, old_string, new_string, replace_all ?? false);
         if (preview) return `Preview of ${show(file)} (nothing written):\n${previewDiff(original, content)}`;
-        await backups.save(file, original);
+        await remember(file, original);
         await writeFileAtomic(file, content);
         await recordWrite(file, content);
         return checked(file, `Edited ${show(file)}: ${replacements} replacement${replacements === 1 ? "" : "s"}.`, signal);
@@ -283,7 +290,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         const { file, content: original } = await openForEdit(path);
         const { content, replacements } = applyEdits(original, edits);
         if (preview) return `Preview of ${show(file)} (nothing written):\n${previewDiff(original, content)}`;
-        await backups.save(file, original);
+        await remember(file, original);
         await writeFileAtomic(file, content);
         await recordWrite(file, content);
         return checked(file, `Edited ${show(file)}: ${edits.length} edits, ${replacements} replacements.`, signal);
@@ -313,7 +320,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         const { file, content: original } = existing === null ? { file: target, content: "" } : await openForEdit(path);
         const updated = insertLines(original, after_line, content);
         if (preview) return `Preview of ${show(file)} (nothing written):\n${previewDiff(original, updated)}`;
-        await backups.save(file, existing === null ? null : original);
+        await remember(file, existing === null ? null : original);
         await writeFileAtomic(file, updated);
         await recordWrite(file, updated);
         return checked(file, `Inserted ${content.split(/\r?\n/).length} line(s) into ${show(file)} after line ${after_line}.`, signal);
@@ -508,7 +515,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
             source,
             cellType: cell_type,
           });
-          await backups.save(file, original);
+          await remember(file, original);
           const serialized = JSON.stringify(notebook, null, 1) + "\n";
           await writeFileAtomic(file, serialized);
           await recordWrite(file, serialized);

@@ -33,6 +33,8 @@ const chatConfig = () => ({
   enableMemory: true,
   readAttachments: false,
   enableCommands: true,
+  enableCheckpoints: false,
+  enableFiles: false,
   projectFolder: projectDir,
   maxOutputChars: 20000,
   instructionFiles: ["AGENTS.md", "CLAUDE.md", "../outside.md"],

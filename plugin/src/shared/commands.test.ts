@@ -69,6 +69,8 @@ describe("commands in the prompt preprocessor", () => {
   const config = (overrides: Record<string, unknown> = {}) => ({
     projectFolder: project,
     enableCommands: true,
+    enableCheckpoints: false,
+    enableFiles: false,
     scanLoadedFiles: true,
     enableMemory: false,
     readAttachments: false,

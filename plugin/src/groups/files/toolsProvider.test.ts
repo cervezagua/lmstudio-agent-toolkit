@@ -20,6 +20,7 @@ const baseConfig = {
   enableNotebookTools: true,
   enableDiagnostics: true,
   autoCheckEdits: true,
+  enableCheckpoints: true,
   enableSqlite: false,
   enableSubagent: false,
   subagentModel: "",

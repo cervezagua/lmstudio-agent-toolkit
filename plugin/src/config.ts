@@ -218,6 +218,17 @@ export function makeConfigSchematics(choices?: ModelChoices) {
     true,
   )
   .field(
+    "enableCheckpoints",
+    "boolean",
+    {
+      displayName: "Checkpoints",
+      subtitle:
+        "Keeps each file as it was before every message's changes, so /rewind can list them and /rewind 3 puts the project back to before message 3. Changes made by shell commands are not tracked.",
+      dependencies: onlyWhen("enableFiles"),
+    },
+    true,
+  )
+  .field(
     "autoCheckEdits",
     "boolean",
     {

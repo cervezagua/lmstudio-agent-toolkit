@@ -446,6 +446,7 @@ describe("the prompt preprocessor", () => {
     projectFolder: base,
     readAttachments: true,
     enableCommands: true,
+    enableCheckpoints: false,
     scanLoadedFiles: true,
     maxAttachmentChars: 40000,
     enableDocuments: true,

@@ -3,6 +3,7 @@ import { configSchematics, globalConfigSchematics, makeConfigSchematics } from "
 import { attachmentContext, composeMessage } from "./shared/attachments";
 import { listModelChoices } from "./shared/models";
 import { allCommands, expandCommand } from "./shared/commands";
+import { rewindCommand, startTurn } from "./shared/checkpoints";
 import { projectRoot } from "./shared/projectFolder";
 import { memoryContext, triggeredSkillContext } from "./groups/memory/promptPreprocessor";
 import { toolsProvider } from "./toolsProvider";
@@ -28,8 +29,20 @@ export async function promptPreprocessor(ctl: PromptPreprocessorController, user
   if (/^\s*\/btw\b/i.test(userMessage.getText())) return userMessage;
 
   let userText = userMessage.getText();
+  const { root } = projectRoot(config.get("projectFolder"), () => ctl.getWorkingDirectory());
+
+  // Each message is a turn the file tools keep checkpoints for; /rewind lists or restores them.
+  if (config.get("enableFiles") && config.get("enableCheckpoints")) {
+    const rewind = /^\s*\/rewind\b\s*(\S*)/i.exec(userText);
+    if (rewind) {
+      userText = await rewindCommand(ctl.getWorkingDirectory(), rewind[1].toLowerCase(), root);
+      ctl.createStatus({ status: "done", text: rewind[1] && rewind[1] !== "list" ? `agent-toolkit ran /rewind ${rewind[1]}` : "agent-toolkit listed the checkpoints" });
+    } else {
+      await startTurn(ctl.getWorkingDirectory(), userText).catch(() => {});
+    }
+  }
+
   if (config.get("enableCommands")) {
-    const { root } = projectRoot(config.get("projectFolder"), () => ctl.getWorkingDirectory());
     const outcome = expandCommand(userText, await allCommands(root), { scan: config.get("scanLoadedFiles") });
     if (outcome.kind === "expanded") {
       userText = outcome.text;

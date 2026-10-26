@@ -17,6 +17,7 @@ const baseConfig = {
   enableSqlite: true,
   enableDiagnostics: false,
   autoCheckEdits: true,
+  enableCheckpoints: true,
   enableSubagent: false,
   subagentModel: "",
 };
