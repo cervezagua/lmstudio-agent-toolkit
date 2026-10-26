@@ -1,3 +1,4 @@
+import { existsSync } from "fs";
 import { mkdtemp, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
@@ -29,7 +30,18 @@ describe("quickCheck", () => {
 
   it.skipIf(!findExecutable("python") && !findExecutable("python3"))("reports a Python syntax error", async () => {
     expect(await check("good.py", "def f():\n    return 1\n")).toBeNull();
-    expect(await check("bad.py", "def f(:\n    return 1\n")).toMatch(/^python -m py_compile found a problem:/);
+    expect(await check("bad.py", "def f(:\n    return 1\n")).toMatch(/^Python found a problem:/);
+  }, 30000);
+
+  // A project's own tokenize.py or py_compile.py used to replace the standard module during the check,
+  // so a cloned repository (or the model) could run code just by having a .py file edited.
+  it.skipIf(!findExecutable("python") && !findExecutable("python3"))("never runs the project's own Python modules", async () => {
+    const marker = join(dir, "ran.txt");
+    const payload = `open(${JSON.stringify(marker)}, "w").write("ran")\n`;
+    for (const name of ["py_compile.py", "tokenize.py", "linecache.py", "traceback.py"]) await writeFile(join(dir, name), payload);
+    expect(await check("app.py", "x = 1\n")).toBeNull();
+    expect(await check("broken.py", "def f(:\n")).toMatch(/^Python found a problem:/);
+    expect(existsSync(marker)).toBe(false);
   }, 30000);
 
   it("reports broken JSON, but not JSON with comments, which tsconfig allows", async () => {

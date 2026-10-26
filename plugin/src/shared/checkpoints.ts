@@ -1,4 +1,4 @@
-import { mkdir, readdir, readFile, rm } from "fs/promises";
+import { mkdir, readdir, readFile, rm, writeFile } from "fs/promises";
 import { join, resolve } from "path";
 import { displayPath, isInside, realpathOfNearestExisting } from "./paths";
 import { writeFileAtomic } from "./safeWrite";
@@ -40,6 +40,15 @@ async function readJson<T>(file: string): Promise<T | null> {
   }
 }
 
+/**
+ * Makes git ignore a state folder. Without a Project Folder the chat's folder is the project, and
+ * `git add .` would otherwise stage earlier file contents and the chat's transcript for a push.
+ */
+export async function ignoredByGit(stateFolder: string): Promise<void> {
+  await mkdir(stateFolder, { recursive: true });
+  await writeFile(join(stateFolder, ".gitignore"), "*\n", { flag: "wx" }).catch(() => {}); // kept if already there
+}
+
 export async function currentTurn(chatDir: string): Promise<TurnInfo | null> {
   return readJson<TurnInfo>(turnFile(chatDir));
 }
@@ -52,6 +61,7 @@ export async function startTurn(chatDir: string, message: string, now = new Date
     message: message.replace(/\s+/g, " ").trim().slice(0, 70),
   };
   await mkdir(folder(chatDir), { recursive: true });
+  await ignoredByGit(join(chatDir, ".agent-toolkit"));
   await writeFileAtomic(turnFile(chatDir), JSON.stringify(info));
   return info;
 }
@@ -111,13 +121,18 @@ export async function rewindTo(chatDir: string, turn: number, projectFolder: str
       result.notRestored.push(path);
       continue;
     }
-    if (previous === null) {
-      await rm(path, { force: true });
-      result.deleted.push(path);
-    } else {
-      await mkdir(resolve(path, ".."), { recursive: true });
-      await writeFileAtomic(path, previous);
-      result.restored.push(path);
+    // One file that cannot be put back (locked, a folder now) must not stop the others.
+    try {
+      if (previous === null) {
+        await rm(path, { force: true });
+        result.deleted.push(path);
+      } else {
+        await mkdir(resolve(path, ".."), { recursive: true });
+        await writeFileAtomic(path, previous);
+        result.restored.push(path);
+      }
+    } catch {
+      result.notRestored.push(path);
     }
   }
   for (const checkpoint of undone) await rm(checkpointFile(chatDir, checkpoint.turn), { force: true });
@@ -158,7 +173,7 @@ export async function rewindCommand(chatDir: string, argument: string, projectFo
   const parts = [
     result.restored.length ? `restored: ${result.restored.map(shown).join(", ")}` : "",
     result.deleted.length ? `deleted, since they did not exist then: ${result.deleted.map(shown).join(", ")}` : "",
-    result.notRestored.length ? `could not be restored (too big to keep, or outside the project folder): ${result.notRestored.map(shown).join(", ")}` : "",
+    result.notRestored.length ? `could not be restored (too big to keep, outside the project folder, or locked): ${result.notRestored.map(shown).join(", ")}` : "",
   ].filter(Boolean);
   return (
     `The user typed /rewind ${turn}. agent-toolkit has already put the files back to how they were before message ${from.turn} ("${from.message}"). ` +

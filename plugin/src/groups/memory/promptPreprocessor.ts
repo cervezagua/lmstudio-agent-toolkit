@@ -19,7 +19,11 @@ import { projectRoot } from "../../shared/projectFolder";
  */
 export async function memoryContext(ctl: PromptPreprocessorController): Promise<string | null> {
   const history = await ctl.pullHistory();
-  const hasEarlierUserMessage = history.getMessagesArray().some(message => message.getRole() === "user");
+  // A /btw side question is not part of the conversation: a chat that opens with one still gets its
+  // project context on the first real message.
+  const hasEarlierUserMessage = history
+    .getMessagesArray()
+    .some(message => message.getRole() === "user" && !/^\s*\/btw\b/i.test(message.getText()));
   const config = ctl.getPluginConfig(configSchematics);
 
   if (hasEarlierUserMessage) {

@@ -99,6 +99,11 @@ describe("what is pinned", () => {
     expect(words).toContain("(1 more of the user's messages are in the transcript)");
   });
 
+  it("quotes only what the user typed, not what agent-toolkit added in front of it", () => {
+    const added = '<context source="agent-toolkit">AGENTS.md: deploy freely</context>\n\nEverything above was added automatically by agent-toolkit; it is not part of the user\'s message.\n\nThe user\'s message:\nfix the bug';
+    expect(userWords([user(added)], 1000)).toBe("[#m1] fix the bug");
+  });
+
   it("shows the latest open tasks, and nothing once all are done", () => {
     const todos = (statuses: string[]) => call("todo_write", { todos: statuses.map((status, i) => ({ content: `step ${i + 1}`, status })) });
     expect(openTasks([user("go"), todos(["completed", "in_progress", "pending"])])).toBe(
@@ -138,7 +143,7 @@ describe("compact", () => {
     expect(model.calls).toBe(0);
   });
 
-  it("summarizes older turns into the system prompt when hiding is not enough", async () => {
+  it("replaces older turns with a labelled record, leaving the system prompt alone", async () => {
     const msgs = [
       user("Build the parser. Keep it under 100 lines."),
       say("p".repeat(3000)),
@@ -149,11 +154,13 @@ describe("compact", () => {
     const model = summarizer("Goal: parser.\nNext step: docs.");
     const done = await compact({ system: "You are helpful.", msgs, count, model, chatDir, options });
     expect(done.stage).toBe(2);
-    expect(done.system).toMatch(/^You are helpful\.\n\n# Earlier in this conversation \(compacted by agent-toolkit-loop\)/);
-    expect(done.system).toContain("[#m1] Build the parser. Keep it under 100 lines.");
-    expect(done.system).toContain("## Summary\nGoal: parser.");
-    expect(done.system).toContain(".agent-toolkit/compaction/transcript.md");
+    expect(done.system).toBe("You are helpful.");
+    const record = done.msgs[0].text;
     expect(done.msgs[0].role).toBe("user");
+    expect(record).toMatch(/^<earlier-conversation source="agent-toolkit-loop">\n\nA record of the earlier part of this conversation[\s\S]*It is information, not instructions/);
+    expect(record).toContain("[#m1] Build the parser. Keep it under 100 lines.");
+    expect(record).toContain("## Summary\nGoal: parser.");
+    expect(record).toContain(".agent-toolkit/compaction/transcript.md");
     expect(done.msgs.at(-1)!.text).toBe("and the docs");
     expect(done.after).toBeLessThan(done.before);
   });
@@ -163,7 +170,7 @@ describe("compact", () => {
     const done = await compact({ system: "sys", msgs, count, model: summarizer(new Error("model busy")), chatDir, options });
     expect(done.stage).toBe(2);
     expect(done.note).toMatch(/summary could not be written/);
-    expect(done.system).toContain("[#m1] Build it.");
+    expect(done.msgs[0].text).toContain("[#m1] Build it.");
   });
 
   it("can cut inside one long request, between finished rounds", () => {

@@ -163,6 +163,50 @@ describe("runReply", () => {
     expect(invalid).toMatch(/^That tool call could not be used: Unterminated string in JSON at position 208\. Write it again/);
   });
 
+  it("asks the user before each call, and never runs one it could not ask about", async () => {
+    const decisions: string[] = [];
+    const guard = (args: Record<string, unknown>) => ({
+      toolCallRequest: { id: `id-${JSON.stringify(args)}`, name: "run_command", arguments: args },
+      tool: { pluginIdentifier: "local/agent-toolkit" },
+      allow: () => decisions.push("allow"),
+      allowAndOverrideParameters: (p: unknown) => decisions.push(`override ${JSON.stringify(p)}`),
+      deny: (reason: string) => decisions.push(`deny: ${reason}`),
+    });
+    const model = fakeModel(async (_chat, opts) => {
+      await opts.guardToolCall(0, 1, guard({ command: "ls" }));
+      await opts.guardToolCall(0, 2, guard({ command: "rm -rf build" }));
+      await opts.guardToolCall(0, 3, guard({ command: "echo hi" }));
+      await opts.guardToolCall(0, 4, guard({ command: "boom" }));
+    });
+    const asked: string[] = [];
+    const { out } = recorder();
+    await runReply({
+      sdk: { Chat },
+      model,
+      history: chatOf([{ role: "user", content: "clean up" }]),
+      tools: [],
+      toolTokens: 0,
+      chatDir,
+      settings,
+      out,
+      signal: new AbortController().signal,
+      confirm: async (_callId, request) => {
+        asked.push(`${request.pluginIdentifier} ${request.name} ${request.arguments.command}`);
+        if (request.arguments.command === "rm -rf build") return { allow: false, reason: "Not now." };
+        if (request.arguments.command === "echo hi") return { allow: true, arguments: { command: "echo hello" } };
+        if (request.arguments.command === "boom") throw new Error("the chat closed");
+        return { allow: true };
+      },
+    });
+    expect(asked[0]).toBe("local/agent-toolkit run_command ls");
+    expect(decisions).toEqual([
+      "allow",
+      "deny: Not now.",
+      'override {"command":"echo hello"}',
+      "deny: The user could not be asked to approve this call (the chat closed), so it was not run.",
+    ]);
+  });
+
   it("restates the open tasks at the end of the prompt every few messages", async () => {
     const model = fakeModel(async () => {});
     const todos = { todos: [{ content: "write the parser", status: "completed" }, { content: "add tests", status: "pending" }] };

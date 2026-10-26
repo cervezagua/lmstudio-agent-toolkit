@@ -103,7 +103,8 @@ export function parseTriggers(value: string | undefined): string[] {
     .replace(/^\[|\]$/g, "")
     .split(/,|(?:^|\s)-\s/)
     .map(trigger => trigger.trim().replace(/^["']|["']$/g, "").trim())
-    .filter(trigger => trigger.length >= 2)
+    // A word or a short phrase; a downloaded skill's very long "trigger" would only make matching slow.
+    .filter(trigger => trigger.length >= 2 && trigger.length <= 64)
     .slice(0, 20);
 }
 

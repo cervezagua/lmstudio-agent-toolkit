@@ -46,7 +46,7 @@ export async function promptPreprocessor(ctl: PromptPreprocessorController, user
     const outcome = expandCommand(userText, await allCommands(root), { scan: config.get("scanLoadedFiles") });
     if (outcome.kind === "expanded") {
       userText = outcome.text;
-      ctl.createStatus({ status: "done", text: `agent-toolkit ran /${outcome.name}` });
+      ctl.createStatus({ status: "done", text: `agent-toolkit ran /${outcome.name}${outcome.source ? ` ${outcome.source}` : ""}` });
     } else if (outcome.kind === "refused") {
       ctl.createStatus({ status: "error", text: `agent-toolkit did not run /${outcome.name}: ${outcome.reason}` });
     }

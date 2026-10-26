@@ -1,4 +1,4 @@
-import { readdir, readFile } from "fs/promises";
+import { lstat, readdir, readFile } from "fs/promises";
 import { basename, join } from "path";
 import { scanForInjection, describeFinding } from "./injectionScan";
 
@@ -20,6 +20,12 @@ export interface Command {
  * Commands that come with the toolkit. They name the toolkit's tools but say what to do if a group is
  * off, because a command must not fail just because the user switched git tools off.
  */
+/**
+ * Names a project's own file cannot take: a cloned repository's review.md must not turn the built-in
+ * read-only /review into something else, under the same name the user trusts.
+ */
+const RESERVED = new Set(["review", "init", "commit", "test", "help", "rewind", "btw"]);
+
 export const BUILT_IN_COMMANDS: Command[] = [
   {
     name: "review",
@@ -80,13 +86,19 @@ export async function projectCommands(projectFolder: string): Promise<Command[]>
   const names = await readdir(folder).catch(() => [] as string[]);
   const commands: Command[] = [];
   for (const file of names.filter(name => name.toLowerCase().endsWith(".md")).sort()) {
+    const name = basename(file, ".md").toLowerCase();
+    // A file name that is no command name (a newline in it, say) is not offered, and a link is not
+    // followed: a repository could ship review.md as a link to a key file outside the project.
+    if (!/^[a-z][a-z0-9-]{0,40}$/.test(name) || RESERVED.has(name)) continue;
+    const info = await lstat(join(folder, file)).catch(() => null);
+    if (!info?.isFile()) continue;
     const text = await readFile(join(folder, file), "utf-8").catch(() => null);
     if (text === null) continue;
     const header = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
     const description = header ? /^description:\s*["']?(.*?)["']?\s*$/im.exec(header[1])?.[1] ?? "" : "";
     commands.push({
-      name: basename(file, ".md").toLowerCase(),
-      description,
+      name,
+      description: description.slice(0, 200),
       body: (header ? text.slice(header[0].length) : text).trim(),
       builtIn: false,
     });
@@ -96,8 +108,8 @@ export async function projectCommands(projectFolder: string): Promise<Command[]>
 
 export type CommandOutcome =
   | { kind: "none" }
-  /** The message to send instead of what the user typed. */
-  | { kind: "expanded"; name: string; text: string }
+  /** The message to send instead of what the user typed; `source` names a project's command file. */
+  | { kind: "expanded"; name: string; text: string; source?: string }
   /** The project's command was not used; why, for a status line. */
   | { kind: "refused"; name: string; reason: string };
 
@@ -126,17 +138,18 @@ export function expandCommand(message: string, commands: Command[], options: { s
   const command = commands.find(c => c.name === name);
   if (!command) return { kind: "none" };
   if (!command.builtIn && options.scan) {
-    const [finding] = scanForInjection(command.body);
+    const [finding] = scanForInjection(`${command.description}\n${command.body}`);
     if (finding) return { kind: "refused", name, reason: describeFinding(finding) };
   }
+  // A function, so "$&" or "$1" in what the user typed stays as typed.
   const body = command.body.includes("$ARGUMENTS")
-    ? command.body.replace(/\$ARGUMENTS/g, args).trim()
+    ? command.body.replace(/\$ARGUMENTS/g, () => args).trim()
     : `${command.body}${args ? `\n\n${args}` : ""}`;
-  return { kind: "expanded", name, text: `The user ran the command /${name}${args ? ` with: ${args}` : ""}. Do this:\n\n${body}` };
+  const source = command.builtIn ? "" : ` (from this project's ${COMMANDS_FOLDER.replace(/\\/g, "/")}/${name}.md)`;
+  return { kind: "expanded", name, source: source.trim(), text: `The user ran the command /${name}${source}${args ? ` with: ${args}` : ""}. Do this:\n\n${body}` };
 }
 
-/** Every command for a project: its own first, so a project can replace a built-in one. */
+/** Every command for a project: the built-in ones, then the project's own (which cannot replace them). */
 export async function allCommands(projectFolder: string): Promise<Command[]> {
-  const own = await projectCommands(projectFolder);
-  return [...own, ...BUILT_IN_COMMANDS.filter(b => !own.some(c => c.name === b.name))];
+  return [...BUILT_IN_COMMANDS, ...(await projectCommands(projectFolder))];
 }

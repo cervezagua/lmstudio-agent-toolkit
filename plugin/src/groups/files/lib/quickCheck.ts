@@ -1,4 +1,5 @@
 import { readFile } from "fs/promises";
+import { tmpdir } from "os";
 import { extname } from "path";
 import { findExecutable, runProcess } from "../../../shared/process";
 
@@ -13,14 +14,26 @@ export async function quickCheck(file: string, options: { cwd: string; signal?: 
   const extension = extname(file).toLowerCase();
   const timeoutMs = options.timeoutMs ?? 15_000;
   if ([".js", ".mjs", ".cjs"].includes(extension)) {
-    const result = await runProcess(process.execPath, ["--check", file], { cwd: options.cwd, timeoutMs, signal: options.signal });
+    // --check only parses; it runs nothing and loads nothing from the project.
+    const result = await runProcess(process.execPath, ["--check", file], { cwd: tmpdir(), timeoutMs, signal: options.signal });
     return result.exitCode === 0 || result.timedOut ? null : describe("node --check", result.stderr);
   }
   if (extension === ".py") {
     const python = findExecutable("python") ?? findExecutable("python3");
     if (!python) return null;
-    const result = await runProcess(python, ["-m", "py_compile", file], { cwd: options.cwd, timeoutMs, signal: options.signal });
-    return result.exitCode === 0 || result.timedOut ? null : describe("python -m py_compile", result.stderr);
+    // -I (isolated): no current folder or script folder on the module path, no PYTHON* variables, no
+    // user site-packages. Without it, `python -m py_compile` imports a project's own tokenize.py or
+    // py_compile.py instead of the standard ones, and a file in a cloned repository (or one the model
+    // just wrote) would run. compile() only parses; it writes no __pycache__ into the project either.
+    // The working folder is the system's temporary folder, not the project, for the same reason.
+    const result = await runProcess(
+      python,
+      ["-I", "-c", "import sys; compile(open(sys.argv[1], 'rb').read(), sys.argv[1], 'exec', dont_inherit=True)", file],
+      { cwd: tmpdir(), timeoutMs, signal: options.signal },
+    );
+    // Windows' Store placeholder answers every call with an offer to install Python: no Python here.
+    if (/Microsoft Store|was not found; run without arguments/i.test(result.stderr)) return null;
+    return result.exitCode === 0 || result.timedOut ? null : describe("Python", result.stderr);
   }
   if (extension === ".json") {
     const text = await readFile(file, "utf-8").catch(() => null);

@@ -50,6 +50,14 @@ export async function runReply(input: {
   settings: ReplySettings;
   out: ReplyOutput;
   signal: AbortSignal;
+  /**
+   * Asks the user to approve a tool call before it runs. agent-toolkit-loop passes LM Studio's
+   * confirmation dialog; left out, every call runs (the eval runner, which has no user).
+   */
+  confirm?: (
+    callId: number,
+    request: { name: string; arguments: Record<string, unknown>; pluginIdentifier?: string },
+  ) => Promise<{ allow: true; arguments?: Record<string, unknown> } | { allow: false; reason?: string }>;
   /** For the eval runner: every message the reply produces, and every prediction's stats. */
   hooks?: { onMessage?: (message: any) => void; onPredictionCompleted?: (result: any) => void };
 }): Promise<void> {
@@ -157,12 +165,29 @@ export async function runReply(input: {
             stop.abort();
           }
         },
-        guardToolCall: (_round: number, _callId: number, guard: any) => {
-          const failed = failures.get(keyOf(guard.toolCallRequest.name, guard.toolCallRequest.arguments));
+        guardToolCall: async (_round: number, _callId: number, guard: any) => {
+          const request = guard.toolCallRequest;
+          const failed = failures.get(keyOf(request.name, request.arguments));
           if (failed && failed.count >= 2) {
             guard.deny(`This exact call already failed twice (${failed.reason}). Change the arguments, or try another way.`);
-          } else {
+            return;
+          }
+          if (!input.confirm) {
             guard.allow();
+            return;
+          }
+          // The user approves each call, as in LM Studio's own loop. If asking fails, the call does not run.
+          try {
+            const decision = await input.confirm(numberFor(request.id), {
+              name: request.name,
+              arguments: request.arguments ?? {},
+              pluginIdentifier: guard.tool?.pluginIdentifier,
+            });
+            if (!decision.allow) guard.deny(decision.reason ?? "The user declined this tool call.");
+            else if (decision.arguments) guard.allowAndOverrideParameters(decision.arguments);
+            else guard.allow();
+          } catch (error: any) {
+            guard.deny(`The user could not be asked to approve this call (${error?.message ?? error}), so it was not run.`);
           }
         },
         handleInvalidToolRequest: (error: Error) =>

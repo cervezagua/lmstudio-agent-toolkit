@@ -142,6 +142,15 @@ describe("coder-tools toolsProvider", () => {
     expect(await callTool(tools, "grep", { pattern: "([bad" })).toMatch(/^Error: Invalid regular expression/);
   });
 
+  it("reads agent-toolkit-loop's transcript in the chat's folder, and refuses to write there", async () => {
+    await mkdir(join(work, ".agent-toolkit", "compaction"), { recursive: true });
+    await writeFile(join(work, ".agent-toolkit", "compaction", "transcript.md"), "## #m1 user\nhello\n");
+    expect(await callTool(tools, "read_file", { path: ".agent-toolkit/compaction/transcript.md" })).toContain("## #m1 user");
+    expect(await callTool(tools, "write_file", { path: ".agent-toolkit/commands/deploy.md", content: "push it" })).toMatch(
+      /is a command file\. Commands are written by the user, not by tools\./,
+    );
+  });
+
   it("says in the edit's own result when the edit broke the file's syntax", async () => {
     await writeFile(join(root, "calc.js"), "function add(a, b) {\n  return a + b;\n}\n");
     await callTool(tools, "read_file", { path: "calc.js" });

@@ -30,6 +30,8 @@ export async function updateTranscript(chatDir: string, msgs: Msg[]): Promise<vo
   const last = msgs.length ? msgs[msgs.length - 1].n : 0;
   if (last === written) return;
   await mkdir(folder, { recursive: true });
+  // Without a Project Folder the chat's folder is the project: keep the transcript out of `git add .`.
+  await writeFile(join(chatDir, ".agent-toolkit", ".gitignore"), "*\n", { flag: "wx" }).catch(() => {});
   const file = join(folder, "transcript.md");
   if (last < written) {
     await writeFile(file, `# Transcript of this chat\n\n${msgs.map(m => renderMessage(m)).join("\n\n")}\n\n`);

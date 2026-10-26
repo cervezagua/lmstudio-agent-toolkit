@@ -95,6 +95,16 @@ async function handlePrediction(ctl: PredictionLoopHandlerController) {
       },
       out: chatOutput(ctl),
       signal: ctl.abortSignal,
+      // LM Studio's own loop asks before each tool call; a loop that replaces it has to ask too.
+      confirm: async (callId, request) => {
+        const answer = await ctl.requestConfirmToolCall({
+          callId,
+          pluginIdentifier: request.pluginIdentifier,
+          name: request.name,
+          parameters: request.arguments,
+        });
+        return answer.type === "allow" ? { allow: true, arguments: answer.toolArgsOverride } : { allow: false, reason: answer.denyReason };
+      },
     });
   } finally {
     session?.[Symbol.dispose]();

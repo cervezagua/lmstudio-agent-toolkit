@@ -4,7 +4,7 @@ import { dirname, join, relative } from "path";
 import { z } from "zod";
 import { configSchematics } from "../../config";
 import { BackupStore } from "./lib/backups";
-import { recordChange } from "../../shared/checkpoints";
+import { ignoredByGit, recordChange } from "../../shared/checkpoints";
 import { findBlockedPattern, parsePatterns } from "./lib/blocklist";
 import { applyEdit, applyEdits, insertLines, previewDiff } from "./lib/edit";
 import { assertFresh, forget, recordRead, recordWrite } from "./lib/fileState";
@@ -23,7 +23,8 @@ import { formatTaskLine, TaskManager } from "./lib/tasks";
 import { findAttachment } from "../../shared/attachments";
 import { safe, ToolError } from "../../shared/errors";
 import { isChatStateFile, PLANNING_NOTE, readMode } from "../../shared/mode";
-import { displayPath, resolveSafe } from "../../shared/paths";
+import { displayPath, isInside, realpathOfNearestExisting, resolveSafe } from "../../shared/paths";
+import { COMMANDS_FOLDER } from "../../shared/commands";
 import { findExecutable, formatRunResult, runProcess } from "../../shared/process";
 import { NO_PROJECT_FOLDER_NOTE, projectRoot } from "../../shared/projectFolder";
 import { truncate } from "../../shared/truncate";
@@ -84,9 +85,16 @@ export async function toolsProvider(ctl: ToolsProviderController) {
   const checkpointsOn = config.get("enableCheckpoints");
   const remember = async (file: string, previous: string | null) => {
     await backups.save(file, previous);
+    await ignoredByGit(stateDir);
     if (checkpointsOn) await recordChange(ctl.getWorkingDirectory(), file, previous).catch(() => {});
   };
-  const readIfExists = (file: string) => readFile(file, "utf-8").catch(() => null);
+  // null only for a file that does not exist: one that exists but cannot be read is an error, not
+  // "new" (a /rewind deletes files recorded as new).
+  const readIfExists = (file: string) =>
+    readFile(file, "utf-8").catch((error: NodeJS.ErrnoException) => {
+      if (error?.code === "ENOENT") return null;
+      throw new ToolError(`${show(file)} could not be read (${error?.code ?? error?.message}).`);
+    });
 
   /**
    * Paths resolve inside the project root, or inside the plugin's own state folder (overflow output).
@@ -107,6 +115,12 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       attachmentNames.set(attached.path, attached.name);
       return attached.path;
     }
+    // agent-toolkit-loop's transcript of this chat lives in the chat's own folder, outside the project.
+    // It is the only thing there the model is pointed at, so only that folder is reachable, to read.
+    if (/^\.agent-toolkit[\\/]compaction[\\/]/i.test(path.replace(/^\.[\\/]/, ""))) {
+      const inChat = await resolveSafe(ctl.getWorkingDirectory(), path).catch(() => null);
+      if (inChat && (await stat(inChat).then(s => s.isFile(), () => false))) return inChat;
+    }
     // Missing: say so with the files the model probably meant, not the system's ENOENT and full path.
     if (inRoot) throw new ToolError(await notFoundMessage(root, path, `${show(inRoot)} does not exist.`));
     try {
@@ -121,6 +135,12 @@ export async function toolsProvider(ctl: ToolsProviderController) {
     const file = await resolveSafe(root, path);
     if (await isChatStateFile(ctl.getWorkingDirectory(), file)) {
       throw new ToolError(`${show(file)} is managed by the toolkit and cannot be changed by a tool.`);
+    }
+    // A command file is followed as the user's own instruction in later chats, so only the user
+    // writes one: a model steered by a web page must not be able to plant /deploy for next time.
+    const commands = await realpathOfNearestExisting(join(root, COMMANDS_FOLDER));
+    if (isInside(commands.toLowerCase(), (await realpathOfNearestExisting(file)).toLowerCase())) {
+      throw new ToolError(`${show(file)} is a command file. Commands are written by the user, not by tools.`);
     }
     return file;
   };

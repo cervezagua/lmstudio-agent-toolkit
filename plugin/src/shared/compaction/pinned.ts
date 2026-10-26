@@ -49,7 +49,9 @@ export function ledger(msgs: Msg[], maxTokens: number): string {
  * measured a 39% drop); restating them is what recovered it.
  */
 export function userWords(msgs: Msg[], maxTokens: number): string {
-  const users = msgs.filter(m => m.role === "user");
+  // Only what the user typed: agent-toolkit puts AGENTS.md, attachments and skills in front of it,
+  // under a "The user's message:" line, and those are not the user's words.
+  const users = msgs.filter(m => m.role === "user").map(m => ({ ...m, text: ownWords(m.text) }));
   if (users.length === 0) return "";
   const [first, ...later] = users;
   const picked: Msg[] = [];
@@ -65,6 +67,12 @@ export function userWords(msgs: Msg[], maxTokens: number): string {
     ...shown.map(m => `[#m${m.n}] ${m.text}`),
     ...(left > 0 ? [`(${left} more of the user's messages are in the transcript)`] : []),
   ].join("\n\n");
+}
+
+/** The part of a user message the user typed, after agent-toolkit's "The user's message:" line. */
+export function ownWords(text: string): string {
+  const marker = text.lastIndexOf("The user's message:\n");
+  return marker >= 0 ? text.slice(marker + "The user's message:\n".length).trim() : text;
 }
 
 /**
