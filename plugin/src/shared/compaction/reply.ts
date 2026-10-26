@@ -22,7 +22,7 @@ export interface ReplyOutput {
 }
 
 export interface ReplySettings extends CompactOptions {
-  /** Every this many user messages, the open tasks are restated at the end of the prompt. */
+  /** Every this many user messages, the open tasks are restated at the end of the prompt; 0 only when compacting. */
   taskReminderEvery: number;
   showNotices: boolean;
 }
@@ -50,6 +50,8 @@ export async function runReply(input: {
   settings: ReplySettings;
   out: ReplyOutput;
   signal: AbortSignal;
+  /** For the eval runner: every message the reply produces, and every prediction's stats. */
+  hooks?: { onMessage?: (message: any) => void; onPredictionCompleted?: (result: any) => void };
 }): Promise<void> {
   const { sdk, model, out, settings } = input;
   const all = fromChat(input.history.getMessagesArray());
@@ -92,7 +94,8 @@ export async function runReply(input: {
   let prompt = compacted.msgs;
   const userTurns = prompt.filter(m => m.role === "user").length;
   const tasks = openTasks(withoutSideQuestions(msgs));
-  if (tasks && (compacted.stage > 0 || userTurns % Math.max(1, settings.taskReminderEvery) === 0)) {
+  const reminderDue = settings.taskReminderEvery > 0 && userTurns % settings.taskReminderEvery === 0;
+  if (tasks && (compacted.stage > 0 || reminderDue)) {
     const index = prompt.map(m => m.role).lastIndexOf("user");
     if (index >= 0) prompt = prompt.map((m, i) => (i === index ? { ...m, text: `${m.text}\n\n(${tasks})`, original: undefined } : m));
   }
@@ -128,6 +131,7 @@ export async function runReply(input: {
           // reasoningStartTag is dropped: its text is LM Studio's internal marker.
         },
         onMessage: (message: any) => {
+          input.hooks?.onMessage?.(message);
           // Numbered after the conversation, as the transcript will number them next time.
           const msg = { ...fromChat([message])[0], n: all.length + ++producedTotal };
           produced.push(msg);
@@ -145,6 +149,7 @@ export async function runReply(input: {
           }
         },
         onPredictionCompleted: (result: any) => {
+          input.hooks?.onPredictionCompleted?.(result);
           const used = (result?.stats?.promptTokensCount ?? 0) + (result?.stats?.predictedTokensCount ?? 0);
           // Leave the next round room to write a whole tool call: running out mid-call ends the chat.
           if (used + 1500 > settings.usable && restart < MAX_RESTARTS) {

@@ -2,11 +2,12 @@
 // tests). LM Studio installs dependencies itself; handing it a local node_modules makes the install
 // slow and it has been seen to hang.
 //
-// Usage: node scripts/install.mjs [plugin-name]   (default: agent-toolkit; "all" installs every one)
+// Usage: node scripts/install.mjs [plugin-name]
+//   (default: agent-toolkit and its companion agent-toolkit-loop; "all" installs every one)
 import { pluginNames, resolvePlugin, runLms, withStagedPlugin } from "./lib/staging.mjs";
 
 const requested = process.argv[2];
-const names = requested === "all" ? pluginNames() : [resolvePlugin(requested)];
+const names = requested === "all" ? pluginNames() : requested ? [resolvePlugin(requested)] : ["agent-toolkit", "agent-toolkit-loop"];
 
 let ok = true;
 for (const name of names) {
