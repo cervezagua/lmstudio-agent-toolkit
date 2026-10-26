@@ -34,7 +34,7 @@ export const configSchematics = createConfigSchematics()
       max: 1_000_000,
       displayName: "Usable Context",
       subtitle:
-        "Treat the context as at most this many tokens. 0 uses the model's loaded size. Small models often get worse long before their limit; 16000–24000 suits many 7–14B models.",
+        "Treat the context as at most this many tokens. 0 uses the model's loaded size (32000 for a remote model, which cannot say). Small models often get worse long before their limit; 16000–24000 suits many 7–14B models.",
     },
     0,
   )

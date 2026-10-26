@@ -53,11 +53,10 @@ async function handlePrediction(ctl: PredictionLoopHandlerController) {
   const history = await ctl.pullHistory();
   const model: any = await ctl.tokenSource();
 
-  // A generator plugin chosen as the model cannot count tokens, so there is nothing to fit: pass it on.
-  if (typeof model.applyPromptTemplate !== "function" || typeof model.act !== "function") {
-    await ctl.createContentBlock().pipeFrom(model.respond(history, { signal: ctl.abortSignal }));
-    return;
-  }
+  // A remote model, through a generator plugin such as LM Studio's remote-lmstudio or
+  // openai-compat-endpoint, runs the same loop. It cannot count tokens or say its context size, so
+  // sizes are estimated from the text and the context is the Usable Context setting (or 32k).
+  const remote = typeof model.countTokens !== "function" || typeof model.getContextLength !== "function";
 
   let session: Awaited<ReturnType<typeof ctl.startToolUseSession>> | undefined;
   let tools: any[] = [];
@@ -69,11 +68,12 @@ async function handlePrediction(ctl: PredictionLoopHandlerController) {
   }
 
   try {
-    const loaded: number = await model.getContextLength();
     const cap = config.get("usableContext");
+    const loaded: number = remote ? cap || 32_768 : await model.getContextLength();
     const usable = cap > 0 ? Math.min(loaded, cap) : loaded;
     const definitions = JSON.stringify(tools.map(t => ({ name: t.name, description: t.description, parameters: t.parametersJsonSchema ?? {} })));
-    const toolTokens = tools.length ? await model.countTokens(definitions).catch(() => Math.ceil(definitions.length / CHARS_PER_TOKEN)) : 0;
+    const estimate = Math.ceil(definitions.length / CHARS_PER_TOKEN);
+    const toolTokens = !tools.length ? 0 : remote ? estimate : await model.countTokens(definitions).catch(() => estimate);
     const maxResultChars = Math.floor(config.get("maxToolResultTokens") * CHARS_PER_TOKEN);
     await runReply({
       sdk: { Chat },

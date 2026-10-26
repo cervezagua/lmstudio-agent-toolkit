@@ -138,6 +138,23 @@ describe("runReply", () => {
     expect(texts).toEqual(["fix the parser", "now add tests"]);
   });
 
+  // A remote model (a generator plugin such as remote-lmstudio) has act and respond but cannot count
+  // tokens: sizes are estimated, and compaction and tools still work.
+  it("works with a remote model that cannot count tokens", async () => {
+    const model: any = fakeModel(async (_chat, opts) => {
+      opts.onPredictionFragment({ content: "Done.", reasoningType: "none" });
+    });
+    delete model.countTokens;
+    delete model.applyPromptTemplate;
+    const events = await run(
+      model,
+      [{ role: "user", content: "start" }, { role: "assistant", content: "x".repeat(4000) }, { role: "user", content: "next" }],
+      { usable: 1000 },
+    );
+    expect(events.some(e => e.startsWith("notice:Context: summarized"))).toBe(true);
+    expect(events).toContain("text:Done.");
+  });
+
   it("forgets side questions on /btw clear", async () => {
     const model = fakeModel(async () => {});
     expect(await run(model, [{ role: "user", content: "/btw clear" }])).toEqual(["btw:Earlier side questions are forgotten."]);
