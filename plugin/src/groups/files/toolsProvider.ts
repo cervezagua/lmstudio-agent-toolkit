@@ -744,6 +744,48 @@ export async function toolsProvider(ctl: ToolsProviderController) {
           }),
         }),
         tool({
+          name: "task_wait",
+          description: text`
+            Wait for a background task to finish (or for its output to match "until", a regular
+            expression), then get the end of its output. Nothing is generated while you wait, so use
+            it for downloads, installs and long builds instead of checking task_output again and again.
+          `,
+          parameters: {
+            id: z.string(),
+            until: z.string().optional(),
+            timeout_minutes: z.number().min(0.1).max(180).optional(),
+            offset: z.number().int().min(0).optional(),
+          },
+          implementation: safe(async ({ id, until, timeout_minutes, offset }, ctx) => {
+            let pattern: RegExp | undefined;
+            try {
+              pattern = until ? new RegExp(until, "m") : undefined;
+            } catch (error) {
+              throw new ToolError(`"until" is not a valid regular expression: ${(error as Error).message}`);
+            }
+            const minutes = timeout_minutes ?? 30;
+            const task = await tasks.get(id);
+            const result = await tasks.wait(id, {
+              offset: offset ?? 0,
+              until: pattern,
+              timeoutMs: minutes * 60_000,
+              signal: ctx.signal,
+              onTick: elapsed => ctx.status(`Waiting for ${task.name}: ${Math.floor(elapsed / 60_000)} min so far`),
+            });
+            const how = result.matched
+              ? `its output matched: ${result.matched.slice(0, 200)}`
+              : result.timedOut
+                ? `still running after ${minutes} minutes; call task_wait again to keep waiting, or task_stop`
+                : result.aborted
+                  ? "the wait was stopped"
+                  : result.state === "exited"
+                    ? `exited with code ${result.task.exitCode}`
+                    : "no longer running (it started before the plugin restarted)";
+            const tail = result.text ? truncate(result.text.slice(-4000), maxOutputChars) : "(no new output)";
+            return `task ${id} (${result.task.name}): ${how}\nnext_offset: ${result.nextOffset}\n\nEnd of its output:\n${tail}`;
+          }),
+        }),
+        tool({
           name: "task_stop",
           description: "Stop a running background task (kills the process and its children).",
           parameters: { id: z.string() },

@@ -206,6 +206,34 @@ export class TaskManager {
     return { task, state: taskState(task), text: truncate(text, maxChars), nextOffset: size, totalBytes: size };
   }
 
+  /**
+   * Waits for a task to finish, or for its output (from `offset`) to match `until`, checking every
+   * `pollMs`. Nothing is generated while a tool waits, so a model can wait out a long download for
+   * free and carry on when it is done.
+   */
+  async wait(
+    id: string,
+    options: { offset: number; until?: RegExp; timeoutMs: number; pollMs?: number; signal?: AbortSignal; onTick?: (elapsedMs: number) => void },
+  ): Promise<{ task: TaskRecord; state: TaskState; matched: string | null; timedOut: boolean; aborted: boolean; text: string; nextOffset: number }> {
+    const started = Date.now();
+    const pollMs = options.pollMs ?? 2000;
+    let seen = "";
+    for (;;) {
+      const now = await this.output(id, options.offset, Number.MAX_SAFE_INTEGER);
+      seen = now.text;
+      const matched = options.until ? (options.until.exec(seen)?.[0] ?? null) : null;
+      const elapsed = Date.now() - started;
+      const done = now.state !== "running" || matched !== null;
+      const timedOut = !done && elapsed >= options.timeoutMs;
+      const aborted = !done && !timedOut && Boolean(options.signal?.aborted);
+      if (done || timedOut || aborted) {
+        return { task: now.task, state: now.state, matched, timedOut, aborted, text: seen, nextOffset: now.nextOffset };
+      }
+      options.onTick?.(elapsed);
+      await new Promise(resolve => setTimeout(resolve, Math.min(pollMs, Math.max(50, options.timeoutMs - elapsed))));
+    }
+  }
+
   async stop(id: string) {
     const task = await this.get(id);
     const state = taskState(task);

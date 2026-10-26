@@ -61,6 +61,7 @@ describe("coder-tools toolsProvider", () => {
       "task_run",
       "task_list",
       "task_output",
+      "task_wait",
       "task_stop",
       "diagnostics",
     ]);
@@ -449,6 +450,32 @@ describe("coder-tools toolsProvider", () => {
     expect(await callTool(tools, "task_output", { id: "nosuch" })).toMatch(/^Error: No background task/);
     expect(await callTool(tools, "task_stop", { id })).toMatch(/was already finished/);
   }, 20000);
+
+  // A model waiting out a download should not spend tokens polling: task_wait holds the call instead.
+  it("waits for a background task to finish, or for a line in its output, or gives up after the limit", async () => {
+    const slow = await callTool(tools, "task_run", {
+      command: "node -e \"console.log('downloading'); setTimeout(() => console.log('download complete'), 1500)\"",
+      name: "download",
+    });
+    const id = /task (\w+)/.exec(slow)![1];
+    const done = await callTool(tools, "task_wait", { id, timeout_minutes: 1 });
+    expect(done).toMatch(/^task \w+ \(download\): exited with code 0/);
+    expect(done).toContain("download complete");
+
+    const server = await callTool(tools, "task_run", {
+      command: "node -e \"setTimeout(() => console.log('listening on 3000'), 500); setInterval(() => {}, 1000)\"",
+      name: "server",
+    });
+    const serverId = /task (\w+)/.exec(server)![1];
+    expect(await callTool(tools, "task_wait", { id: serverId, until: "listening on \\d+", timeout_minutes: 1 })).toMatch(
+      /its output matched: listening on 3000/,
+    );
+    expect(await callTool(tools, "task_wait", { id: serverId, until: "never printed", timeout_minutes: 0.1 })).toMatch(
+      /still running after 0\.1 minutes; call task_wait again/,
+    );
+    await callTool(tools, "task_stop", { id: serverId });
+    expect(await callTool(tools, "task_wait", { id: serverId, until: "([" })).toMatch(/^Error: "until" is not a valid regular expression/);
+  }, 40000);
 
   it("keeps state between commands when the shell session is enabled", async () => {
     const sessionTools = await toolsProvider(
