@@ -2,7 +2,7 @@ import { type ChatMessage, type PluginContext, type PromptPreprocessorController
 import { configSchematics, globalConfigSchematics, makeConfigSchematics } from "./config";
 import { attachmentContext, composeMessage } from "./shared/attachments";
 import { listModelChoices } from "./shared/models";
-import { memoryContext } from "./groups/memory/promptPreprocessor";
+import { memoryContext, triggeredSkillContext } from "./groups/memory/promptPreprocessor";
 import { toolsProvider } from "./toolsProvider";
 
 /** About how much text the chat holds already, so attached files leave room for the rest. */
@@ -26,6 +26,8 @@ export async function promptPreprocessor(ctl: PromptPreprocessorController, user
   if (config.get("enableMemory")) {
     const block = await memoryContext(ctl);
     if (block) added.push(block);
+    const skills = await triggeredSkillContext(ctl, userMessage.getText()).catch(() => null);
+    if (skills) added.push(skills);
   }
   if (config.get("readAttachments")) {
     try {

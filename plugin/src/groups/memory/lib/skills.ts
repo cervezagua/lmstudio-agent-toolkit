@@ -10,6 +10,8 @@ import { writeFileAtomic } from "../../../shared/safeWrite";
 export interface Skill {
   name: string;
   description: string;
+  /** Words or phrases that load the skill when the user's message contains them (OpenHands' microagents). */
+  triggers: string[];
   file: string;
   /** Extra files that live next to SKILL.md (scripts, templates, references). */
   extraFiles: string[];
@@ -91,8 +93,22 @@ function readValue(lines: string[], start: number): { value: string; next: numbe
   return { value: fold([first, ...followingLines()].join(" ")), next: index };
 }
 
-/** Reads `name:` and `description:` from a leading YAML frontmatter block, if there is one. */
-export function parseSkillHeader(text: string, fallbackName: string): { name: string; description: string } {
+/**
+ * `triggers:` as `[deploy, "release notes"]`, `deploy, release notes`, or a YAML list (which arrives
+ * folded into one line as `- deploy - release notes`).
+ */
+export function parseTriggers(value: string | undefined): string[] {
+  if (!value) return [];
+  return value
+    .replace(/^\[|\]$/g, "")
+    .split(/,|(?:^|\s)-\s/)
+    .map(trigger => trigger.trim().replace(/^["']|["']$/g, "").trim())
+    .filter(trigger => trigger.length >= 2)
+    .slice(0, 20);
+}
+
+/** Reads `name:`, `description:` and `triggers:` from a leading YAML frontmatter block, if there is one. */
+export function parseSkillHeader(text: string, fallbackName: string): { name: string; description: string; triggers: string[] } {
   const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
   const fields: Record<string, string> = {};
   if (match) {
@@ -114,7 +130,22 @@ export function parseSkillHeader(text: string, fallbackName: string): { name: st
     const body = match ? text.slice(match[0].length) : text;
     description = body.split(/\r?\n/).map(l => l.trim()).find(l => l && !l.startsWith("#")) ?? "";
   }
-  return { name: fields.name || fallbackName, description: description.slice(0, 300) };
+  return { name: fields.name || fallbackName, description: description.slice(0, 300), triggers: parseTriggers(fields.triggers) };
+}
+
+const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * The skills whose triggers appear in the user's message, as whole words in any case, with the word
+ * that matched. Small models are poor at deciding to load a skill themselves; a keyword is not.
+ */
+export function triggeredSkills(skills: Skill[], message: string): { skill: Skill; trigger: string }[] {
+  const matches: { skill: Skill; trigger: string }[] = [];
+  for (const skill of skills) {
+    const trigger = skill.triggers.find(t => new RegExp(`(?<![\\p{L}\\p{N}_])${escapeRegExp(t)}(?![\\p{L}\\p{N}_])`, "iu").test(message));
+    if (trigger) matches.push({ skill, trigger });
+  }
+  return matches;
 }
 
 /**

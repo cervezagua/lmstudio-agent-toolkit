@@ -191,7 +191,7 @@ export async function attachmentBudget(
  */
 export function fenced(text: string): string {
   return text
-    .replace(/<\s*\/?\s*(attachment|context)\b/gi, tag => tag.replace(/attachment|context/i, word => `${word}_`))
+    .replace(/<\s*\/?\s*(attachment|context|skill)\b/gi, tag => tag.replace(/attachment|context|skill/i, word => `${word}_`))
     .replace(/everything above was added automatically by agent-toolkit/gi, "(text imitating the plugin's own note)")
     .replace(/the user['’]s message\s*:/gi, "the user's message -");
 }
