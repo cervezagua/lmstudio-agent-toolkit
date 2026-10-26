@@ -388,14 +388,22 @@ async function main() {
   // The SDK reads the API token for --installed from LM_API_TOKEN itself.
   const client = new sdk.LMStudioClient();
   // A context length of its own needs a copy of the model loaded for this run, under its own name.
-  const loaded = !contextLength && (await client.llm.listLoaded()).some((m: any) => m.identifier === modelKey || m.modelKey === modelKey);
+  const evalCopy = contextLength ? `${modelKey}@eval-${contextLength}` : undefined;
+  const alreadyLoaded = await client.llm.listLoaded();
+  // A run that was stopped never unloaded its copy, and loading it again under the same name fails.
+  const leftover = evalCopy && alreadyLoaded.find((m: any) => m.identifier === evalCopy);
+  if (leftover) {
+    console.log(`Unloading ${evalCopy}, left loaded by a run that was stopped...`);
+    await leftover.unload();
+  }
+  const loaded = !contextLength && alreadyLoaded.some((m: any) => m.identifier === modelKey || m.modelKey === modelKey);
   console.log(`${loaded ? "Using the loaded" : "Loading"} model ${modelKey}${contextLength ? ` with a ${contextLength}-token context` : ""}...`);
   // Loaded explicitly, as from LM Studio's model list: a just-in-time load would be unloaded again the
   // moment a tool loads a second model (LM Studio evicts other JIT models), ending the run.
   const model = loaded
     ? await client.llm.model(modelKey)
     : await client.llm.load(modelKey, {
-        identifier: contextLength ? `${modelKey}@eval-${contextLength}` : undefined,
+        identifier: evalCopy,
         config: { contextLength: contextLength ?? 32768 },
         verbose: false,
       });

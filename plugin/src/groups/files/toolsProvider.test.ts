@@ -496,6 +496,9 @@ describe("coder-tools toolsProvider", () => {
     const read = process.platform === "win32" ? "Write-Output $env:LMS_E2E" : "echo $LMS_E2E";
     await callTool(sessionTools, "run_command", { command: set });
     expect(await callTool(sessionTools, "run_command", { command: read })).toContain("sticky");
+    // A string spanning lines left PowerShell's stdin session waiting until the command timed out.
+    const multiline = await callTool(sessionTools, "run_command", { command: "node -e \"\nconsole.log('one')\nconsole.log('two')\"", timeout_seconds: 15 });
+    expect(multiline).toMatch(/^exit_code: 0\nstdout:\none\r?\ntwo/);
     expect(await callTool(sessionTools, "shell_reset", {})).toMatch(/restarted/);
     expect(await callTool(sessionTools, "run_command", { command: read })).not.toContain("sticky");
   }, 60000);

@@ -68,6 +68,9 @@ export class ShellSession {
       return [
         "$global:LASTEXITCODE=0",
         command,
+        // PowerShell reading commands from stdin keeps waiting after a string that spans lines (a
+        // multi-line `python -c "..."`) until a blank line ends the statement.
+        "",
         `$__ok=$?; $__code=if ($__ok) { 0 } elseif ($global:LASTEXITCODE) { $global:LASTEXITCODE } else { 1 }`,
         // `node app.js; echo done` ends well even when node failed: say so, or the failure is invisible.
         `if ($__ok -and $global:LASTEXITCODE) { [Console]::Error.WriteLine("[a program in this command exited with code $($global:LASTEXITCODE); exit_code is the last statement's]") }`,
