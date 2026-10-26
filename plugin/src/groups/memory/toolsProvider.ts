@@ -156,6 +156,22 @@ export async function toolsProvider(ctl: ToolsProviderController) {
     }),
   );
 
+  // A no-op that gives a model without a reasoning mode a place to think between tool calls.
+  // Anthropic measured it helping most in long tool chains and when rules must be followed.
+  if (config.get("enableThinkTool")) {
+    tools.push(
+      tool({
+        name: "think",
+        description: text`
+          Think before acting: check a tool result, plan the next steps, or test an idea against
+          the rules you were given. Changes nothing and fetches nothing; just write the thought.
+        `,
+        parameters: { thought: z.string() },
+        implementation: safe(async () => "Noted. Carry on."),
+      }),
+    );
+  }
+
   if (config.get("enableChatSearch")) {
     tools.push(
       tool({

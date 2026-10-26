@@ -34,6 +34,7 @@ const baseConfig = {
   injectGitSnapshot: false,
   enableSkills: false,
   enablePlanMode: false,
+  enableThinkTool: false,
   scanLoadedFiles: true,
   allowSkillSave: false,
   enableChatSearch: false,

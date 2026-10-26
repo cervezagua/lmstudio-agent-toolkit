@@ -450,6 +450,7 @@ describe("the prompt preprocessor", () => {
     enableFiles: true,
     enableMemory: false,
     enablePlanMode: false,
+    enableThinkTool: false,
     ...overrides,
   });
   // These run the real reader: the toolkit's own PDF reader, in its own process.

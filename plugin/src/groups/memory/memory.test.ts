@@ -38,6 +38,7 @@ const chatConfig = () => ({
   injectMemoryIndex: true,
   enableSkills: false,
   enablePlanMode: true,
+  enableThinkTool: false,
   scanLoadedFiles: true,
   redactSecrets: true,
   allowSkillSave: false,
@@ -236,6 +237,18 @@ describe("prompt preprocessor", () => {
 describe("memory-tools toolsProvider", () => {
   const tools = () =>
     toolsProvider(fakeController({ config: chatConfig(), globalConfig: { memoryDirectory: memoryDir, skillsDirectory: "" }, workingDirectory: chatDir }));
+
+  it("offers think only when it is switched on, and it changes nothing", async () => {
+    expect((await tools()).map(x => x.name)).not.toContain("think");
+    const withThink = await toolsProvider(
+      fakeController({
+        config: { ...chatConfig(), enableThinkTool: true },
+        globalConfig: { memoryDirectory: memoryDir, skillsDirectory: "" },
+        workingDirectory: chatDir,
+      }),
+    );
+    expect(await callTool(withThink, "think", { thought: "The test fails on line 4; check the parser first." })).toBe("Noted. Carry on.");
+  });
 
   it("exposes memory and todo tools that work end to end", async () => {
     const t = await tools();

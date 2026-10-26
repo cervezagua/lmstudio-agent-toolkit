@@ -357,6 +357,16 @@ export function makeConfigSchematics(choices?: ModelChoices) {
     true,
   )
   .field(
+    "enableThinkTool",
+    "boolean",
+    {
+      displayName: "Think Tool",
+      subtitle: "Adds think: a place to reason between tool calls. Helps models without a thinking mode; skip it for ones that have one.",
+      dependencies: onlyWhen("enableMemory"),
+    },
+    false,
+  )
+  .field(
     "maxInjectedChars",
     "numeric",
     {

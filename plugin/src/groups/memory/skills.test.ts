@@ -37,6 +37,7 @@ const config = () => ({
   injectMemoryIndex: false,
   enableSkills: true,
   enablePlanMode: true,
+  enableThinkTool: false,
   scanLoadedFiles: true,
   redactSecrets: true,
   allowSkillSave: false,
