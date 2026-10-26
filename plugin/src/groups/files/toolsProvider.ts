@@ -259,7 +259,11 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         // A small model can write the same file over and over; saying nothing changed breaks the loop.
         if (existing === content) {
           await recordWrite(file, content);
-          return `No change: ${show(file)} already has exactly this content. Move on to the next step.`;
+          // Still checked: the same broken file written again is no reason to move on.
+          const problem = autoCheck ? await quickCheck(file, { cwd: root, signal }).catch(() => null) : null;
+          return problem
+            ? `No change: ${show(file)} already has exactly this content, and it is still broken: ${problem}`
+            : `No change: ${show(file)} already has exactly this content. Move on to the next step.`;
         }
         await mkdir(dirname(file), { recursive: true });
         await remember(file, existing);

@@ -27,7 +27,8 @@ const repo = join(__dirname, "..");
 const pluginRequire = createRequire(join(repo, "plugin", "package.json"));
 const sdk = pluginRequire("@lmstudio/sdk");
 // What the SDK itself sends LM Studio for a tool's parameters, to count the tool definitions fully.
-const { zodToJsonSchema } = pluginRequire("zod-to-json-schema");
+// The SDK depends on it, so it is resolved from the SDK's own folder.
+const { zodToJsonSchema } = createRequire(pluginRequire.resolve("@lmstudio/sdk"))("zod-to-json-schema");
 
 const args = process.argv.slice(2);
 const option = (name: string) => {

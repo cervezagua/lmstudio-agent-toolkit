@@ -3,6 +3,7 @@ import { commandEnv } from "../../../shared/process";
 import { randomBytes } from "crypto";
 import { mkdir, open, readFile, rename, rm, stat, writeFile } from "fs/promises";
 import { join } from "path";
+import { StringDecoder } from "string_decoder";
 import { ToolError } from "../../../shared/errors";
 import { truncate } from "../../../shared/truncate";
 
@@ -36,13 +37,13 @@ const sleep = (ms: number, signal?: AbortSignal) =>
     signal?.addEventListener("abort", done, { once: true });
   });
 
-/** Bytes `start` to `end` of a file, as text. */
-async function readRange(file: string, start: number, end: number): Promise<string> {
+/** Bytes `start` to `end` of a file. */
+async function readBytes(file: string, start: number, end: number): Promise<Buffer> {
   const handle = await open(file, "r");
   try {
     const buffer = Buffer.alloc(end - start);
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, start);
-    return buffer.subarray(0, bytesRead).toString("utf-8");
+    return buffer.subarray(0, bytesRead);
   } finally {
     await handle.close();
   }
@@ -249,7 +250,10 @@ export class TaskManager {
     // chatty log costs little however long the wait, and a slow pattern stays bounded.
     let offset = options.offset;
     let recent = "";
+    let matched: string | null = null;
     let goneOnce = false;
+    // One decoder for the whole wait, so a character split between two reads is not garbled.
+    const decoder = new StringDecoder("utf8");
     for (;;) {
       // The state before the read: a task that ended in between still has its last lines read.
       let task = await this.get(id);
@@ -265,12 +269,16 @@ export class TaskManager {
         info => info.size,
         () => 0,
       );
-      if (size > offset) {
-        const from = Math.max(offset, size - WAIT_WINDOW_BYTES);
-        recent = (recent + (await readRange(task.logFile, from, size))).slice(-WAIT_WINDOW_BYTES);
-        offset = size;
+      offset = Math.min(offset, size);
+      // Everything new is read, a window at a time, so a ready line followed by a flood of output
+      // is still found; "until" runs over the window and what came just before it.
+      while (size > offset && matched === null) {
+        const end = Math.min(size, offset + WAIT_WINDOW_BYTES);
+        recent = (recent + decoder.write(await readBytes(task.logFile, offset, end))).slice(-2 * WAIT_WINDOW_BYTES);
+        offset = end;
+        if (options.until) matched = options.until.exec(recent)?.[0] ?? null;
+        recent = recent.slice(-WAIT_WINDOW_BYTES);
       }
-      const matched = options.until ? (options.until.exec(recent)?.[0] ?? null) : null;
       const elapsed = Date.now() - started;
       const done = state !== "running" || matched !== null;
       const timedOut = !done && elapsed >= options.timeoutMs;

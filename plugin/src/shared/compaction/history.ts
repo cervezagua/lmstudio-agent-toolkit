@@ -128,3 +128,10 @@ export const isFailure = (content: string) => /^"?Error\b/.test(content.trim());
 
 /** About how many tokens a text is, for budgeting parts; the real count comes from the model. */
 export const roughTokens = (text: string) => Math.ceil(text.length / 3.5);
+
+/** About how many tokens a message takes: its text, its calls' arguments, its results, and the template's markers. */
+export const roughSize = (msg: Msg) =>
+  8 +
+  roughTokens(msg.text) +
+  msg.calls.reduce((sum, call) => sum + roughTokens(call.name + JSON.stringify(call.args)), 0) +
+  msg.results.reduce((sum, result) => sum + roughTokens(result.content), 0);

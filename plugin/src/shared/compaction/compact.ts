@@ -1,4 +1,4 @@
-import { roughTokens, safeCutPoints, withText, type Msg } from "./history";
+import { roughSize, safeCutPoints, withText, type Msg } from "./history";
 import { maskToolResults } from "./mask";
 import { ledger, userWords } from "./pinned";
 import { readSummaryState, type Summarizer, updateSummary, writeSummaryState } from "./summary";
@@ -75,7 +75,8 @@ export async function compact(input: {
   if ((options.summarize || input.readOnly) && state.cutAt) {
     const index = masked.findIndex(m => m.n === state.cutAt);
     if (index > 0 && safeCutPoints(masked).includes(index)) {
-      const kept = await summarized(index);
+      // With the summary already written (or none, if it failed): keeping a prompt never calls the model.
+      const kept = await summarized(index, state.summary || null);
       if (kept.after <= options.usable * options.high) return settle(kept, state.cutAt);
     }
   }
@@ -89,14 +90,17 @@ export async function compact(input: {
   return settle(await summarized(cut), masked[cut].n);
 
   /** The prompt with everything before `cut` replaced by a record of it. */
-  async function summarized(cut: number): Promise<Compacted> {
+  async function summarized(cut: number, known?: string | null): Promise<Compacted> {
     const older = msgs.slice(0, cut);
     const tail = masked.slice(cut);
 
-    const summary = await updateSummary(input.model, input.chatDir, older, {
-      inputTokens: Math.floor(options.usable * 0.6),
-      signal: input.signal,
-    });
+    const summary =
+      known !== undefined
+        ? known
+        : await updateSummary(input.model, input.chatDir, older, {
+            inputTokens: Math.floor(options.usable * 0.6),
+            signal: input.signal,
+          });
     const userBudget = Math.max(400, Math.floor(options.usable * 0.08));
     const sections = [
       `The messages before #m${tail[0].n} were compacted to save context. Their full text is in ${TRANSCRIPT_PATH} in the chat's folder: ` +
@@ -143,8 +147,7 @@ export async function compact(input: {
 export function chooseCut(msgs: Msg[], budget: number): number {
   const points = safeCutPoints(msgs);
   if (points.length === 0) return -1;
-  const size = (from: number) =>
-    msgs.slice(from).reduce((sum, m) => sum + roughTokens(m.text) + m.results.reduce((s, r) => s + roughTokens(r.content), 0), 0);
+  const size = (from: number) => msgs.slice(from).reduce((sum, m) => sum + roughSize(m), 0);
   let best = points[points.length - 1];
   for (const point of [...points].reverse()) {
     if (size(point) > budget) break;

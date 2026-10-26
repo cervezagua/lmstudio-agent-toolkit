@@ -1,5 +1,5 @@
 import { compact, type CompactOptions } from "./compact";
-import { fromChat, isFailure, isSideQuestion, roughTokens, toMessageData, withoutSideQuestions, withText, type Msg } from "./history";
+import { fromChat, isFailure, isSideQuestion, roughSize, roughTokens, toMessageData, withoutSideQuestions, withText, type Msg } from "./history";
 import { maskToolResults } from "./mask";
 import { openTasks } from "./pinned";
 import { updateTranscript } from "./transcript";
@@ -76,12 +76,18 @@ export async function runReply(input: {
     for (const msg of list) chat.append(msg.original ?? toMessageData(msg));
     return chat;
   };
-  const estimate = (systemText: string, list: Msg[]) =>
-    roughTokens(systemText) + list.reduce((s, m) => s + roughTokens(m.text) + m.results.reduce((r, x) => r + roughTokens(x.content), 0), 0) + input.toolTokens;
+  const estimate = (systemText: string, list: Msg[]) => roughTokens(systemText) + list.reduce((s, m) => s + roughSize(m), 0) + input.toolTokens;
+  // The estimate is fair for English text and code only: images, files and other scripts (Chinese
+  // runs near one character a token) are counted exactly whatever the size.
+  const estimateIsFair = (systemText: string, list: Msg[]) => {
+    if (list.some(m => (m.original as any)?.hasFiles?.())) return false;
+    const text = systemText + list.map(m => m.text).join("");
+    return (text.match(/[^\x00-\x7f]/g)?.length ?? 0) < text.length * 0.1;
+  };
   const count = async (systemText: string, list: Msg[]) => {
     const rough = estimate(systemText, list);
     // Counting exactly renders and tokenizes the whole prompt; not worth it far below the high mark.
-    if (rough < settings.usable * settings.high * 0.6) return rough;
+    if (rough < settings.usable * settings.high * 0.5 && estimateIsFair(systemText, list)) return rough;
     try {
       return (await model.countTokens(await model.applyPromptTemplate(build(systemText, list)))) + input.toolTokens;
     } catch {
@@ -122,10 +128,13 @@ export async function runReply(input: {
   const keyOf = (name: string, args: unknown) => `${name} ${JSON.stringify(args ?? {})}`;
   const pendingKeys = new Map<string, string>();
   // And so is a call that already got the very same result twice: a small model can rewrite the same
-  // files until it runs out of rounds, each call "working". Waiting on a task is meant to repeat.
+  // files until it runs out of rounds, each call "working". Waiting on a task, or checking whether a
+  // server is up, is meant to repeat.
   const repeats = new Map<string, { content: string; count: number }>();
-  const MEANT_TO_REPEAT = new Set(["task_output", "task_wait", "task_list"]);
-  const CHANGES = new Set(["write_file", "edit_file", "multi_edit", "insert_lines", "undo_edit", "notebook_edit", "run_command", "git_commit"]);
+  const MEANT_TO_REPEAT = new Set(["task_output", "task_wait", "task_list", "run_command"]);
+  const CHANGES = new Set(["write_file", "edit_file", "multi_edit", "insert_lines", "undo_edit", "notebook_edit"]);
+  // A refusal's text is not a result of the call, and must not reset or feed either count.
+  const refused = new Set<string>();
 
   // The SDK numbers each call (callId) when the model finishes writing it; the request block, the
   // confirmation and the result all use that number, matched to the result by the request's id.
@@ -147,6 +156,9 @@ export async function runReply(input: {
   let current = build(compacted.system, prompt);
   let produced: Msg[] = [];
   let roundsDone = 0;
+  // The SDK's numbers for this round's calls, in order, and those of the last assistant message.
+  let roundCallIds: number[] = [];
+  let lastCallNumbers: number[] = [];
   for (let restart = 0; ; restart++) {
     if (input.maxRounds !== undefined && roundsDone >= input.maxRounds) return;
     const stop = new AbortController();
@@ -162,6 +174,7 @@ export async function runReply(input: {
         onRoundStart: () => {
           roundsDone++;
           roundResults = 0;
+          roundCallIds = [];
           out.newRound();
         },
         onPredictionFragment: (fragment: any) => {
@@ -175,6 +188,7 @@ export async function runReply(input: {
           const request = info?.toolCallRequest;
           if (!request) return;
           if (request.id) callIds.set(request.id, callId);
+          roundCallIds.push(callId);
           showRequest(callId, request);
         },
         onMessage: (message: any) => {
@@ -182,13 +196,18 @@ export async function runReply(input: {
           // Not numbered: the transcript gets this reply's messages next time, as LM Studio saved them.
           const msg = { ...fromChat([message])[0], n: 0 };
           produced.push(msg);
-          for (const call of msg.calls) {
-            showRequest(numberFor(call.id), { id: call.id, name: call.name, arguments: call.args });
-            if (call.id) pendingKeys.set(call.id, keyOf(call.name, call.args));
+          if (msg.calls.length) {
+            // A call without an id is matched to the SDK's number by its place in the round.
+            lastCallNumbers = msg.calls.map((call, k) => (call.id ? numberFor(call.id) : (roundCallIds[k] ?? numberFor(undefined))));
           }
-          for (const result of msg.results) {
+          msg.calls.forEach((call, k) => {
+            showRequest(lastCallNumbers[k], { id: call.id, name: call.name, arguments: call.args });
+            if (call.id) pendingKeys.set(call.id, keyOf(call.name, call.args));
+          });
+          for (const [k, result] of msg.results.entries()) {
             roundResults += roughTokens(result.content);
-            out.toolResult(numberFor(result.id), result.id, result.content);
+            out.toolResult(result.id ? numberFor(result.id) : (lastCallNumbers[k] ?? numberFor(undefined)), result.id, result.content);
+            if (result.id && refused.has(result.id)) continue;
             const key = result.id ? pendingKeys.get(result.id) : undefined;
             if (key && isFailure(result.content)) {
               const seen = failures.get(key);
@@ -219,15 +238,19 @@ export async function runReply(input: {
         },
         guardToolCall: async (_round: number, callId: number, guard: any) => {
           const request = guard.toolCallRequest;
+          const deny = (reason: string) => {
+            if (request.id) refused.add(request.id);
+            guard.deny(reason);
+          };
           const failed = failures.get(keyOf(request.name, request.arguments));
           if (failed && failed.count >= 2) {
-            guard.deny(`This exact call already failed twice (${failed.reason}). Change the arguments, or try another way.`);
+            deny(`This exact call already failed twice (${failed.reason}). Change the arguments, or try another way.`);
             return;
           }
           const repeated = repeats.get(keyOf(request.name, request.arguments));
           if (repeated && repeated.count >= 2 && !MEANT_TO_REPEAT.has(request.name)) {
             const said = repeated.content.replace(/^"|"$/g, "").split(/\r?\n/)[0].slice(0, 160);
-            guard.deny(`You already made this exact call twice and got the same result both times (${said}). Repeating it changes nothing: take the next step of the task.`);
+            deny(`You already made this exact call twice and got the same result both times (${said}). Repeating it changes nothing: take the next step of the task.`);
             return;
           }
           if (!input.confirm) {
@@ -244,11 +267,11 @@ export async function runReply(input: {
               }),
               signal,
             );
-            if (!decision.allow) guard.deny(decision.reason ?? "The user declined this tool call.");
+            if (!decision.allow) deny(decision.reason ?? "The user declined this tool call.");
             else if (decision.arguments) guard.allowAndOverrideParameters(decision.arguments);
             else guard.allow();
           } catch (error: any) {
-            guard.deny(`The user could not be asked to approve this call (${error?.message ?? error}), so it was not run.`);
+            deny(`The user could not be asked to approve this call (${error?.message ?? error}), so it was not run.`);
           }
         },
         handleInvalidToolRequest: (error: Error) =>

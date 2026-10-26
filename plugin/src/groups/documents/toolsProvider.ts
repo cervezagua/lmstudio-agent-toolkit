@@ -241,7 +241,8 @@ export async function toolsProvider(ctl: ToolsProviderController) {
 
           await mkdir(dirname(file), { recursive: true });
           // For /rewind: a new document can be removed again; an overwritten one is binary and not kept.
-          if (config.get("enableCheckpoints")) await recordChange(ctl.getWorkingDirectory(), file, null, !existing).catch(() => {});
+          // Turns are only counted while the Files group is on, as /rewind is part of it.
+          if (config.get("enableFiles") && config.get("enableCheckpoints")) await recordChange(ctl.getWorkingDirectory(), file, null, !existing).catch(() => {});
           await writeFileAtomic(file, buffer);
           const left =
             omittedImages === 0

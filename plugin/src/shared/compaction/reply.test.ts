@@ -187,41 +187,45 @@ describe("runReply", () => {
 
   it("refuses a call that got the same result twice, unless a real change came in between", async () => {
     const decisions: string[] = [];
-    const guard = (name: string, args: Record<string, unknown>) => ({
-      toolCallRequest: { name, arguments: args },
+    const guard = (name: string, args: Record<string, unknown>, id?: string) => ({
+      toolCallRequest: { id, name, arguments: args },
       allow: () => decisions.push(`allow ${name}`),
       deny: (reason: string) => decisions.push(`deny ${name}: ${reason}`),
     });
     const write = { path: "t.csv", content: "a,b" };
-    const tests = { command: "node test.js" };
+    const read = { path: "sum.js" };
     const model = fakeModel(async (_chat, opts) => {
       // The same file written again and again: the tool says nothing changed.
       for (const id of ["w1", "w2"]) {
         opts.onMessage(assistantCall(id, "write_file", write));
         opts.onMessage(toolResult(id, '"No change: t.csv already has exactly this content."'));
       }
-      await opts.guardToolCall(0, 3, guard("write_file", write));
-      // The same failing tests twice, but with a real edit in between the second and third run.
+      await opts.guardToolCall(0, 3, guard("write_file", write, "w3"));
+      // The refusal is not a result of the call: asking again is refused again.
+      opts.onMessage(assistantCall("w3", "write_file", write));
+      opts.onMessage(toolResult("w3", '{"error":"You already made this exact call twice"}'));
+      await opts.guardToolCall(0, 4, guard("write_file", write, "w4"));
+      // The same file read twice, but with a real edit after: reading it again is news.
       for (const id of ["r1", "r2"]) {
-        opts.onMessage(assistantCall(id, "run_command", tests));
-        opts.onMessage(toolResult(id, "exit_code: 1\nstdout:\nFAIL: sums"));
+        opts.onMessage(assistantCall(id, "read_file", read));
+        opts.onMessage(toolResult(id, "1\tconst a = 1;"));
       }
-      opts.onMessage(assistantCall("e1", "edit_file", { path: "sum.js", old_string: "a", new_string: "b" }));
-      opts.onMessage(toolResult("e1", "Edited sum.js: 1 replacement."));
-      await opts.guardToolCall(0, 4, guard("run_command", tests));
-      // Waiting on a task repeats by design.
-      for (const id of ["o1", "o2"]) {
-        opts.onMessage(assistantCall(id, "task_output", { id: "t1" }));
-        opts.onMessage(toolResult(id, "still running"));
+      opts.onMessage(assistantCall("e1", "edit_file", { path: "other.js", old_string: "a", new_string: "b" }));
+      opts.onMessage(toolResult("e1", "Edited other.js: 1 replacement."));
+      await opts.guardToolCall(0, 5, guard("read_file", read));
+      // Waiting on a task, or checking whether a server is up, repeats by design.
+      for (const id of ["o1", "o2", "c1", "c2"]) {
+        const [name, args] = id.startsWith("o") ? ["task_output", { id: "t1" }] : ["run_command", { command: "curl localhost:3000" }];
+        opts.onMessage(assistantCall(id, name as string, args as any));
+        opts.onMessage(toolResult(id, "exit_code: 7"));
       }
-      await opts.guardToolCall(0, 5, guard("task_output", { id: "t1" }));
+      await opts.guardToolCall(0, 6, guard("task_output", { id: "t1" }));
+      await opts.guardToolCall(0, 7, guard("run_command", { command: "curl localhost:3000" }));
     });
     await run(model, [{ role: "user", content: "build it" }]);
-    expect(decisions).toEqual([
-      "deny write_file: You already made this exact call twice and got the same result both times (No change: t.csv already has exactly this content.). Repeating it changes nothing: take the next step of the task.",
-      "allow run_command",
-      "allow task_output",
-    ]);
+    const refusal =
+      "You already made this exact call twice and got the same result both times (No change: t.csv already has exactly this content.). Repeating it changes nothing: take the next step of the task.";
+    expect(decisions).toEqual([`deny write_file: ${refusal}`, `deny write_file: ${refusal}`, "allow read_file", "allow task_output", "allow run_command"]);
   });
 
   it("asks the user before each call, and never runs one it could not ask about", async () => {
@@ -343,6 +347,43 @@ describe("runReply", () => {
     await updateTranscript(chatDir, msgs("fix the lexer"));
     expect(await readSummaryState(chatDir)).toEqual({ coversUpTo: 0, summary: "", failures: 0 });
     expect(await readFile(join(chatDir, ".agent-toolkit", "compaction", "transcript.md"), "utf-8")).not.toContain("parser");
+  });
+
+  it("keeps the summary when only a message after it was edited", async () => {
+    const msgs = (latest: string) =>
+      fromChat(chatOf([{ role: "user", content: "fix the parser" }, { role: "assistant", content: "ok" }, { role: "user", content: latest }]).getMessagesArray());
+    await updateTranscript(chatDir, msgs("now add tests"));
+    await writeSummaryState(chatDir, { coversUpTo: 2, summary: "Goal: fix the parser.", failures: 0, cutAt: 3 });
+    await updateTranscript(chatDir, msgs("now add more tests"));
+    expect((await readSummaryState(chatDir)).summary).toBe("Goal: fix the parser.");
+    expect(await readFile(join(chatDir, ".agent-toolkit", "compaction", "transcript.md"), "utf-8")).toContain("now add more tests");
+  });
+
+  it("shows a call without an id once, with the SDK's number, and gives its result the same number", async () => {
+    const model = fakeModel(async (_chat, opts) => {
+      opts.onRoundStart(0);
+      opts.onToolCallRequestEnd(0, 7, { toolCallRequest: { name: "list_dir", arguments: {} } });
+      opts.onMessage(assistantCall(undefined as any, "list_dir", {}));
+      opts.onMessage(toolResult(undefined as any, "a.js"));
+    });
+    const events = await run(model, [{ role: "user", content: "look" }]);
+    expect(events.filter(e => e.startsWith("call#") || e.startsWith("result#"))).toEqual(["call#7:list_dir", "result#7:a.js"]);
+  });
+
+  it("answers a side question without asking the model for a summary", async () => {
+    await writeSummaryState(chatDir, { coversUpTo: 0, summary: "", failures: 1, cutAt: 3 });
+    const model = fakeModel(async () => {});
+    const history = [
+      { role: "user", content: "start " + "u".repeat(3000) },
+      { role: "assistant", content: "a".repeat(3000) },
+      { role: "user", content: "next" },
+      { role: "assistant", content: "b".repeat(3000) },
+      { role: "user", content: "/btw what is a lexer?" },
+    ];
+    await run(model, history, { usable: 2000 });
+    // The one model call is the answer itself, and the chat's compaction state is as it was.
+    expect(model.respondCalls).toHaveLength(1);
+    expect(await readSummaryState(chatDir)).toEqual({ coversUpTo: 0, summary: "", failures: 1, cutAt: 3 });
   });
 
   it("does not restart when there is no old output to hide", async () => {
