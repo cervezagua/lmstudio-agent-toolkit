@@ -445,6 +445,8 @@ describe("the prompt preprocessor", () => {
   const config = (overrides: Record<string, unknown> = {}) => ({
     projectFolder: base,
     readAttachments: true,
+    enableCommands: true,
+    scanLoadedFiles: true,
     maxAttachmentChars: 40000,
     enableDocuments: true,
     enableFiles: true,

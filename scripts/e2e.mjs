@@ -42,6 +42,7 @@ const allGroupsOff = {
   maxOutputChars: 20000,
   redactSecrets: true,
   readAttachments: true,
+  enableCommands: true,
   maxAttachmentChars: 40000,
   enableFiles: false,
   allowShell: true,

@@ -93,6 +93,17 @@ export function makeConfigSchematics(choices?: ModelChoices) {
     true,
   )
   .field(
+    "enableCommands",
+    "boolean",
+    {
+      displayName: "Commands",
+      subtitle:
+        "Start a message with /review, /test, /commit, /init or /help, or a command of your own from the project's " +
+        ".agent-toolkit/commands/<name>.md, and it becomes that command's instructions.",
+    },
+    true,
+  )
+  .field(
     "maxAttachmentChars",
     "numeric",
     {

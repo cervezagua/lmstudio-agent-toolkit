@@ -32,6 +32,7 @@ afterEach(async () => {
 const chatConfig = () => ({
   enableMemory: true,
   readAttachments: false,
+  enableCommands: true,
   projectFolder: projectDir,
   maxOutputChars: 20000,
   instructionFiles: ["AGENTS.md", "CLAUDE.md", "../outside.md"],
