@@ -67,6 +67,15 @@ describe("checkpoints", () => {
     expect(await readFile(outside, "utf-8")).toBe("changed");
   });
 
+  it("lists a file it could not keep (a binary document) as not restored, and leaves it alone", async () => {
+    const report = join(project, "report.pdf");
+    await writeFile(report, "new pdf");
+    await startTurn(chat, "one");
+    await recordChange(chat, report, null, false);
+    expect(await rewindTo(chat, 1, project)).toEqual({ restored: [], deleted: [], notRestored: [report] });
+    expect(await readFile(report, "utf-8")).toBe("new pdf");
+  });
+
   // Restoring the smaller, later copy would leave the file in a state it never had before the rewind point.
   it("leaves a file alone when its earliest copy was too big to keep", async () => {
     const log = join(project, "log.txt");

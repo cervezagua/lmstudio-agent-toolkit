@@ -69,6 +69,8 @@ export class ShellSession {
         "$global:LASTEXITCODE=0",
         command,
         `$__ok=$?; $__code=if ($__ok) { 0 } elseif ($global:LASTEXITCODE) { $global:LASTEXITCODE } else { 1 }`,
+        // `node app.js; echo done` ends well even when node failed: say so, or the failure is invisible.
+        `if ($__ok -and $global:LASTEXITCODE) { [Console]::Error.WriteLine("[a program in this command exited with code $($global:LASTEXITCODE); exit_code is the last statement's]") }`,
         `[Console]::Out.WriteLine("${marker}:$__code"); [Console]::Out.Flush()`,
         `[Console]::Error.WriteLine("${marker}"); [Console]::Error.Flush()`,
         "",

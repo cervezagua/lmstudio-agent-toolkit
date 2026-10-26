@@ -66,14 +66,17 @@ export async function startTurn(chatDir: string, message: string, now = new Date
   return info;
 }
 
-/** Keeps a file's content from before its first change in the current turn. */
-export async function recordChange(chatDir: string, file: string, previous: string | null): Promise<void> {
+/**
+ * Keeps a file's content from before its first change in the current turn. `keep: false` lists the
+ * file without its content (a binary file), so a rewind says it could not put it back.
+ */
+export async function recordChange(chatDir: string, file: string, previous: string | null, keep = true): Promise<void> {
   const info = await currentTurn(chatDir);
   if (!info) return; // no turn has started (the tools ran outside a chat)
   const target = checkpointFile(chatDir, info.turn);
   const checkpoint = (await readJson<Checkpoint>(target)) ?? { ...info, files: [], skipped: [] };
   if (checkpoint.files.some(f => sameFile(f.path, file)) || checkpoint.skipped.some(f => sameFile(f, file))) return;
-  if (previous !== null && Buffer.byteLength(previous) > MAX_CHECKPOINT_BYTES) checkpoint.skipped.push(file);
+  if (!keep || (previous !== null && Buffer.byteLength(previous) > MAX_CHECKPOINT_BYTES)) checkpoint.skipped.push(file);
   else checkpoint.files.push({ path: file, previous });
   await writeFileAtomic(target, JSON.stringify(checkpoint));
 }

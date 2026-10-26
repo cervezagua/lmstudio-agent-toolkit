@@ -121,6 +121,11 @@ export async function runReply(input: {
   const failures = new Map<string, { count: number; reason: string }>();
   const keyOf = (name: string, args: unknown) => `${name} ${JSON.stringify(args ?? {})}`;
   const pendingKeys = new Map<string, string>();
+  // And so is a call that already got the very same result twice: a small model can rewrite the same
+  // files until it runs out of rounds, each call "working". Waiting on a task is meant to repeat.
+  const repeats = new Map<string, { content: string; count: number }>();
+  const MEANT_TO_REPEAT = new Set(["task_output", "task_wait", "task_list"]);
+  const CHANGES = new Set(["write_file", "edit_file", "multi_edit", "insert_lines", "undo_edit", "notebook_edit", "run_command", "git_commit"]);
 
   // The SDK numbers each call (callId) when the model finishes writing it; the request block, the
   // confirmation and the result all use that number, matched to the result by the request's id.
@@ -188,6 +193,13 @@ export async function runReply(input: {
             if (key && isFailure(result.content)) {
               const seen = failures.get(key);
               failures.set(key, { count: (seen?.count ?? 0) + 1, reason: result.content.replace(/^"?Error:\s*/, "").split(/\r?\n/)[0].slice(0, 160) });
+            } else if (key) {
+              // After a real change, the same tests failing the same way is news, not a loop.
+              if (CHANGES.has(key.split(" ")[0]) && !/^"?No change/.test(result.content)) {
+                for (const other of [...repeats.keys()]) if (other !== key) repeats.delete(other);
+              }
+              const seen = repeats.get(key);
+              repeats.set(key, { content: result.content, count: seen?.content === result.content ? seen.count + 1 : 1 });
             }
           }
         },
@@ -210,6 +222,12 @@ export async function runReply(input: {
           const failed = failures.get(keyOf(request.name, request.arguments));
           if (failed && failed.count >= 2) {
             guard.deny(`This exact call already failed twice (${failed.reason}). Change the arguments, or try another way.`);
+            return;
+          }
+          const repeated = repeats.get(keyOf(request.name, request.arguments));
+          if (repeated && repeated.count >= 2 && !MEANT_TO_REPEAT.has(request.name)) {
+            const said = repeated.content.replace(/^"|"$/g, "").split(/\r?\n/)[0].slice(0, 160);
+            guard.deny(`You already made this exact call twice and got the same result both times (${said}). Repeating it changes nothing: take the next step of the task.`);
             return;
           }
           if (!input.confirm) {
@@ -244,6 +262,8 @@ export async function runReply(input: {
     // call, so the pause is short), the reply's own messages so far included.
     prompt = maskToolResults([...prompt, ...produced], restartMask).msgs;
     produced = [];
+    // Output just hidden may need reading again, as its placeholder says.
+    repeats.clear();
     current = build(compacted.system, prompt);
     // Room was made, so the results that follow may take their share again.
     input.refillToolBudget?.();

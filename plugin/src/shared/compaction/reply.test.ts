@@ -185,6 +185,45 @@ describe("runReply", () => {
     expect(invalid).toMatch(/^That tool call could not be used: Unterminated string in JSON at position 208\. Write it again/);
   });
 
+  it("refuses a call that got the same result twice, unless a real change came in between", async () => {
+    const decisions: string[] = [];
+    const guard = (name: string, args: Record<string, unknown>) => ({
+      toolCallRequest: { name, arguments: args },
+      allow: () => decisions.push(`allow ${name}`),
+      deny: (reason: string) => decisions.push(`deny ${name}: ${reason}`),
+    });
+    const write = { path: "t.csv", content: "a,b" };
+    const tests = { command: "node test.js" };
+    const model = fakeModel(async (_chat, opts) => {
+      // The same file written again and again: the tool says nothing changed.
+      for (const id of ["w1", "w2"]) {
+        opts.onMessage(assistantCall(id, "write_file", write));
+        opts.onMessage(toolResult(id, '"No change: t.csv already has exactly this content."'));
+      }
+      await opts.guardToolCall(0, 3, guard("write_file", write));
+      // The same failing tests twice, but with a real edit in between the second and third run.
+      for (const id of ["r1", "r2"]) {
+        opts.onMessage(assistantCall(id, "run_command", tests));
+        opts.onMessage(toolResult(id, "exit_code: 1\nstdout:\nFAIL: sums"));
+      }
+      opts.onMessage(assistantCall("e1", "edit_file", { path: "sum.js", old_string: "a", new_string: "b" }));
+      opts.onMessage(toolResult("e1", "Edited sum.js: 1 replacement."));
+      await opts.guardToolCall(0, 4, guard("run_command", tests));
+      // Waiting on a task repeats by design.
+      for (const id of ["o1", "o2"]) {
+        opts.onMessage(assistantCall(id, "task_output", { id: "t1" }));
+        opts.onMessage(toolResult(id, "still running"));
+      }
+      await opts.guardToolCall(0, 5, guard("task_output", { id: "t1" }));
+    });
+    await run(model, [{ role: "user", content: "build it" }]);
+    expect(decisions).toEqual([
+      "deny write_file: You already made this exact call twice and got the same result both times (No change: t.csv already has exactly this content.). Repeating it changes nothing: take the next step of the task.",
+      "allow run_command",
+      "allow task_output",
+    ]);
+  });
+
   it("asks the user before each call, and never runs one it could not ask about", async () => {
     const decisions: string[] = [];
     const guard = (args: Record<string, unknown>) => ({

@@ -125,6 +125,9 @@ describe("coder-tools toolsProvider", () => {
     );
     expect(await readFile(join(root, "src", "hello.txt"), "utf-8")).toBe("hi\nworld\n");
     expect(await callTool(tools, "write_file", { path: "src/hello.txt", content: "x" })).toMatch(/^Overwrote/);
+    expect(await callTool(tools, "write_file", { path: "src/hello.txt", content: "x" })).toBe(
+      "No change: src/hello.txt already has exactly this content. Move on to the next step.",
+    );
   });
 
   it("pages through long files", async () => {
@@ -375,6 +378,13 @@ describe("coder-tools toolsProvider", () => {
   it.runIf(process.platform === "win32")("reports failing PowerShell cmdlets as exit code 1 with stderr", async () => {
     const output = await callTool(tools, "run_command", { command: "Get-Item does-not-exist.txt" });
     expect(output).toMatch(/^exit_code: 1\n(stdout|stderr):\n[\s\S]*does-not-exist/);
+  });
+
+  // A model writing bash habits (`node x; echo "exit: $?"`) never saw that node failed.
+  it.runIf(process.platform === "win32")("says when a program failed before a later statement succeeded", async () => {
+    const output = await callTool(tools, "run_command", { command: "node -e \"process.exit(3)\"; echo done" });
+    expect(output).toContain("exit_code: 0");
+    expect(output).toContain("[a program in this command exited with code 3; exit_code is the last statement's]");
   });
 
   it("previews, multi-edits, inserts and undoes", async () => {

@@ -24,7 +24,10 @@ import { errorStats } from "./lib/hints";
 import { type Call, type EvalTask } from "./lib/task";
 
 const repo = join(__dirname, "..");
-const sdk = createRequire(join(repo, "plugin", "package.json"))("@lmstudio/sdk");
+const pluginRequire = createRequire(join(repo, "plugin", "package.json"));
+const sdk = pluginRequire("@lmstudio/sdk");
+// What the SDK itself sends LM Studio for a tool's parameters, to count the tool definitions fully.
+const { zodToJsonSchema } = pluginRequire("zod-to-json-schema");
 
 const args = process.argv.slice(2);
 const option = (name: string) => {
@@ -227,13 +230,19 @@ async function runOnce(model: any, client: any, systemPrompt: string, name: stri
             });
           } else {
             // agent-toolkit-loop's reply, as it runs in LM Studio, with the in-process tools.
-            const definitions = JSON.stringify(tools.map((t: any) => ({ name: t.name, description: t.description })));
+            const definitions = JSON.stringify(
+              tools.map((t: any) => ({
+                name: t.name,
+                description: t.description,
+                parameters: t.parametersJsonSchema ?? (t.parametersSchema ? zodToJsonSchema(t.parametersSchema) : {}),
+              })),
+            );
             await runReply({
               sdk,
               model,
               history: conversation,
               tools,
-              toolTokens: (await model.countTokens(definitions)) + 40 * tools.length,
+              toolTokens: (await model.countTokens(definitions)) + 10 * tools.length,
               chatDir,
               settings: {
                 usable: contextLength ?? (await model.getContextLength()),

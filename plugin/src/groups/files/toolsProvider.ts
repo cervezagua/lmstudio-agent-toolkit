@@ -46,7 +46,9 @@ function shellInvocation(choice: string, command: string): { file: string; args:
     const script = [
       "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$ProgressPreference='SilentlyContinue';$global:LASTEXITCODE=0",
       command,
-      "$__ok=$?; if (-not $__ok) { if ($global:LASTEXITCODE) { exit $global:LASTEXITCODE } else { exit 1 } }",
+      // `node app.js; echo done` ends well even when node failed: say so, or the failure is invisible.
+      "$__ok=$?; if (-not $__ok) { if ($global:LASTEXITCODE) { exit $global:LASTEXITCODE } else { exit 1 } } " +
+        `elseif ($global:LASTEXITCODE) { [Console]::Error.WriteLine("[a program in this command exited with code $($global:LASTEXITCODE); exit_code is the last statement's]") }`,
     ].join("\n");
     return { file: shell, args: ["-NoProfile", "-NonInteractive", "-Command", script] };
   }
@@ -254,6 +256,11 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         const info = await stat(file).catch(() => null);
         if (info?.isDirectory()) throw new ToolError(`"${path}" is a directory.`);
         const existing = await readIfExists(file);
+        // A small model can write the same file over and over; saying nothing changed breaks the loop.
+        if (existing === content) {
+          await recordWrite(file, content);
+          return `No change: ${show(file)} already has exactly this content. Move on to the next step.`;
+        }
         await mkdir(dirname(file), { recursive: true });
         await remember(file, existing);
         await writeFileAtomic(file, content);
@@ -609,6 +616,11 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         name: "run_command",
         description: text`
           Run a shell command (${shellName}) and return its exit code, stdout and stderr.
+          ${
+            shellName === "pwsh" || shellName === "powershell"
+              ? "This is PowerShell, not bash: the exit code is reported to you, so don't echo $? (True/False here); separate commands with ;."
+              : ""
+          }
           ${
             persistent
               ? "Commands share one persistent shell, so cd, environment variables and activated virtualenvs carry over between calls."
