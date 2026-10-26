@@ -11,12 +11,19 @@ import { findExecutable, runProcess } from "../../../shared/process";
  * or there is no check for its kind.
  */
 export async function quickCheck(file: string, options: { cwd: string; signal?: AbortSignal; timeoutMs?: number }): Promise<string | null> {
+  if (options.signal?.aborted) return null;
   const extension = extname(file).toLowerCase();
   const timeoutMs = options.timeoutMs ?? 15_000;
   if ([".js", ".mjs", ".cjs"].includes(extension)) {
     // --check only parses; it runs nothing and loads nothing from the project.
     const result = await runProcess(process.execPath, ["--check", file], { cwd: tmpdir(), timeoutMs, signal: options.signal });
-    return result.exitCode === 0 || result.timedOut ? null : describe("node --check", result.stderr);
+    // JSX in a .js file (common in React projects) is not plain JavaScript; Node cannot judge it.
+    // A leftover merge marker is a real problem, though.
+    if (/SyntaxError: Unexpected token '<'/.test(result.stderr)) {
+      const source = await readFile(file, "utf-8").catch(() => "");
+      if (!/^<{7}/m.test(source) && /<[A-Za-z][\w.]*[\s/>]/.test(source)) return null;
+    }
+    return passed(result) ? null : describe("node --check", result.stderr);
   }
   if (extension === ".py") {
     const python = findExecutable("python") ?? findExecutable("python3");
@@ -33,14 +40,15 @@ export async function quickCheck(file: string, options: { cwd: string; signal?: 
     );
     // Windows' Store placeholder answers every call with an offer to install Python: no Python here.
     if (/Microsoft Store|was not found; run without arguments/i.test(result.stderr)) return null;
-    return result.exitCode === 0 || result.timedOut ? null : describe("Python", result.stderr);
+    return passed(result) ? null : describe("Python", result.stderr);
   }
   if (extension === ".json") {
     const text = await readFile(file, "utf-8").catch(() => null);
     // tsconfig.json, VS Code settings and the like allow comments; a strict parse would cry wolf.
     if (text === null || /\/\/|\/\*/.test(text)) return null;
     try {
-      JSON.parse(text);
+      // A byte-order mark at the start is allowed by editors, not by JSON.parse.
+      JSON.parse(text.charCodeAt(0) === 0xfeff ? text.slice(1) : text);
       return null;
     } catch (error) {
       return describe("JSON", (error as Error).message);
@@ -48,6 +56,10 @@ export async function quickCheck(file: string, options: { cwd: string; signal?: 
   }
   return null;
 }
+
+/** Whether nothing was found. A check stopped or timed out says nothing either way, so it passes. */
+const passed = (result: { exitCode: number | null; timedOut: boolean; aborted: boolean }) =>
+  result.exitCode === 0 || result.exitCode === null || result.timedOut || result.aborted;
 
 /** The checker's output trimmed to what helps: the lines that say what and where. */
 function describe(checker: string, output: string): string {

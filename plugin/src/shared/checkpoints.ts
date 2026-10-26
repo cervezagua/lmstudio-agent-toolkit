@@ -102,21 +102,22 @@ export interface RewindResult {
  */
 export async function rewindTo(chatDir: string, turn: number, projectFolder: string): Promise<RewindResult> {
   const undone = (await listCheckpoints(chatDir)).filter(c => c.turn >= turn);
-  const before = new Map<string, { path: string; previous: string | null }>();
-  const notRestored: string[] = [];
+  // The earliest record of each file is how it was before `turn`. If that one was too big to keep, a
+  // later record would only bring back an in-between state, so the file is left alone.
+  const earliest = new Map<string, { path: string; previous: string | null } | { path: string; skipped: true }>();
+  const keyOf = (path: string) => (process.platform === "win32" ? path.toLowerCase() : path);
   for (const checkpoint of undone) {
-    for (const file of checkpoint.files) {
-      const key = process.platform === "win32" ? file.path.toLowerCase() : file.path;
-      if (!before.has(key)) before.set(key, file);
-    }
-    for (const file of checkpoint.skipped) if (![...before.values()].some(f => sameFile(f.path, file))) notRestored.push(file);
+    for (const file of checkpoint.files) if (!earliest.has(keyOf(file.path))) earliest.set(keyOf(file.path), file);
+    for (const path of checkpoint.skipped) if (!earliest.has(keyOf(path))) earliest.set(keyOf(path), { path, skipped: true });
   }
+  const before = [...earliest.values()].filter((f): f is { path: string; previous: string | null } => !("skipped" in f));
+  const notRestored = [...earliest.values()].filter(f => "skipped" in f).map(f => f.path);
 
   const result: RewindResult = { restored: [], deleted: [], notRestored };
   // Real paths on both sides: the tools record a file as resolved (links followed, short names
   // expanded), and the configured project folder may be spelled another way.
   const root = await realpathOfNearestExisting(resolve(projectFolder));
-  for (const { path, previous } of before.values()) {
+  for (const { path, previous } of before) {
     if (!isInside(root, await realpathOfNearestExisting(resolve(path)))) {
       result.notRestored.push(path);
       continue;

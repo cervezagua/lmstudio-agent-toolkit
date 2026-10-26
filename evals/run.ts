@@ -260,6 +260,8 @@ async function runOnce(model: any, client: any, systemPrompt: string, name: stri
                 },
               },
               signal: abort.signal,
+              // The same cap as --loop off, so the modes compare.
+              maxRounds: task.maxRounds ?? 40,
               hooks: { onMessage: record, onPredictionCompleted: completed },
             });
           }

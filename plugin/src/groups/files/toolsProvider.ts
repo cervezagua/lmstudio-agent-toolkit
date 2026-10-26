@@ -355,7 +355,10 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       parameters: { path: z.string() },
       implementation: safe(async ({ path }) => {
         const file = await resolveWritable(path);
+        // For /rewind only; a backup here would become the next thing undo_edit restores.
+        const before = await readIfExists(file);
         const { restored, savedAt } = await backups.restore(file);
+        if (checkpointsOn) await recordChange(ctl.getWorkingDirectory(), file, before).catch(() => {});
         forget(file);
         return restored === "deleted"
           ? `${show(file)} did not exist before that change, so it has been removed again.`
@@ -749,6 +752,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
             Wait for a background task to finish (or for its output to match "until", a regular
             expression), then get the end of its output. Nothing is generated while you wait, so use
             it for downloads, installs and long builds instead of checking task_output again and again.
+            "until" is matched from offset (default: the start); pass next_offset to match only newer lines.
           `,
           parameters: {
             id: z.string(),

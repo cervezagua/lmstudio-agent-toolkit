@@ -48,7 +48,20 @@ describe("quickCheck", () => {
     expect(await check("good.json", '{ "a": 1 }')).toBeNull();
     expect(await check("bad.json", '{ "a": 1, }')).toMatch(/^JSON found a problem:/);
     expect(await check("tsconfig.json", '{ // comments are fine here\n "a": 1, }')).toBeNull();
+    expect(await check("bom.json", String.fromCharCode(0xfeff) + '{ "a": 1 }')).toBeNull();
   });
+
+  it("does not call JSX in a .js file broken, but does report a leftover merge marker", async () => {
+    expect(await check("App.js", "export default function App() {\n  return <div className=\"x\">hi</div>;\n}\n")).toBeNull();
+    expect(await check("merged.js", "const a = 1;\n<<<<<<< HEAD\nconst b = 2;\n=======\nconst b = 3;\n>>>>>>> main\n")).toMatch(/^node --check found a problem:/);
+  }, 30000);
+
+  it("says nothing when the check was stopped", async () => {
+    const stopped = new AbortController();
+    stopped.abort();
+    await writeFile(join(dir, "slow.js"), "function f() {\n");
+    expect(await quickCheck(join(dir, "slow.js"), { cwd: dir, signal: stopped.signal })).toBeNull();
+  }, 30000);
 
   it("has nothing to say about other kinds of file", async () => {
     expect(await check("notes.md", "# anything {")).toBeNull();

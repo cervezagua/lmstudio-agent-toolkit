@@ -20,6 +20,34 @@ export interface TaskRecord {
 
 export type TaskState = "running" | "exited" | "gone";
 
+/** The most recent output task_wait keeps, and matches "until" against. */
+const WAIT_WINDOW_BYTES = 64 * 1024;
+
+/** Waits `ms`, or less if the signal aborts. */
+const sleep = (ms: number, signal?: AbortSignal) =>
+  new Promise<void>(resolve => {
+    if (signal?.aborted) return resolve();
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+  });
+
+/** Bytes `start` to `end` of a file, as text. */
+async function readRange(file: string, start: number, end: number): Promise<string> {
+  const handle = await open(file, "r");
+  try {
+    const buffer = Buffer.alloc(end - start);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, start);
+    return buffer.subarray(0, bytesRead).toString("utf-8");
+  } finally {
+    await handle.close();
+  }
+}
+
 /** True while the OS still has a process with this id. */
 export function isAlive(pid: number | null): boolean {
   if (!pid) return false;
@@ -217,20 +245,39 @@ export class TaskManager {
   ): Promise<{ task: TaskRecord; state: TaskState; matched: string | null; timedOut: boolean; aborted: boolean; text: string; nextOffset: number }> {
     const started = Date.now();
     const pollMs = options.pollMs ?? 2000;
-    let seen = "";
+    // Only the new bytes are read on each check, and "until" runs over the recent text alone, so a
+    // chatty log costs little however long the wait, and a slow pattern stays bounded.
+    let offset = options.offset;
+    let recent = "";
+    let goneOnce = false;
     for (;;) {
-      const now = await this.output(id, options.offset, Number.MAX_SAFE_INTEGER);
-      seen = now.text;
-      const matched = options.until ? (options.until.exec(seen)?.[0] ?? null) : null;
+      // The state before the read: a task that ended in between still has its last lines read.
+      let task = await this.get(id);
+      let state = taskState(task);
+      if (state === "gone" && !goneOnce) {
+        // Just exited, and its exit code may not be saved yet: look again shortly.
+        goneOnce = true;
+        await sleep(300, options.signal);
+        task = await this.get(id);
+        state = taskState(task);
+      }
+      const size = await stat(task.logFile).then(
+        info => info.size,
+        () => 0,
+      );
+      if (size > offset) {
+        const from = Math.max(offset, size - WAIT_WINDOW_BYTES);
+        recent = (recent + (await readRange(task.logFile, from, size))).slice(-WAIT_WINDOW_BYTES);
+        offset = size;
+      }
+      const matched = options.until ? (options.until.exec(recent)?.[0] ?? null) : null;
       const elapsed = Date.now() - started;
-      const done = now.state !== "running" || matched !== null;
+      const done = state !== "running" || matched !== null;
       const timedOut = !done && elapsed >= options.timeoutMs;
       const aborted = !done && !timedOut && Boolean(options.signal?.aborted);
-      if (done || timedOut || aborted) {
-        return { task: now.task, state: now.state, matched, timedOut, aborted, text: seen, nextOffset: now.nextOffset };
-      }
+      if (done || timedOut || aborted) return { task, state, matched, timedOut, aborted, text: recent, nextOffset: offset };
       options.onTick?.(elapsed);
-      await new Promise(resolve => setTimeout(resolve, Math.min(pollMs, Math.max(50, options.timeoutMs - elapsed))));
+      await sleep(Math.min(pollMs, Math.max(50, options.timeoutMs - elapsed)), options.signal);
     }
   }
 

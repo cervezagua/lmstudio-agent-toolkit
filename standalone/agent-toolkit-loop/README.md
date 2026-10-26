@@ -41,7 +41,7 @@ LM Studio still saves `/btw` messages in the chat, and its context meter counts 
 |---|---|---|
 | Compact At | 0.7 | Start making room once the prompt passes this share of the context. |
 | Compact To | 0.45 | Aim for this share. A wide gap compacts rarely, which keeps replies fast. |
-| Usable Context | 0 | Treat the context as at most this many tokens; 0 uses the loaded size. Small models often get worse long before their limit. |
+| Usable Context | 0 | Treat the context as at most this many tokens; 0 uses the loaded size (32768 for a remote model). Small models often get worse long before their limit. |
 | Recent Tool Rounds Kept | 6 | Rounds of tool calls whose results stay whole. |
 | Summarize When Needed | on | Off: only hide old output. |
 | Max Tool Result | 4000 | Most tokens one tool result may take. |
@@ -56,7 +56,9 @@ LM Studio still saves `/btw` messages in the chat, and its context meter counts 
 ## Good to know
 
 - **It takes over LM Studio's reply loop** for the chats it's enabled in, and rebuilds what the default loop does: text, thinking blocks, tool calls and results. Switch it off and LM Studio's own loop is back exactly as before.
-- **Tool confirmations still work.** Tools come from the other enabled plugins through LM Studio, and LM Studio asks for confirmation as usual.
+- **Tool confirmations still work.** Tools come from the other enabled plugins through LM Studio, and the plugin asks for your approval of each call through LM Studio's own confirmation. A call it cannot ask about is not run.
+- **Remote models work too.** A model served by a generator plugin such as LM Studio's remote-lmstudio or openai-compat-endpoint runs through the same loop, with the tools. Such a model cannot say how big its context is or count tokens, so set **Usable Context** to its real size (otherwise 32768 is assumed); sizes are estimated from the text. Compaction works before each reply, but a long reply can't make room as it goes, since a remote model doesn't report how full its context is.
+- **Everything is kept on disk.** The whole conversation, tool output included, is written to `.agent-toolkit/compaction/transcript.md` in the chat's folder, so the model can look up output that was hidden. The folder gets a `.gitignore`.
 - **It relies on LM Studio APIs marked experimental.** An LM Studio update could break it; if the tools can't be reached, it says so in the chat and answers without them.
 - **Summaries are written by your model.** A small model writes a small-model summary, which is why your own words and the list of steps are kept verbatim beside it.
 - **Tool definitions are a fixed cost** on every message, and no compaction reduces them. Switch off the agent-toolkit groups you don't need.

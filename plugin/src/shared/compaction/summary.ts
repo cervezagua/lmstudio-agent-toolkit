@@ -11,6 +11,10 @@ export interface SummaryState {
   coversUpTo: number;
   summary: string;
   failures: number;
+  /** Where the last summarized prompt's recent turns began (#m number), reused while it fits. */
+  cutAt?: number;
+  /** The stage of the last compaction, so a notice is shown when something changes, not every message. */
+  lastStage?: number;
 }
 
 const INSTRUCTIONS = [
@@ -41,7 +45,7 @@ export async function readSummaryState(chatDir: string): Promise<SummaryState> {
   }
 }
 
-async function writeSummaryState(chatDir: string, state: SummaryState) {
+export async function writeSummaryState(chatDir: string, state: SummaryState) {
   await mkdir(compactionFolder(chatDir), { recursive: true });
   await writeFile(stateFile(chatDir), JSON.stringify(state));
 }
@@ -88,7 +92,7 @@ export async function updateSummary(
     );
     const summary = (result.nonReasoningContent ?? result.content).replace(/<think>[\s\S]*?<\/think>/g, "").trim();
     if (!summary) throw new Error("the model wrote no summary");
-    await writeSummaryState(chatDir, { coversUpTo: last, summary, failures: 0 });
+    await writeSummaryState(chatDir, { ...state, coversUpTo: last, summary, failures: 0 });
     return summary;
   } catch (error) {
     if (options.signal?.aborted) throw error;

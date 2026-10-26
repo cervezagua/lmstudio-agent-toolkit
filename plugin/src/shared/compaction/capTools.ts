@@ -7,9 +7,13 @@ const SMALL = 200;
  * Wraps tools so no single result can fill the context: each text in a result keeps its head and
  * tail within `perResult` characters, and all results of one reply share `budget` characters. The
  * result keeps its shape (an MCP result stays an MCP result), since some callers check it. The tool
- * still runs in full; only what the model reads is cut, and it is told so.
+ * still runs in full; only what the model reads is cut, and it is told so. `refill` restores the
+ * shared budget, for when older output was hidden to make room.
  */
-export function capTools<T extends { implementation: (...args: any[]) => any }>(tools: T[], options: { perResult: number; budget: number }): T[] {
+export function capTools<T extends { implementation: (...args: any[]) => any }>(
+  tools: T[],
+  options: { perResult: number; budget: number },
+): T[] & { refill(): void } {
   let left = options.budget;
   const cap = (value: unknown): unknown => {
     if (typeof value === "string") {
@@ -24,8 +28,9 @@ export function capTools<T extends { implementation: (...args: any[]) => any }>(
     if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, inner]) => [key, cap(inner)]));
     return value;
   };
-  return tools.map(tool => ({
+  const wrapped = tools.map(tool => ({
     ...tool,
     implementation: async (...args: any[]) => cap(await tool.implementation(...args)),
   }));
+  return Object.assign(wrapped, { refill: () => void (left = options.budget) });
 }

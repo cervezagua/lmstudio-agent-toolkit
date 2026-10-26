@@ -44,7 +44,7 @@ Without a Project Folder, the model works in the chat's own empty folder and is 
 | `grep` | Searches file contents, returning lines, just file names, or counts. Lines it shows can be edited straight away. |
 | `run_command` | Runs a shell command and returns its real exit code and output. |
 | `shell_reset` | Starts the shell session afresh. |
-| `task_run` · `task_list` · `task_output` · `task_stop` | Run dev servers, watchers and long builds in the background. |
+| `task_run` · `task_list` · `task_output` · `task_wait` · `task_stop` | Run dev servers, downloads and long builds in the background. `task_wait` waits for one to finish, or for a line in its output, without the model generating anything meanwhile. |
 | `diagnostics` | Runs the project's own checkers: tsc, ESLint, Ruff, Pyright, cargo, go vet. |
 | `notebook_read` · `notebook_edit` | Read and change Jupyter notebook cells. Off by default. |
 | `run_subagent` | Answers a search-heavy question in a read-only helper agent. Off by default. |

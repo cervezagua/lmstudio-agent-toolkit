@@ -36,6 +36,8 @@ export async function promptPreprocessor(ctl: PromptPreprocessorController, user
     const rewind = /^\s*\/rewind\b\s*(\S*)/i.exec(userText);
     if (rewind) {
       userText = await rewindCommand(ctl.getWorkingDirectory(), rewind[1].toLowerCase(), root);
+      // A turn of its own, so anything changed while replying is not filed under a turn just undone.
+      await startTurn(ctl.getWorkingDirectory(), `/rewind ${rewind[1]}`.trim()).catch(() => {});
       ctl.createStatus({ status: "done", text: rewind[1] && rewind[1] !== "list" ? `agent-toolkit ran /rewind ${rewind[1]}` : "agent-toolkit listed the checkpoints" });
     } else {
       await startTurn(ctl.getWorkingDirectory(), userText).catch(() => {});

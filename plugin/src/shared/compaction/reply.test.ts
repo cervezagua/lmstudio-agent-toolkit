@@ -1,9 +1,13 @@
 import { Chat, ChatMessage } from "@lmstudio/sdk";
-import { mkdtemp, rm } from "fs/promises";
+import { mkdtemp, readFile, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { fromChat } from "./history";
+import { openTasks } from "./pinned";
 import { runReply, type ReplyOutput, type ReplySettings } from "./reply";
+import { readSummaryState, writeSummaryState } from "./summary";
+import { updateTranscript } from "./transcript";
 
 let chatDir: string;
 beforeEach(async () => {
@@ -100,6 +104,7 @@ describe("runReply", () => {
       opts.onPredictionFragment({ content: "Let me look.", reasoningType: "reasoning" });
       opts.onPredictionFragment({ content: "", reasoningType: "reasoningEndTag" });
       opts.onPredictionFragment({ content: "Reading it.", reasoningType: "none" });
+      opts.onToolCallRequestEnd(0, 1, { toolCallRequest: { id: "call_abc", name: "read_file", arguments: { path: "a.js" } } });
       opts.onMessage(assistantCall("call_abc", "read_file", { path: "a.js" }, "Reading it."));
       opts.onMessage(toolResult("call_abc", "1\tconst a = 1;"));
     });
@@ -236,6 +241,21 @@ describe("runReply", () => {
     expect(lastUser).toBe("go on\n\n(Your task list ([>] in progress, [x] done):\n[x] write the parser\n[ ] add tests)");
   });
 
+  it("restates the last task list the tool accepted, not one it refused", () => {
+    const good = { todos: [{ content: "write the parser", status: "in_progress" }] };
+    const bad = { todos: [{ content: "a", status: "in_progress" }, { content: "b", status: "in_progress" }] };
+    const msgs = fromChat(
+      chatOf([
+        { role: "user", content: "plan it" },
+        assistantCall("t1", "todo_write", good),
+        toolResult("t1", "ok"),
+        assistantCall("t2", "todo_write", bad),
+        toolResult("t2", "Error: only one task can be in progress."),
+      ]).getMessagesArray(),
+    );
+    expect(openTasks(msgs)).toBe("Your task list ([>] in progress, [x] done):\n[>] write the parser");
+  });
+
   it("compacts a prompt that is too big and says so", async () => {
     const model = fakeModel(async () => {});
     const events = await run(
@@ -247,20 +267,77 @@ describe("runReply", () => {
   });
 
   it("makes room and carries on when a reply outgrows the context between rounds", async () => {
+    // Callbacks in the SDK's order: the prediction completes, the assistant message and the tool
+    // results follow, then the round ends; only then may the reply stop to make room.
     const model = fakeModel(async (_chat, opts, call) => {
-      if (call === 1) {
-        opts.onMessage(assistantCall("r1", "read_file", { path: "big.txt" }));
-        opts.onMessage(toolResult("r1", "y".repeat(5000)));
-        opts.onPredictionCompleted({ stats: { promptTokensCount: 9000, predictedTokensCount: 100 } });
-        const error = new Error("aborted");
-        error.name = "AbortError";
-        throw error;
+      if (call > 1) return;
+      for (const [round, id] of [[0, "r1"], [1, "r2"]] as const) {
+        opts.onRoundStart(round);
+        opts.onToolCallRequestEnd(round, round + 1, { toolCallRequest: { id, name: "read_file", arguments: { path: `${id}.txt` } } });
+        opts.onPredictionCompleted({ stats: { promptTokensCount: round ? 9000 : 2000, predictedTokensCount: 100 } });
+        opts.onMessage(assistantCall(id, "read_file", { path: `${id}.txt` }));
+        opts.onMessage(toolResult(id, "y".repeat(5000)));
+        opts.onRoundEnd(round);
+        if (opts.signal.aborted) {
+          const error = new Error("aborted");
+          error.name = "AbortError";
+          throw error;
+        }
       }
     });
-    const events = await run(model, [{ role: "user", content: "read everything" }], { usable: 10_000, keepRounds: 1 });
+    const events = await run(model, [{ role: "user", content: "read everything" }], { usable: 10_000, keepRounds: 3 });
     expect(model.actCalls).toHaveLength(2);
     expect(events).toContain("notice:Context: the reply was filling the context, so older tool output was hidden before it went on.");
-    const second = model.actCalls[1].getMessagesArray().map((m: any) => m.getRole());
-    expect(second).toEqual(["user", "assistant", "tool"]);
+    // Every call shown once, with the SDK's number, and every call has its result.
+    expect(events.filter(e => e.startsWith("call#") || e.startsWith("result#"))).toEqual(["call#1:read_file", "result#1:" + "y".repeat(5000), "call#2:read_file", "result#2:" + "y".repeat(5000)]);
+    const second = model.actCalls[1].getMessagesArray();
+    expect(second.map((m: any) => m.getRole())).toEqual(["user", "assistant", "tool", "assistant", "tool"]);
+    expect(second[2].getToolCallResults()[0].content).toBe("[output of read_file r1.txt (5000 characters) hidden to save context; call the tool again if you need it]");
+  });
+
+  it("drops the summary when the user edited an earlier message", async () => {
+    const msgs = (first: string) => fromChat(chatOf([{ role: "user", content: first }, { role: "assistant", content: "ok" }]).getMessagesArray());
+    await updateTranscript(chatDir, msgs("fix the parser"));
+    await writeSummaryState(chatDir, { coversUpTo: 2, summary: "Goal: fix the parser.", failures: 0, cutAt: 2 });
+    await updateTranscript(chatDir, msgs("fix the parser"));
+    expect((await readSummaryState(chatDir)).summary).toBe("Goal: fix the parser.");
+    await updateTranscript(chatDir, msgs("fix the lexer"));
+    expect(await readSummaryState(chatDir)).toEqual({ coversUpTo: 0, summary: "", failures: 0 });
+    expect(await readFile(join(chatDir, ".agent-toolkit", "compaction", "transcript.md"), "utf-8")).not.toContain("parser");
+  });
+
+  it("does not restart when there is no old output to hide", async () => {
+    const model = fakeModel(async (_chat, opts) => {
+      opts.onRoundStart(0);
+      opts.onPredictionCompleted({ stats: { promptTokensCount: 9000, predictedTokensCount: 100 } });
+      opts.onMessage(assistantCall("r1", "read_file", { path: "big.txt" }));
+      opts.onMessage(toolResult("r1", "y".repeat(5000)));
+      opts.onRoundEnd(0);
+    });
+    await run(model, [{ role: "user", content: "read it" }], { usable: 10_000 });
+    expect(model.actCalls).toHaveLength(1);
+  });
+
+  it("keeps a summarized prompt on the next message instead of summarizing again", async () => {
+    const model: any = fakeModel(async () => {});
+    let summaries = 0;
+    model.respond = async () => {
+      summaries++;
+      return { content: "Goal: test." };
+    };
+    const long = (i: number) => [
+      { role: "user", content: `step ${i} ` + "u".repeat(300) },
+      { role: "assistant", content: "a".repeat(1200) },
+    ];
+    const history = [...[0, 1, 2, 3, 4, 5].flatMap(long), { role: "user", content: "go on" }];
+    const first = await run(model, history, { usable: 2000, keepRounds: 1 });
+    expect(summaries).toBe(1);
+    expect(first.filter(e => e.startsWith("notice:"))).toHaveLength(1);
+    const firstPrompt = model.actCalls[0].getMessagesArray()[0].getText();
+
+    const second = await run(model, [...history, { role: "assistant", content: "ok" }, { role: "user", content: "and more" }], { usable: 2000, keepRounds: 1 });
+    expect(summaries).toBe(1);
+    expect(second.filter(e => e.startsWith("notice:"))).toEqual([]);
+    expect(model.actCalls[1].getMessagesArray()[0].getText()).toBe(firstPrompt);
   });
 });

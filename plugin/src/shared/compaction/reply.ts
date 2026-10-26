@@ -1,5 +1,5 @@
 import { compact, type CompactOptions } from "./compact";
-import { fromChat, isFailure, isSideQuestion, roughTokens, toMessageData, withoutSideQuestions, type Msg } from "./history";
+import { fromChat, isFailure, isSideQuestion, roughTokens, toMessageData, withoutSideQuestions, withText, type Msg } from "./history";
 import { maskToolResults } from "./mask";
 import { openTasks } from "./pinned";
 import { updateTranscript } from "./transcript";
@@ -58,6 +58,10 @@ export async function runReply(input: {
     callId: number,
     request: { name: string; arguments: Record<string, unknown>; pluginIdentifier?: string },
   ) => Promise<{ allow: true; arguments?: Record<string, unknown> } | { allow: false; reason?: string }>;
+  /** Most rounds of tool calls in the whole reply, restarts included (none: the SDK's default). */
+  maxRounds?: number;
+  /** Called when older output was hidden mid-reply, so capped tools may hand out their full share again. */
+  refillToolBudget?: () => void;
   /** For the eval runner: every message the reply produces, and every prediction's stats. */
   hooks?: { onMessage?: (message: any) => void; onPredictionCompleted?: (result: any) => void };
 }): Promise<void> {
@@ -72,12 +76,17 @@ export async function runReply(input: {
     for (const msg of list) chat.append(msg.original ?? toMessageData(msg));
     return chat;
   };
+  const estimate = (systemText: string, list: Msg[]) =>
+    roughTokens(systemText) + list.reduce((s, m) => s + roughTokens(m.text) + m.results.reduce((r, x) => r + roughTokens(x.content), 0), 0) + input.toolTokens;
   const count = async (systemText: string, list: Msg[]) => {
+    const rough = estimate(systemText, list);
+    // Counting exactly renders and tokenizes the whole prompt; not worth it far below the high mark.
+    if (rough < settings.usable * settings.high * 0.6) return rough;
     try {
       return (await model.countTokens(await model.applyPromptTemplate(build(systemText, list)))) + input.toolTokens;
     } catch {
       // Some templates refuse a prompt they did not make (no user turn, say); estimate instead.
-      return roughTokens(systemText) + list.reduce((s, m) => s + roughTokens(m.text) + m.results.reduce((r, x) => r + roughTokens(x.content), 0), 0) + input.toolTokens;
+      return rough;
     }
   };
 
@@ -88,7 +97,7 @@ export async function runReply(input: {
   let compacted;
   try {
     compacted = await compact({ system, msgs: withoutSideQuestions(msgs), count, model, chatDir: input.chatDir, options: settings, signal: input.signal });
-    if (compacted.stage > 0 && settings.showNotices) {
+    if (compacted.fresh && settings.showNotices) {
       const how = compacted.stage === 1 ? "hid older tool output" : "summarized the earlier conversation";
       out.notice(`Context: ${how}, ${compacted.before.toLocaleString("en-US")} → ${compacted.after.toLocaleString("en-US")} tokens.${compacted.note ? ` (${compacted.note})` : ""}`);
     }
@@ -105,7 +114,7 @@ export async function runReply(input: {
   const reminderDue = settings.taskReminderEvery > 0 && userTurns % settings.taskReminderEvery === 0;
   if (tasks && (compacted.stage > 0 || reminderDue)) {
     const index = prompt.map(m => m.role).lastIndexOf("user");
-    if (index >= 0) prompt = prompt.map((m, i) => (i === index ? { ...m, text: `${m.text}\n\n(${tasks})`, original: undefined } : m));
+    if (index >= 0) prompt = prompt.map((m, i) => (i === index ? withText(m, `${m.text}\n\n(${tasks})`) : m));
   }
 
   // A call that failed twice exactly as written is refused the third time, with the reason.
@@ -113,41 +122,67 @@ export async function runReply(input: {
   const keyOf = (name: string, args: unknown) => `${name} ${JSON.stringify(args ?? {})}`;
   const pendingKeys = new Map<string, string>();
 
+  // The SDK numbers each call (callId) when the model finishes writing it; the request block, the
+  // confirmation and the result all use that number, matched to the result by the request's id.
   const callIds = new Map<string, number>();
-  let nextCallId = 1;
+  const shown = new Set<number>();
+  let nextOwnId = 1_000_000;
   const numberFor = (id: string | undefined) => {
-    if (!id) return nextCallId++;
-    if (!callIds.has(id)) callIds.set(id, nextCallId++);
+    if (!id) return nextOwnId++;
+    if (!callIds.has(id)) callIds.set(id, nextOwnId++);
     return callIds.get(id)!;
   };
+  const showRequest = (callId: number, request: { id?: string; name: string; arguments?: Record<string, unknown> }) => {
+    if (shown.has(callId)) return;
+    shown.add(callId);
+    out.toolRequest(callId, { id: request.id, name: request.name, arguments: request.arguments });
+  };
 
+  const restartMask = { keepRounds: Math.max(1, settings.keepRounds - 2), maxResultChars: settings.maxResultChars };
   let current = build(compacted.system, prompt);
   let produced: Msg[] = [];
-  let producedTotal = 0;
+  let roundsDone = 0;
   for (let restart = 0; ; restart++) {
+    if (input.maxRounds !== undefined && roundsDone >= input.maxRounds) return;
     const stop = new AbortController();
     const signal = AbortSignal.any([input.signal, stop.signal]);
     let overflowing = false;
+    // Tokens the last prediction filled, plus the rough size of the results that came after it.
+    let used = 0;
+    let roundResults = 0;
     try {
       await model.act(current, input.tools, {
         signal,
-        onRoundStart: () => out.newRound(),
+        ...(input.maxRounds !== undefined ? { maxPredictionRounds: input.maxRounds - roundsDone } : {}),
+        onRoundStart: () => {
+          roundsDone++;
+          roundResults = 0;
+          out.newRound();
+        },
         onPredictionFragment: (fragment: any) => {
           if (fragment.reasoningType === "reasoning") out.reasoning(fragment.content);
           else if (fragment.reasoningType === "reasoningEndTag") out.reasoningEnded();
           else if (fragment.reasoningType === "none" || !fragment.reasoningType) out.text(fragment.content);
           // reasoningStartTag is dropped: its text is LM Studio's internal marker.
         },
+        // Shown as soon as the call is written, so a confirmation never names a call the chat has not shown.
+        onToolCallRequestEnd: (_round: number, callId: number, info: any) => {
+          const request = info?.toolCallRequest;
+          if (!request) return;
+          if (request.id) callIds.set(request.id, callId);
+          showRequest(callId, request);
+        },
         onMessage: (message: any) => {
           input.hooks?.onMessage?.(message);
-          // Numbered after the conversation, as the transcript will number them next time.
-          const msg = { ...fromChat([message])[0], n: all.length + ++producedTotal };
+          // Not numbered: the transcript gets this reply's messages next time, as LM Studio saved them.
+          const msg = { ...fromChat([message])[0], n: 0 };
           produced.push(msg);
           for (const call of msg.calls) {
-            out.toolRequest(numberFor(call.id), { id: call.id, name: call.name, arguments: call.args });
+            showRequest(numberFor(call.id), { id: call.id, name: call.name, arguments: call.args });
             if (call.id) pendingKeys.set(call.id, keyOf(call.name, call.args));
           }
           for (const result of msg.results) {
+            roundResults += roughTokens(result.content);
             out.toolResult(numberFor(result.id), result.id, result.content);
             const key = result.id ? pendingKeys.get(result.id) : undefined;
             if (key && isFailure(result.content)) {
@@ -158,14 +193,19 @@ export async function runReply(input: {
         },
         onPredictionCompleted: (result: any) => {
           input.hooks?.onPredictionCompleted?.(result);
-          const used = (result?.stats?.promptTokensCount ?? 0) + (result?.stats?.predictedTokensCount ?? 0);
-          // Leave the next round room to write a whole tool call: running out mid-call ends the chat.
-          if (used + 1500 > settings.usable && restart < MAX_RESTARTS) {
-            overflowing = true;
-            stop.abort();
-          }
+          used = (result?.stats?.promptTokensCount ?? 0) + (result?.stats?.predictedTokensCount ?? 0);
         },
-        guardToolCall: async (_round: number, _callId: number, guard: any) => {
+        // Checked once the round's tools have finished and their results are in: stopping earlier
+        // would abort the tools mid-run and leave calls without results.
+        onRoundEnd: () => {
+          // Leave the next round room to write a whole tool call: running out mid-call ends the chat.
+          if (!roundResults || used + roundResults + 1500 <= settings.usable || restart >= MAX_RESTARTS) return;
+          // Only worth a restart (the model re-reads the prompt) if there is old output to hide.
+          if (maskToolResults([...prompt, ...produced], restartMask).hidden === 0) return;
+          overflowing = true;
+          stop.abort();
+        },
+        guardToolCall: async (_round: number, callId: number, guard: any) => {
           const request = guard.toolCallRequest;
           const failed = failures.get(keyOf(request.name, request.arguments));
           if (failed && failed.count >= 2) {
@@ -178,11 +218,14 @@ export async function runReply(input: {
           }
           // The user approves each call, as in LM Studio's own loop. If asking fails, the call does not run.
           try {
-            const decision = await input.confirm(numberFor(request.id), {
-              name: request.name,
-              arguments: request.arguments ?? {},
-              pluginIdentifier: guard.tool?.pluginIdentifier,
-            });
+            const decision = await untilAborted(
+              input.confirm(callId, {
+                name: request.name,
+                arguments: request.arguments ?? {},
+                pluginIdentifier: guard.tool?.pluginIdentifier,
+              }),
+              signal,
+            );
             if (!decision.allow) guard.deny(decision.reason ?? "The user declined this tool call.");
             else if (decision.arguments) guard.allowAndOverrideParameters(decision.arguments);
             else guard.allow();
@@ -199,12 +242,22 @@ export async function runReply(input: {
     }
     // Make room and carry on from where the reply got to: older tool output is hidden (no model
     // call, so the pause is short), the reply's own messages so far included.
-    const extended = [...prompt, ...produced];
-    const { msgs: masked } = maskToolResults(extended, { keepRounds: Math.max(1, settings.keepRounds - 2), maxResultChars: settings.maxResultChars });
-    prompt = masked;
+    prompt = maskToolResults([...prompt, ...produced], restartMask).msgs;
     produced = [];
     current = build(compacted.system, prompt);
+    // Room was made, so the results that follow may take their share again.
+    input.refillToolBudget?.();
     if (settings.showNotices) out.notice("Context: the reply was filling the context, so older tool output was hidden before it went on.");
+  }
+
+  /** The promise's outcome, or a rejection as soon as the signal aborts (a confirmation left open). */
+  function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+    if (signal.aborted) return Promise.reject(new Error("the reply was stopped"));
+    return new Promise<T>((resolve, reject) => {
+      const onAbort = () => reject(new Error("the reply was stopped"));
+      signal.addEventListener("abort", onAbort, { once: true });
+      promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+    });
   }
 
   async function answerSideQuestion(): Promise<void> {
@@ -230,7 +283,16 @@ export async function runReply(input: {
       return;
     }
     const context = withoutSideQuestions(msgs.slice(0, -1));
-    const fitted = await compact({ system, msgs: context, count, model, chatDir: input.chatDir, options: { ...settings, summarize: false }, signal: input.signal }).catch(
+    const fitted = await compact({
+      system,
+      msgs: context,
+      count,
+      model,
+      chatDir: input.chatDir,
+      options: { ...settings, summarize: false },
+      signal: input.signal,
+      readOnly: true,
+    }).catch(
       () => ({ system, msgs: context }),
     );
     const recent = exchanges.slice(-MAX_SIDE_EXCHANGES);

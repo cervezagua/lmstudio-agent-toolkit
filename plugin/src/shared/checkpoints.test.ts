@@ -67,6 +67,19 @@ describe("checkpoints", () => {
     expect(await readFile(outside, "utf-8")).toBe("changed");
   });
 
+  // Restoring the smaller, later copy would leave the file in a state it never had before the rewind point.
+  it("leaves a file alone when its earliest copy was too big to keep", async () => {
+    const log = join(project, "log.txt");
+    await writeFile(log, "now");
+    await startTurn(chat, "one");
+    await recordChange(chat, log, "x".repeat(MAX_CHECKPOINT_BYTES + 1));
+    await startTurn(chat, "two");
+    await recordChange(chat, log, "small in between");
+    const result = await rewindTo(chat, 1, project);
+    expect(result).toEqual({ restored: [], deleted: [], notRestored: [log] });
+    expect(await readFile(log, "utf-8")).toBe("now");
+  });
+
   it("/rewind lists the messages that changed files, and refuses a bad number", async () => {
     expect(await rewindCommand(chat, "", project)).toMatch(/no file changes have been recorded/);
     await startTurn(chat, "fix the parser please");

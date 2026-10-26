@@ -33,10 +33,9 @@ export function maskToolResults(msgs: Msg[], options: { keepRounds: number; maxR
       if (old && result.content.length > SHORT_RESULT_CHARS) {
         changed = true;
         hidden++;
-        return {
-          ...result,
-          content: `[output of ${describeCall(call)} (${result.content.length} characters) hidden to save context; the full text is #m${msg.n} in the transcript]`,
-        };
+        // A message of the reply still being written (n 0) is not in the transcript yet.
+        const where = msg.n > 0 ? `the full text is #m${msg.n} in the transcript` : "call the tool again if you need it";
+        return { ...result, content: `[output of ${describeCall(call)} (${result.content.length} characters) hidden to save context; ${where}]` };
       }
       if (result.content.length > options.maxResultChars) {
         changed = true;
@@ -50,7 +49,7 @@ export function maskToolResults(msgs: Msg[], options: { keepRounds: number; maxR
 }
 
 /** The call a result answers when ids are missing: the k-th call of the nearest assistant message above. */
-function precedingCall(msgs: Msg[], index: number, k: number): ToolCall | undefined {
+export function precedingCall(msgs: Msg[], index: number, k: number): ToolCall | undefined {
   for (let i = index - 1; i >= 0; i--) if (msgs[i].role === "assistant" && msgs[i].calls.length) return msgs[i].calls[k] ?? msgs[i].calls[0];
   return undefined;
 }

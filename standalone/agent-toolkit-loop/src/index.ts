@@ -75,12 +75,14 @@ async function handlePrediction(ctl: PredictionLoopHandlerController) {
     const estimate = Math.ceil(definitions.length / CHARS_PER_TOKEN);
     const toolTokens = !tools.length ? 0 : remote ? estimate : await model.countTokens(definitions).catch(() => estimate);
     const maxResultChars = Math.floor(config.get("maxToolResultTokens") * CHARS_PER_TOKEN);
+    // All results in one reply share half the context, so a run of big results cannot fill it.
+    const capped = capTools(tools, { perResult: maxResultChars, budget: Math.floor(usable * 0.5 * CHARS_PER_TOKEN) });
     await runReply({
       sdk: { Chat },
       model,
       history,
-      // All results in one reply share half the context, so a run of big results cannot fill it.
-      tools: capTools(tools, { perResult: maxResultChars, budget: Math.floor(usable * 0.5 * CHARS_PER_TOKEN) }),
+      tools: capped,
+      refillToolBudget: capped.refill,
       toolTokens,
       chatDir: ctl.getWorkingDirectory(),
       settings: {

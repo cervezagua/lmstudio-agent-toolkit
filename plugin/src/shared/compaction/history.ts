@@ -57,6 +57,24 @@ export function toMessageData(msg: Msg): any {
   return { role: msg.role, content: [{ type: "text", text: msg.text }] };
 }
 
+/**
+ * The message with new text and everything else kept: a user message's images and files stay, since
+ * the SDK message is copied and only its text replaced. Without an SDK message, the text alone.
+ */
+export function withText(msg: Msg, text: string): Msg {
+  const original = msg.original as any;
+  if (typeof original?.asMutableCopy === "function") {
+    try {
+      const copy = original.asMutableCopy();
+      copy.replaceText(text);
+      return { ...msg, text, original: copy };
+    } catch {
+      // fall back to the text alone
+    }
+  }
+  return { ...msg, text, original: undefined };
+}
+
 /** A side question, answered by agent-toolkit-loop but never part of the conversation. */
 export const isSideQuestion = (msg: Msg) => msg.role === "user" && /^\s*\/btw\b/i.test(msg.text);
 

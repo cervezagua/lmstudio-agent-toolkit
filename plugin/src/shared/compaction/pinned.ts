@@ -1,4 +1,5 @@
 import { callsById, describeCall, isFailure, roughTokens, type Msg } from "./history";
+import { precedingCall } from "./mask";
 
 /** Tools whose calls change a file, and the argument that names it. */
 const WRITES = new Set(["write_file", "edit_file", "multi_edit", "insert_lines", "undo_edit", "notebook_edit", "write_document"]);
@@ -12,10 +13,10 @@ export function ledger(msgs: Msg[], maxTokens: number): string {
   const byId = callsById(msgs);
   const changed = new Set<string>();
   const lines: string[] = [];
-  for (const msg of msgs) {
+  for (const [index, msg] of msgs.entries()) {
     if (msg.role !== "tool") continue;
-    for (const result of msg.results) {
-      const call = result.id ? byId.get(result.id) : undefined;
+    for (const [k, result] of msg.results.entries()) {
+      const call = (result.id && byId.get(result.id)) || precedingCall(msgs, index, k);
       if (!call) continue;
       if (isFailure(result.content)) {
         lines.push(`- failed: ${describeCall(call)}: ${result.content.replace(/^"?Error:\s*/, "").split(/\r?\n/)[0].slice(0, 140)}`);
@@ -76,13 +77,19 @@ export function ownWords(text: string): string {
 }
 
 /**
- * The open tasks from the latest todo_write call, or "" when there are none or all are done. They go
- * at the very end of the prompt, where small models attend most (Manus, Cline's Focus Chain).
+ * The open tasks from the latest todo_write call that worked, or "" when there are none or all are
+ * done. They go at the very end of the prompt, where small models attend most (Manus, Cline's Focus
+ * Chain).
  */
 export function openTasks(msgs: Msg[]): string {
   for (let i = msgs.length - 1; i >= 0; i--) {
-    const call = [...msgs[i].calls].reverse().find(c => c.name === "todo_write");
-    if (!call) continue;
+    const k = msgs[i].calls.map(c => c.name).lastIndexOf("todo_write");
+    if (k < 0) continue;
+    const call = msgs[i].calls[k];
+    // A list the tool refused (two tasks in progress, say) is not the list.
+    const reply = msgs[i + 1]?.role === "tool" ? msgs[i + 1].results : [];
+    const result = (call.id && reply.find(r => r.id === call.id)) || reply[k];
+    if (result && isFailure(result.content)) continue;
     const todos = Array.isArray(call.args.todos) ? (call.args.todos as { content?: unknown; status?: unknown }[]) : [];
     if (!todos.some(t => t.status !== "completed")) return "";
     const mark = (status: unknown) => (status === "completed" ? "[x]" : status === "in_progress" ? "[>]" : "[ ]");

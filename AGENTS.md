@@ -6,7 +6,7 @@ Instructions for anyone — person or model — changing this toolkit. The Memor
 
 - `plugin/` — the one LM Studio plugin. `src/groups/<name>/` holds each group (files, memory, git, web, documents, utilities); `src/config.ts` has every setting, including the group toggles; `src/toolsProvider.ts` offers the groups that are on.
 - `plugin/src/shared/` — helpers used by several groups.
-- `standalone/<name>/` — small plugins that each ship one tool. Their code is copied from `plugin/src/` by `npm run sync-standalone`; edit it there, never in `standalone/`.
+- `standalone/<name>/` — small plugins: three that each ship one tool, and `agent-toolkit-loop`, the companion that owns the reply loop (compaction, `/btw`). Their shared code is copied from `plugin/src/` by `npm run sync-standalone`; edit it there, never in `standalone/`. Only each plugin's own `src/index.ts` and `src/config.ts` live in `standalone/`.
 - `presets/<name>/` — LM Studio presets. Edit `system-prompt.md`, then run `node scripts/build-preset.mjs` to rewrite `preset.json`.
 - `scripts/` — install, publish and end-to-end helpers.
 - `evals/` — real tasks run against a local model and scored by outcome (`npm run eval`); see its README. Run the tasks a change affects before and after it.
