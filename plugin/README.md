@@ -80,9 +80,13 @@ Start a message with a command and it becomes that command's instructions:
 | `/commit` | Commits related changes with a clear message. Never pushes. |
 | `/init` | Writes an `AGENTS.md` for the project, or improves the one there. |
 | `/rewind` | Lists your messages that changed files; `/rewind 3` puts every file back to how it was before message 3. Changes made by shell commands aren't tracked. |
+| `/handoff` | Has the model write down where the work stands (goal, what's done, current state, decisions, open problems, next steps) and save it to `.agent-toolkit/handoff.md`. |
+| `/resume` | In a new chat: loads that note, so the model carries on where the old chat left off. |
 | `/help` | Lists the commands. |
 
-Anything after the command goes along: `/review focus on the parser`. A project can add its own as `.agent-toolkit/commands/<name>.md`, with `$ARGUMENTS` where your words go and an optional `description:` header, and can replace a built-in one. Those are scanned like `AGENTS.md`, since a cloned repository can ship them. `/btw` belongs to [agent-toolkit-loop](https://lmstudio.ai/cervezagua/agent-toolkit-loop).
+Anything after the command goes along: `/review focus on the parser`. A project can add its own as `.agent-toolkit/commands/<name>.md`, with `$ARGUMENTS` where your words go and an optional `description:` header. A project's command can't take the name of a built-in one. Those are scanned like `AGENTS.md`, since a cloned repository can ship them.
+
+**A long chat gets slower with every message.** When it does, type `/handoff`, start a new chat in the same Project Folder, and type `/resume`. The note is kept in the project, so both chats need the same Project Folder. It's loaded as information from an earlier chat, not as instructions, and it's scanned and has its secrets hidden like other loaded files. `/btw` belongs to [agent-toolkit-loop](https://lmstudio.ai/cervezagua/agent-toolkit-loop).
 
 ## 🌿 Git & GitHub
 
@@ -151,7 +155,7 @@ Small models guess at sums and don't know what day it is. These two tools give t
 | Redact Secrets | on | Hides API keys, tokens and private keys in what tools return. Your files are never changed. |
 | Read Attached Files | on | Puts the text of a PDF, Word or text file you attach to a message into that message. |
 | Max Attachment Characters | 40000 | How much of it; never more than half of what the chat's model has left. |
-| Commands | on | `/review`, `/test`, `/commit`, `/init`, `/help`, and the project's own. |
+| Commands | on | `/review`, `/test`, `/commit`, `/init`, `/handoff`, `/resume`, `/help`, and the project's own. |
 
 **Attached files.** Attach a document to a message and ask about it: its text goes into the message, so "summarize this" means the document. A long one is cut at the limit, and the model is told how to read the rest; a scanned PDF is read with `ocr_document`. The tools can open what you attached in that chat by its name, and nothing else from LM Studio's own folder. LM Studio's RAG plugin reads attachments too: use one of the two in a chat, not both.
 
