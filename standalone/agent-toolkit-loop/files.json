@@ -3,6 +3,7 @@
   "files": [
     "shared/compaction/approvals.ts",
     "shared/compaction/capTools.ts",
+    "shared/compaction/chatOutput.ts",
     "shared/compaction/compact.ts",
     "shared/compaction/history.ts",
     "shared/compaction/mask.ts",
