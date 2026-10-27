@@ -11,10 +11,13 @@ const CHARS_PER_TOKEN = 3.5;
  * empty block shows as "This message contains no content". Every call is guarded, since the chat
  * may already be gone when a late fragment arrives.
  */
-function chatOutput(ctl: PredictionLoopHandlerController): ReplyOutput {
+function chatOutput(ctl: PredictionLoopHandlerController): ReplyOutput & { closeOpenCalls(reason: string): void } {
   let text: ReturnType<typeof ctl.createContentBlock> | undefined;
   let thinking: ReturnType<typeof ctl.createContentBlock> | undefined;
   const statuses = new Map<number, ReturnType<typeof ctl.createToolStatus>>();
+  // Calls whose card does not show an outcome yet: a reply that ends early must close them.
+  const open = new Set<number>();
+  const FINAL = new Set(["toolCallSucceeded", "toolCallFailed", "toolCallDenied", "toolCallGenerationFailed"]);
   const safely = (action: () => void) => {
     try {
       action();
@@ -46,6 +49,8 @@ function chatOutput(ctl: PredictionLoopHandlerController): ReplyOutput {
     // request is saved but no buttons are shown, and the reply waits forever.
     toolStatus: (callId, status) =>
       safely(() => {
+        if (FINAL.has(status.type)) open.delete(callId);
+        else open.add(callId);
         const existing = statuses.get(callId);
         if (existing) return existing.setStatus(status);
         statuses.set(callId, ctl.createToolStatus(callId, status));
@@ -57,6 +62,11 @@ function chatOutput(ctl: PredictionLoopHandlerController): ReplyOutput {
     notice: content => label("Context", "blue", false, content),
     // Kept in the saved chat so a later side question can see it; agent-toolkit-loop leaves it out of the task.
     sideAnswer: content => label("btw", "purple", true, content),
+    // A card left on "calling tool" makes LM Studio show a reply that is not running and cannot be stopped.
+    closeOpenCalls: reason => {
+      for (const callId of open) safely(() => statuses.get(callId)?.setStatus({ type: "toolCallFailed", error: reason }));
+      open.clear();
+    },
   };
 }
 
@@ -79,6 +89,7 @@ async function handlePrediction(ctl: PredictionLoopHandlerController) {
     ctl.createStatus({ status: "error", text: `agent-toolkit-loop could not get the tools of the enabled plugins (${error?.message ?? error}); answering without them.` });
   }
 
+  const out = chatOutput(ctl);
   try {
     const cap = config.get("usableContext");
     const loaded: number = remote ? cap || 32_768 : await model.getContextLength();
@@ -107,7 +118,7 @@ async function handlePrediction(ctl: PredictionLoopHandlerController) {
         taskReminderEvery: config.get("taskReminderEvery"),
         showNotices: config.get("showNotices"),
       },
-      out: chatOutput(ctl),
+      out,
       signal: ctl.abortSignal,
       // LM Studio's own loop asks before each tool call; a loop that replaces it has to ask too.
       confirm: async (callId, request) => {
@@ -120,7 +131,21 @@ async function handlePrediction(ctl: PredictionLoopHandlerController) {
         return answer.type === "allow" ? { allow: true, arguments: answer.toolArgsOverride } : { allow: false, reason: answer.denyReason };
       },
     });
+  } catch (error: any) {
+    // Ended here, the reply finishes like any other, with the reason in the chat. Thrown on to
+    // LM Studio, it left a reply that looked busy, with a greyed-out Stop button and no way out.
+    if (!ctl.abortSignal.aborted) {
+      const reason = String(error?.message ?? error).split(/\r?\n/)[0].slice(0, 300);
+      out.closeOpenCalls(reason);
+      try {
+        ctl.createStatus({ status: "error", text: `agent-toolkit-loop stopped this reply: ${reason}` });
+      } catch {
+        // the chat is gone
+      }
+    }
   } finally {
+    // A call whose result never came (the reply was stopped, say) is not left "calling tool".
+    out.closeOpenCalls(ctl.abortSignal.aborted ? "The reply was stopped." : "The reply ended before this call finished.");
     session?.[Symbol.dispose]();
   }
 }
