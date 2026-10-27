@@ -1,5 +1,6 @@
 import { Chat, type PluginContext, type PredictionLoopHandlerController } from "@lmstudio/sdk";
 import { configSchematics } from "./config";
+import { alwaysAllowed } from "./shared/compaction/approvals";
 import { capTools } from "./shared/compaction/capTools";
 import { runReply, type ReplyOutput } from "./shared/compaction/reply";
 
@@ -122,6 +123,8 @@ async function handlePrediction(ctl: PredictionLoopHandlerController) {
       signal: ctl.abortSignal,
       // LM Studio's own loop asks before each tool call; a loop that replaces it has to ask too.
       confirm: async (callId, request) => {
+        // "Always allow" and "never ask" in LM Studio hold here too.
+        if (await alwaysAllowed(request.pluginIdentifier, request.name)) return { allow: true };
         const answer = await ctl.requestConfirmToolCall({
           callId,
           pluginIdentifier: request.pluginIdentifier,
