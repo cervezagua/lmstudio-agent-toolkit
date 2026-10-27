@@ -456,6 +456,32 @@ describe("runReply", () => {
     expect(events).toContain("notice:Context: the context is full, so the reply was cut off. Start a new chat, or raise the model's context length.");
   });
 
+  // A reasoning model planned a command in its thinking and stopped: the user saw nothing happen.
+  it("asks once for an answer when a reply ends inside the model's thinking", async () => {
+    const model = fakeModel(async (_chat, opts, call) => {
+      opts.onRoundStart(0);
+      opts.onPredictionFragment({ content: "I should run nvidia-smi.", reasoningType: "reasoning" });
+      opts.onPredictionFragment({ content: "", reasoningType: "reasoningEndTag" });
+      if (call === 2) opts.onPredictionFragment({ content: "Running it now.", reasoningType: "none" });
+      opts.onMessage(ChatMessage.from({ role: "assistant", content: [{ type: "text", text: call === 2 ? "Running it now." : "" }] } as any));
+      opts.onRoundEnd(0);
+    });
+    const events = await run(model, [{ role: "user", content: "check the GPU" }]);
+    expect(model.actCalls).toHaveLength(2);
+    expect(model.actCalls[1].getMessagesArray().at(-1).getText()).toMatch(/^\(Your reply ended inside your thinking/);
+    expect(events).toContain("text:Running it now.");
+  });
+
+  it("follows up an empty reply only once", async () => {
+    const model = fakeModel(async (_chat, opts) => {
+      opts.onRoundStart(0);
+      opts.onPredictionFragment({ content: "Hmm.", reasoningType: "reasoning" });
+      opts.onRoundEnd(0);
+    });
+    await run(model, [{ role: "user", content: "check the GPU" }]);
+    expect(model.actCalls).toHaveLength(2);
+  });
+
   it("does not restart when there is no old output to hide", async () => {
     const model = fakeModel(async (_chat, opts) => {
       opts.onRoundStart(0);
