@@ -233,4 +233,14 @@ describe("capTools", () => {
     const [small] = capTools([{ implementation: async () => "short" }], { perResult: 10, budget: 10 });
     expect(await small.implementation()).toBe("short");
   });
+
+  // js-code-sandbox throws when a script fails; the SDK then ended the whole reply, leaving the chat
+  // stuck on "calling tool" with no result.
+  it("turns a tool that throws into an error result the model can read", async () => {
+    const [failing] = capTools(
+      [{ implementation: async () => Promise.reject(new Error("Process exited with code 1. Stderr: ReferenceError: require is not defined")) }],
+      { perResult: 1000, budget: 5000 },
+    );
+    expect(await failing.implementation()).toBe("Error: Process exited with code 1. Stderr: ReferenceError: require is not defined");
+  });
 });

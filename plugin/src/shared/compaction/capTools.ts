@@ -7,7 +7,8 @@ const SMALL = 200;
  * Wraps tools so no single result can fill the context: each text in a result keeps its head and
  * tail within `perResult` characters, and all results of one reply share `budget` characters. The
  * result keeps its shape (an MCP result stays an MCP result), since some callers check it. The tool
- * still runs in full; only what the model reads is cut, and it is told so. `refill` restores the
+ * still runs in full; only what the model reads is cut, and it is told so. A tool that throws gives
+ * an "Error: ..." result instead of ending the reply. `refill` restores the
  * shared budget, for when older output was hidden to make room.
  */
 export function capTools<T extends { implementation: (...args: any[]) => any }>(
@@ -30,7 +31,16 @@ export function capTools<T extends { implementation: (...args: any[]) => any }>(
   };
   const wrapped = tools.map(tool => ({
     ...tool,
-    implementation: async (...args: any[]) => cap(await tool.implementation(...args)),
+    implementation: async (...args: any[]) => {
+      try {
+        return cap(await tool.implementation(...args));
+      } catch (error: any) {
+        // As in LM Studio's own loop, a tool that throws (a script that fails in js-code-sandbox,
+        // say) gives the model an error to work with; left to the SDK, it ends the whole reply.
+        const message = String(error?.message ?? error).replace(/^Error:\s*/, "");
+        return cap(`Error: ${message.length > 4000 ? `${message.slice(0, 4000)} [...]` : message}`);
+      }
+    },
   }));
   return Object.assign(wrapped, { refill: () => void (left = options.budget) });
 }
