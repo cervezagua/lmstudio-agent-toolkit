@@ -1,11 +1,26 @@
 import { Chat, type PluginContext, type PredictionLoopHandlerController } from "@lmstudio/sdk";
 import { configSchematics } from "./config";
-import { alwaysAllowed } from "./shared/compaction/approvals";
+import { realpathSync } from "fs";
+import { loadApprovals } from "./shared/compaction/approvals";
+import { lmStudioHome } from "./shared/lmStudioHome";
 import { capTools } from "./shared/compaction/capTools";
 import { runReply, type ReplyOutput } from "./shared/compaction/reply";
 
 /** About as many characters as a token holds, for caps set in tokens. */
 const CHARS_PER_TOKEN = 3.5;
+
+/**
+ * LM Studio's folder, found once when the plugin loads, as LM Studio itself does: a pointer file
+ * changed later (by a tool, say) cannot send the approval settings somewhere else.
+ */
+const LM_STUDIO_HOME = (() => {
+  const home = lmStudioHome();
+  try {
+    return realpathSync(home);
+  } catch {
+    return home;
+  }
+})();
 
 /**
  * Shows a reply in LM Studio's chat. Blocks are made when there is something to put in them: an
@@ -91,6 +106,8 @@ async function handlePrediction(ctl: PredictionLoopHandlerController) {
   }
 
   const out = chatOutput(ctl);
+  // The user's "Always allow" choices as they stand when the reply starts.
+  const approved = await loadApprovals(LM_STUDIO_HOME);
   try {
     const cap = config.get("usableContext");
     const loaded: number = remote ? cap || 32_768 : await model.getContextLength();
@@ -124,7 +141,7 @@ async function handlePrediction(ctl: PredictionLoopHandlerController) {
       // LM Studio's own loop asks before each tool call; a loop that replaces it has to ask too.
       confirm: async (callId, request) => {
         // "Always allow" and "never ask" in LM Studio hold here too.
-        if (await alwaysAllowed(request.pluginIdentifier, request.name)) return { allow: true };
+        if (approved(request.pluginIdentifier, request.name)) return { allow: true };
         const answer = await ctl.requestConfirmToolCall({
           callId,
           pluginIdentifier: request.pluginIdentifier,

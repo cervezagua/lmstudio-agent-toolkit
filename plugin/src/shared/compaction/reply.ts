@@ -162,7 +162,8 @@ export async function runReply(input: {
     return callIds.get(id)!;
   };
   // Which plugin each tool comes from, for the request block and the status, as LM Studio shows them.
-  const pluginOf = new Map<string, string>(input.tools.filter(t => t?.pluginIdentifier).map(t => [t.name, t.pluginIdentifier]));
+  // The SDK runs the last tool of a name, so the last one names the plugin, identifier or not.
+  const pluginOf = new Map<string, string | undefined>(input.tools.map(t => [t?.name, t?.pluginIdentifier]));
   const showRequest = (callId: number, request: { id?: string; name: string; arguments?: Record<string, unknown> }) => {
     if (shown.has(callId)) return;
     shown.add(callId);
@@ -180,8 +181,12 @@ export async function runReply(input: {
   const finish = (callId: number, content: string) => {
     const state = statusOf.get(callId);
     if (state === "toolCallDenied" || state === "toolCallSucceeded" || state === "toolCallFailed") return;
-    if (isFailure(content)) setStatus(callId, { type: "toolCallFailed", error: content.replace(/^"?Error:\s*/, "").split(/\r?\n/)[0].slice(0, 300) });
-    else setStatus(callId, { type: "toolCallSucceeded", timeMs: Date.now() - (startedAt.get(callId) ?? Date.now()) });
+    // MCP tools report a failure as {"isError": true, ...} rather than with "Error:".
+    if (isFailure(content) || /^\s*\{[\s\S]*"isError"\s*:\s*true/.test(content)) {
+      setStatus(callId, { type: "toolCallFailed", error: content.replace(/^"?Error:\s*/, "").split(/\r?\n/)[0].slice(0, 300) });
+    } else {
+      setStatus(callId, { type: "toolCallSucceeded", timeMs: Date.now() - (startedAt.get(callId) ?? Date.now()) });
+    }
   };
 
   const restartMask = { keepRounds: Math.max(1, settings.keepRounds - 2), maxResultChars: settings.maxResultChars };
@@ -351,10 +356,11 @@ export async function runReply(input: {
         prompt = [
           ...prompt,
           ...produced,
-          { role: "user", text: "(Your reply ended inside your thinking, with no answer and no tool call. Give your answer now, or make the tool call you planned.)", calls: [], results: [], n: 0 },
+          { role: "user", text: "(Your reply ended inside your thinking, with no answer and no tool call. Give your answer now, or make a tool call if one is still needed.)", calls: [], results: [], n: 0 },
         ];
         produced = [];
         current = build(compacted.system, prompt);
+        if (settings.showNotices) out.notice("Context: the reply ended inside the model's thinking, so it was asked for its answer.");
         continue;
       }
       // The context filled while the model was still writing: its message stops mid-sentence and,

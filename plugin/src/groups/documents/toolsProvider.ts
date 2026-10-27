@@ -12,6 +12,7 @@ import { DEFAULT_OCR_PROMPT, IMAGE_EXTENSIONS, ocrImageFile, pickVisionModel, vi
 import { findAttachment } from "../../shared/attachments";
 import { recordChange } from "../../shared/checkpoints";
 import { safe, ToolError } from "../../shared/errors";
+import { isLmStudioFile } from "../../shared/lmStudioFiles";
 import { isChatStateFile, readMode } from "../../shared/mode";
 import { displayPath, resolveSafe } from "../../shared/paths";
 import { projectRoot } from "../../shared/projectFolder";
@@ -59,6 +60,9 @@ export async function toolsProvider(ctl: ToolsProviderController) {
     const file = await resolveSafe(root, path);
     if (await isChatStateFile(ctl.getWorkingDirectory(), file)) {
       throw new ToolError(`${show(file)} is managed by the toolkit and cannot be changed by a tool.`);
+    }
+    if (await isLmStudioFile(file)) {
+      throw new ToolError(`${show(file)} belongs to LM Studio (its settings, plugins or chats) and cannot be changed by a tool.`);
     }
     return file;
   };

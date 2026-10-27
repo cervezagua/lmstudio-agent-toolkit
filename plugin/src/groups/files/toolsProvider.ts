@@ -22,6 +22,7 @@ import { DEFAULT_MAX_ROWS, MAX_MAX_ROWS, sqliteAvailable, sqliteQuery } from "./
 import { formatTaskLine, TaskManager } from "./lib/tasks";
 import { findAttachment } from "../../shared/attachments";
 import { safe, ToolError } from "../../shared/errors";
+import { isLmStudioFile } from "../../shared/lmStudioFiles";
 import { isChatStateFile, PLANNING_NOTE, readMode } from "../../shared/mode";
 import { displayPath, isInside, realpathOfNearestExisting, resolveSafe } from "../../shared/paths";
 import { COMMANDS_FOLDER } from "../../shared/commands";
@@ -137,6 +138,9 @@ export async function toolsProvider(ctl: ToolsProviderController) {
     const file = await resolveSafe(root, path);
     if (await isChatStateFile(ctl.getWorkingDirectory(), file)) {
       throw new ToolError(`${show(file)} is managed by the toolkit and cannot be changed by a tool.`);
+    }
+    if (await isLmStudioFile(file)) {
+      throw new ToolError(`${show(file)} belongs to LM Studio (its settings, plugins or chats) and cannot be changed by a tool.`);
     }
     // A command file is followed as the user's own instruction in later chats, so only the user
     // writes one: a model steered by a web page must not be able to plant /deploy for next time.
