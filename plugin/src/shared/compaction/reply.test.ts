@@ -420,6 +420,68 @@ describe("runReply", () => {
     expect(await readSummaryState(chatDir)).toEqual({ coversUpTo: 0, summary: "", failures: 1, cutAt: 3 });
   });
 
+  // A model reasoning at length filled the context mid-sentence, and the reply simply stopped.
+  it("carries on a reply that a full context cut off, after making room", async () => {
+    const model = fakeModel(async (_chat, opts, call) => {
+      if (call > 1) return;
+      for (const [round, id] of [[0, "r1"], [1, "r2"], [2, "r3"]] as const) {
+        opts.onRoundStart(round);
+        opts.onPredictionCompleted({ stats: { promptTokensCount: 2000, predictedTokensCount: 100, stopReason: "toolCalls" } });
+        opts.onMessage(assistantCall(id, "read_file", { path: `${id}.txt` }));
+        opts.onMessage(toolResult(id, "y".repeat(5000)));
+        opts.onRoundEnd(round);
+      }
+      opts.onRoundStart(3);
+      opts.onPredictionCompleted({ stats: { promptTokensCount: 9000, predictedTokensCount: 1000, stopReason: "contextLengthReached" } });
+      opts.onMessage(ChatMessage.from({ role: "assistant", content: [{ type: "text", text: "So the driver was never" }] } as any));
+      opts.onRoundEnd(3);
+    });
+    const events = await run(model, [{ role: "user", content: "why is the GPU idle?" }], { usable: 100_000, keepRounds: 3 });
+    expect(model.actCalls).toHaveLength(2);
+    expect(events).toContain("notice:Context: the reply was cut off by a full context, so older tool output was hidden and it went on.");
+    const second = model.actCalls[1].getMessagesArray();
+    expect(second.at(-2).getText()).toBe("So the driver was never");
+    expect(second.at(-1).getText()).toMatch(/^\(Your last message was cut off because the context was full/);
+  });
+
+  it("says so when a full context cut a reply off and there is nothing left to hide", async () => {
+    const model = fakeModel(async (_chat, opts) => {
+      opts.onRoundStart(0);
+      opts.onPredictionCompleted({ stats: { promptTokensCount: 9000, predictedTokensCount: 1000, stopReason: "contextLengthReached" } });
+      opts.onMessage(ChatMessage.from({ role: "assistant", content: [{ type: "text", text: "So" }] } as any));
+      opts.onRoundEnd(0);
+    });
+    const events = await run(model, [{ role: "user", content: "why?" }]);
+    expect(model.actCalls).toHaveLength(1);
+    expect(events).toContain("notice:Context: the context is full, so the reply was cut off. Start a new chat, or raise the model's context length.");
+  });
+
+  // A reasoning model planned a command in its thinking and stopped: the user saw nothing happen.
+  it("asks once for an answer when a reply ends inside the model's thinking", async () => {
+    const model = fakeModel(async (_chat, opts, call) => {
+      opts.onRoundStart(0);
+      opts.onPredictionFragment({ content: "I should run nvidia-smi.", reasoningType: "reasoning" });
+      opts.onPredictionFragment({ content: "", reasoningType: "reasoningEndTag" });
+      if (call === 2) opts.onPredictionFragment({ content: "Running it now.", reasoningType: "none" });
+      opts.onMessage(ChatMessage.from({ role: "assistant", content: [{ type: "text", text: call === 2 ? "Running it now." : "" }] } as any));
+      opts.onRoundEnd(0);
+    });
+    const events = await run(model, [{ role: "user", content: "check the GPU" }]);
+    expect(model.actCalls).toHaveLength(2);
+    expect(model.actCalls[1].getMessagesArray().at(-1).getText()).toMatch(/^\(Your reply ended inside your thinking/);
+    expect(events).toContain("text:Running it now.");
+  });
+
+  it("follows up an empty reply only once", async () => {
+    const model = fakeModel(async (_chat, opts) => {
+      opts.onRoundStart(0);
+      opts.onPredictionFragment({ content: "Hmm.", reasoningType: "reasoning" });
+      opts.onRoundEnd(0);
+    });
+    await run(model, [{ role: "user", content: "check the GPU" }]);
+    expect(model.actCalls).toHaveLength(2);
+  });
+
   it("does not restart when there is no old output to hide", async () => {
     const model = fakeModel(async (_chat, opts) => {
       opts.onRoundStart(0);

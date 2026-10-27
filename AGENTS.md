@@ -22,7 +22,7 @@ npm test
 npm run typecheck
 ```
 
-Both must pass. Add tests for new behavior; they run against a fake LM Studio controller, so they need neither the app nor a model.
+Both must pass. Add tests for new behavior; they run against a fake LM Studio controller, so they need neither the app nor a model. When a change touches what agent-toolkit-loop shows in the chat, also run `npm run chat-doctor` on a few real chats.
 
 ## Conventions
 

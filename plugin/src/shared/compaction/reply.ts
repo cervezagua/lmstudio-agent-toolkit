@@ -162,7 +162,8 @@ export async function runReply(input: {
     return callIds.get(id)!;
   };
   // Which plugin each tool comes from, for the request block and the status, as LM Studio shows them.
-  const pluginOf = new Map<string, string>(input.tools.filter(t => t?.pluginIdentifier).map(t => [t.name, t.pluginIdentifier]));
+  // The SDK runs the last tool of a name, so the last one names the plugin, identifier or not.
+  const pluginOf = new Map<string, string | undefined>(input.tools.map(t => [t?.name, t?.pluginIdentifier]));
   const showRequest = (callId: number, request: { id?: string; name: string; arguments?: Record<string, unknown> }) => {
     if (shown.has(callId)) return;
     shown.add(callId);
@@ -180,17 +181,24 @@ export async function runReply(input: {
   const finish = (callId: number, content: string) => {
     const state = statusOf.get(callId);
     if (state === "toolCallDenied" || state === "toolCallSucceeded" || state === "toolCallFailed") return;
-    if (isFailure(content)) setStatus(callId, { type: "toolCallFailed", error: content.replace(/^"?Error:\s*/, "").split(/\r?\n/)[0].slice(0, 300) });
-    else setStatus(callId, { type: "toolCallSucceeded", timeMs: Date.now() - (startedAt.get(callId) ?? Date.now()) });
+    // MCP tools report a failure as {"isError": true, ...} rather than with "Error:".
+    if (isFailure(content) || /^\s*\{[\s\S]*"isError"\s*:\s*true/.test(content)) {
+      setStatus(callId, { type: "toolCallFailed", error: content.replace(/^"?Error:\s*/, "").split(/\r?\n/)[0].slice(0, 300) });
+    } else {
+      setStatus(callId, { type: "toolCallSucceeded", timeMs: Date.now() - (startedAt.get(callId) ?? Date.now()) });
+    }
   };
 
   const restartMask = { keepRounds: Math.max(1, settings.keepRounds - 2), maxResultChars: settings.maxResultChars };
+  const headroom = Math.min(8000, Math.max(1500, Math.floor(settings.usable * 0.15)));
   let current = build(compacted.system, prompt);
   let produced: Msg[] = [];
   let roundsDone = 0;
   // The SDK's numbers for this round's calls, in order, and those of the last assistant message.
   let roundCallIds: number[] = [];
   let lastCallNumbers: number[] = [];
+  // A reply that ended with nothing but thinking is followed up once, not again and again.
+  let nudgedEmpty = false;
   for (let restart = 0; ; restart++) {
     if (input.maxRounds !== undefined && roundsDone >= input.maxRounds) return;
     const stop = new AbortController();
@@ -199,6 +207,11 @@ export async function runReply(input: {
     // Tokens the last prediction filled, plus the rough size of the results that came after it.
     let used = 0;
     let roundResults = 0;
+    // Whether the last prediction stopped because the context was full, cut off mid-sentence.
+    let cutOff = false;
+    // What the model wrote outside its thinking in the latest round, and whether it thought at all.
+    let roundSaid = "";
+    let roundThought = false;
     try {
       await model.act(current, input.tools, {
         signal,
@@ -207,12 +220,19 @@ export async function runReply(input: {
           roundsDone++;
           roundResults = 0;
           roundCallIds = [];
+          roundSaid = "";
+          roundThought = false;
           out.newRound();
         },
         onPredictionFragment: (fragment: any) => {
-          if (fragment.reasoningType === "reasoning") out.reasoning(fragment.content);
-          else if (fragment.reasoningType === "reasoningEndTag") out.reasoningEnded();
-          else if (fragment.reasoningType === "none" || !fragment.reasoningType) out.text(fragment.content);
+          if (fragment.reasoningType === "reasoning") {
+            roundThought = true;
+            out.reasoning(fragment.content);
+          } else if (fragment.reasoningType === "reasoningEndTag") out.reasoningEnded();
+          else if (fragment.reasoningType === "none" || !fragment.reasoningType) {
+            roundSaid += fragment.content;
+            out.text(fragment.content);
+          }
           // reasoningStartTag is dropped: its text is LM Studio's internal marker.
         },
         // A status for each call from the moment the model starts writing it, as LM Studio's own loop
@@ -266,12 +286,14 @@ export async function runReply(input: {
         onPredictionCompleted: (result: any) => {
           input.hooks?.onPredictionCompleted?.(result);
           used = (result?.stats?.promptTokensCount ?? 0) + (result?.stats?.predictedTokensCount ?? 0);
+          cutOff = result?.stats?.stopReason === "contextLengthReached";
         },
         // Checked once the round's tools have finished and their results are in: stopping earlier
         // would abort the tools mid-run and leave calls without results.
         onRoundEnd: () => {
-          // Leave the next round room to write a whole tool call: running out mid-call ends the chat.
-          if (!roundResults || used + roundResults + 1500 <= settings.usable || restart >= MAX_RESTARTS) return;
+          // Leave the next round room to think and write a whole tool call: running out mid-call ends
+          // the chat, and a model that reasons at length spends thousands of tokens before it writes.
+          if (!roundResults || used + roundResults + headroom <= settings.usable || restart >= MAX_RESTARTS) return;
           // Only worth a restart (the model re-reads the prompt) if there is old output to hide.
           if (maskToolResults([...prompt, ...produced], restartMask).hidden === 0) return;
           overflowing = true;
@@ -324,7 +346,41 @@ export async function runReply(input: {
         handleInvalidToolRequest: (error: Error) =>
           `That tool call could not be used: ${error.message.split(/\r?\n/)[0].slice(0, 200)}. Write it again as one complete call with valid JSON arguments.`,
       });
-      return;
+      if (input.signal.aborted) return;
+      // A reply that ends inside the model's thinking, with no answer and no tool call, shows the
+      // user nothing (a reasoning model can plan a command in its thinking and stop there). The
+      // model is asked once to give its answer or make the call.
+      const lastCalls = produced.at(-1)?.role === "assistant" ? produced.at(-1)!.calls.length : 0;
+      if (!cutOff && roundThought && !roundSaid.trim() && roundCallIds.length === 0 && lastCalls === 0 && !nudgedEmpty) {
+        nudgedEmpty = true;
+        prompt = [
+          ...prompt,
+          ...produced,
+          { role: "user", text: "(Your reply ended inside your thinking, with no answer and no tool call. Give your answer now, or make a tool call if one is still needed.)", calls: [], results: [], n: 0 },
+        ];
+        produced = [];
+        current = build(compacted.system, prompt);
+        if (settings.showNotices) out.notice("Context: the reply ended inside the model's thinking, so it was asked for its answer.");
+        continue;
+      }
+      // The context filled while the model was still writing: its message stops mid-sentence and,
+      // left alone, the reply just ends. It goes on instead, if older output can make room.
+      if (!cutOff) return;
+      const room = maskToolResults([...prompt, ...produced], restartMask);
+      if (restart >= MAX_RESTARTS || room.hidden === 0) {
+        out.notice("Context: the context is full, so the reply was cut off. Start a new chat, or raise the model's context length.");
+        return;
+      }
+      prompt = [
+        ...room.msgs,
+        { role: "user", text: "(Your last message was cut off because the context was full. Older tool output was hidden to make room: carry on from where you stopped.)", calls: [], results: [], n: 0 },
+      ];
+      produced = [];
+      repeats.clear();
+      current = build(compacted.system, prompt);
+      input.refillToolBudget?.();
+      if (settings.showNotices) out.notice("Context: the reply was cut off by a full context, so older tool output was hidden and it went on.");
+      continue;
     } catch (error) {
       if (!overflowing || input.signal.aborted) throw error;
     }

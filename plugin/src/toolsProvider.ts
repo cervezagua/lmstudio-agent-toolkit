@@ -54,7 +54,20 @@ function mentionsMarker(value: unknown, depth = 0): boolean {
 export function withRedaction(tools: Tool[]): Tool[] {
   return tools.map(tool => {
     const implementation: Tool["implementation"] = async (params, ctx) => {
-      const result: unknown = await tool.implementation(params, ctx);
+      let result: unknown;
+      try {
+        result = await tool.implementation(params, ctx);
+      } catch (error: any) {
+        // A thrown error reaches the model too (agent-toolkit-loop hands it on as the result), so it
+        // is redacted like a result: a git or fetch error can carry a URL with a token in it.
+        const hidden = redactDeep(String(error?.message ?? error));
+        if (hidden.count === 0) throw error;
+        ctx.warn(`agent-toolkit hid ${describeRedaction(hidden)} from the model`);
+        const redacted = new Error(String(hidden.value));
+        redacted.name = error?.name ?? "Error";
+        redacted.stack = `${redacted.name}: ${hidden.value}`;
+        throw redacted;
+      }
       const hidden = redactDeep(result);
       if (hidden.count > 0) {
         ctx.warn(`agent-toolkit hid ${describeRedaction(hidden)} from the model`);

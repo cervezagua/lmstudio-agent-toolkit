@@ -56,7 +56,7 @@ LM Studio still saves `/btw` messages in the chat, and its context meter counts 
 ## Good to know
 
 - **It takes over LM Studio's reply loop** for the chats it's enabled in, and rebuilds what the default loop does: text, thinking blocks, tool calls and results. Switch it off and LM Studio's own loop is back exactly as before.
-- **Tool confirmations still work.** Tools come from the other enabled plugins through LM Studio, and the plugin asks for your approval of each call through LM Studio's own confirmation. A call it cannot ask about is not run.
+- **Tool confirmations still work.** Tools come from the other enabled plugins through LM Studio, and the plugin asks for your approval of each call through LM Studio's own confirmation. "Always allow" works as usual. A call it cannot ask about is not run.
 - **Remote models work too.** A model served by a generator plugin such as LM Studio's remote-lmstudio or openai-compat-endpoint runs through the same loop, with the tools. Such a model cannot say how big its context is or count tokens, so set **Usable Context** to its real size (otherwise 32768 is assumed); sizes are estimated from the text. Compaction works before each reply, but a long reply can't make room as it goes, since a remote model doesn't report how full its context is.
 - **Everything is kept on disk.** The whole conversation, tool output included, is written to `.agent-toolkit/compaction/transcript.md` in the chat's folder, so the model can look up output that was hidden. The folder gets a `.gitignore`.
 - **It relies on LM Studio APIs marked experimental.** An LM Studio update could break it; if the tools can't be reached, it says so in the chat and answers without them.

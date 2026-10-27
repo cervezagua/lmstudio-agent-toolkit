@@ -346,5 +346,18 @@ describe("secret redaction", () => {
       ]);
       await expect(call(tools, "broken", {})).rejects.toThrow("disk on fire");
     });
+
+    // agent-toolkit-loop hands a thrown error to the model as the result, so it must not carry secrets.
+    it("hides secrets in an error a tool throws", async () => {
+      const tools = withRedaction([
+        fakeTool("leaky", () => {
+          throw new Error(`push failed for https://x:${TOKEN}@github.com/me/repo.git`);
+        }),
+      ]);
+      const failure = await call(tools, "leaky", {}).catch((error: Error) => error);
+      expect(String((failure as Error).message)).not.toContain(TOKEN);
+      expect(String((failure as Error).stack)).not.toContain(TOKEN);
+      expect(String((failure as Error).message)).toContain("[redacted");
+    });
   });
 });

@@ -31,6 +31,16 @@ It needs LM Studio running with the model available, so it is not part of `npm t
 
 Each report also has an **After an error** table: for each kind of error a tool gives, how often the model's next call to that tool worked and how many calls it took. A hint that helps (the closest text, a likely path) shows as better numbers than the plain error of the same sort. Results are compared only with earlier runs under the same options.
 
+## Checking real chats
+
+LM Studio's API runs MCP plugins only, so no eval can drive agent-toolkit-loop through LM Studio's own chat. What a reply leaves behind in LM Studio is checked instead:
+
+```bash
+npm run chat-doctor -- ~/.lmstudio/working-directories/<chat id>
+```
+
+It reads a saved chat (a `.conversation.json`, or a chat's working folder; the five latest chats without one) and reports replies that look stuck or broken: an approval with no tool card (so no buttons), a card left "calling tool", a call with no result, a reply cut off mid-sentence or made only of thinking, and thinking that leaked into the answer. The same rules run in `plugin/src/shared/compaction/chatOutput.test.ts` against a fake LM Studio. Run it on your recent chats before a release.
+
 ## Adding a task
 
 Make a folder in `evals/tasks/` with:

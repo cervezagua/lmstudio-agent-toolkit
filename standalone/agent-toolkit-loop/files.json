@@ -1,13 +1,16 @@
 {
   "comment": "Files copied from plugin/src at the same relative paths by `npm run sync-standalone`. They are generated: edit the originals in plugin/src.",
   "files": [
+    "shared/compaction/approvals.ts",
     "shared/compaction/capTools.ts",
+    "shared/compaction/chatOutput.ts",
     "shared/compaction/compact.ts",
     "shared/compaction/history.ts",
     "shared/compaction/mask.ts",
     "shared/compaction/pinned.ts",
     "shared/compaction/reply.ts",
     "shared/compaction/summary.ts",
-    "shared/compaction/transcript.ts"
+    "shared/compaction/transcript.ts",
+    "shared/lmStudioHome.ts"
   ]
 }
