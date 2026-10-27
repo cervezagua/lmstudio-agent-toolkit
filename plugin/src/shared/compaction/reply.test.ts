@@ -244,7 +244,9 @@ describe("runReply", () => {
       await opts.guardToolCall(0, 4, guard({ command: "boom" }));
     });
     const asked: string[] = [];
+    const statuses: string[] = [];
     const { out } = recorder();
+    out.toolStatus = (callId, status) => statuses.push(`${callId}:${status.type}`);
     await runReply({
       sdk: { Chat },
       model,
@@ -264,6 +266,17 @@ describe("runReply", () => {
       },
     });
     expect(asked[0]).toBe("local/agent-toolkit run_command ls");
+    // Each call's status card is told it is waiting for the user, then what the user decided.
+    expect(statuses).toEqual([
+      "1:confirmingToolCall",
+      "1:callingTool",
+      "2:confirmingToolCall",
+      "2:toolCallDenied",
+      "3:confirmingToolCall",
+      "3:callingTool",
+      "4:confirmingToolCall",
+      "4:toolCallDenied",
+    ]);
     expect(decisions).toEqual([
       "allow",
       "deny: Not now.",
@@ -357,6 +370,27 @@ describe("runReply", () => {
     await updateTranscript(chatDir, msgs("now add more tests"));
     expect((await readSummaryState(chatDir)).summary).toBe("Goal: fix the parser.");
     expect(await readFile(join(chatDir, ".agent-toolkit", "compaction", "transcript.md"), "utf-8")).toContain("now add more tests");
+  });
+
+  // LM Studio's chat only shows a call's confirmation if the call has a status card: without one a
+  // reply sat waiting for an approval nobody could give.
+  it("keeps a status for each call, from the moment it is written until its result", async () => {
+    const model = fakeModel(async (_chat, opts) => {
+      opts.onRoundStart(0);
+      opts.onToolCallRequestStart(0, 5, {});
+      opts.onToolCallRequestNameReceived(0, 5, "read_file");
+      opts.onToolCallRequestEnd(0, 5, { toolCallRequest: { id: "a", name: "read_file", arguments: { path: "x.js" } } });
+      await opts.guardToolCall(0, 5, { toolCallRequest: { id: "a", name: "read_file", arguments: { path: "x.js" } }, allow: () => {}, deny: () => {} });
+      opts.onToolCallRequestStart(0, 6, {});
+      opts.onToolCallRequestFailure(0, 6, new Error("Unterminated string in JSON"));
+      opts.onMessage(assistantCall("a", "read_file", { path: "x.js" }));
+      opts.onMessage(toolResult("a", "Error: x.js does not exist."));
+    });
+    const statuses: string[] = [];
+    const { out } = recorder();
+    out.toolStatus = (callId, status) => statuses.push(`${callId}:${status.type}${"name" in status && status.name ? ` ${status.name}` : ""}`);
+    await runReply({ sdk: { Chat }, model, history: chatOf([{ role: "user", content: "read it" }]), tools: [], toolTokens: 0, chatDir, settings, out, signal: new AbortController().signal });
+    expect(statuses).toEqual(["5:generatingToolCall", "5:generatingToolCall read_file", "5:callingTool", "6:generatingToolCall", "6:toolCallGenerationFailed", "5:toolCallFailed"]);
   });
 
   it("shows a call without an id once, with the SDK's number, and gives its result the same number", async () => {

@@ -13,13 +13,28 @@ export interface ReplyOutput {
   text(content: string): void;
   reasoning(content: string): void;
   reasoningEnded(): void;
-  toolRequest(callId: number, request: { id?: string; name: string; arguments?: Record<string, unknown> }): void;
+  toolRequest(callId: number, request: { id?: string; name: string; arguments?: Record<string, unknown>; pluginIdentifier?: string }): void;
+  /**
+   * The state of one call, as LM Studio's own loop shows it: generating, confirming, calling, then
+   * succeeded, failed or denied. LM Studio's chat shows a confirmation only for a call it has a status for.
+   */
+  toolStatus?(callId: number, status: ToolStatus): void;
   toolResult(callId: number, toolCallId: string | undefined, content: string): void;
   /** Shown to the user but kept out of what the model sees later. */
   notice(text: string): void;
   /** A side question's answer: shown, kept out of the conversation. */
   sideAnswer(content: string): void;
 }
+
+/** The SDK's ToolStatusStepStateStatus, kept here so the eval runner needs no SDK types. */
+export type ToolStatus =
+  | { type: "generatingToolCall"; name?: string; pluginIdentifier?: string }
+  | { type: "toolCallGenerationFailed"; error: string }
+  | { type: "confirmingToolCall" }
+  | { type: "toolCallDenied"; denyReason?: string }
+  | { type: "callingTool" }
+  | { type: "toolCallFailed"; error: string }
+  | { type: "toolCallSucceeded"; timeMs: number };
 
 export interface ReplySettings extends CompactOptions {
   /** Every this many user messages, the open tasks are restated at the end of the prompt; 0 only when compacting. */
@@ -146,10 +161,27 @@ export async function runReply(input: {
     if (!callIds.has(id)) callIds.set(id, nextOwnId++);
     return callIds.get(id)!;
   };
+  // Which plugin each tool comes from, for the request block and the status, as LM Studio shows them.
+  const pluginOf = new Map<string, string>(input.tools.filter(t => t?.pluginIdentifier).map(t => [t.name, t.pluginIdentifier]));
   const showRequest = (callId: number, request: { id?: string; name: string; arguments?: Record<string, unknown> }) => {
     if (shown.has(callId)) return;
     shown.add(callId);
-    out.toolRequest(callId, { id: request.id, name: request.name, arguments: request.arguments });
+    if (!statusOf.has(callId)) setStatus(callId, { type: "generatingToolCall", name: request.name, pluginIdentifier: pluginOf.get(request.name) });
+    out.toolRequest(callId, { id: request.id, name: request.name, arguments: request.arguments, pluginIdentifier: pluginOf.get(request.name) });
+  };
+  // Each call's state, and when it started running, for the time LM Studio shows once it is done.
+  const statusOf = new Map<number, ToolStatus["type"]>();
+  const startedAt = new Map<number, number>();
+  const setStatus = (callId: number, status: ToolStatus) => {
+    statusOf.set(callId, status.type);
+    if (status.type === "callingTool") startedAt.set(callId, Date.now());
+    out.toolStatus?.(callId, status);
+  };
+  const finish = (callId: number, content: string) => {
+    const state = statusOf.get(callId);
+    if (state === "toolCallDenied" || state === "toolCallSucceeded" || state === "toolCallFailed") return;
+    if (isFailure(content)) setStatus(callId, { type: "toolCallFailed", error: content.replace(/^"?Error:\s*/, "").split(/\r?\n/)[0].slice(0, 300) });
+    else setStatus(callId, { type: "toolCallSucceeded", timeMs: Date.now() - (startedAt.get(callId) ?? Date.now()) });
   };
 
   const restartMask = { keepRounds: Math.max(1, settings.keepRounds - 2), maxResultChars: settings.maxResultChars };
@@ -183,6 +215,13 @@ export async function runReply(input: {
           else if (fragment.reasoningType === "none" || !fragment.reasoningType) out.text(fragment.content);
           // reasoningStartTag is dropped: its text is LM Studio's internal marker.
         },
+        // A status for each call from the moment the model starts writing it, as LM Studio's own loop
+        // keeps; the chat shows a confirmation only for a call that has one.
+        onToolCallRequestStart: (_round: number, callId: number) => setStatus(callId, { type: "generatingToolCall" }),
+        onToolCallRequestNameReceived: (_round: number, callId: number, name: string) =>
+          setStatus(callId, { type: "generatingToolCall", name, pluginIdentifier: pluginOf.get(name) }),
+        onToolCallRequestFailure: (_round: number, callId: number, error: any) =>
+          setStatus(callId, { type: "toolCallGenerationFailed", error: String(error?.message ?? error).split(/\r?\n/)[0].slice(0, 300) }),
         // Shown as soon as the call is written, so a confirmation never names a call the chat has not shown.
         onToolCallRequestEnd: (_round: number, callId: number, info: any) => {
           const request = info?.toolCallRequest;
@@ -206,7 +245,9 @@ export async function runReply(input: {
           });
           for (const [k, result] of msg.results.entries()) {
             roundResults += roughTokens(result.content);
-            out.toolResult(result.id ? numberFor(result.id) : (lastCallNumbers[k] ?? numberFor(undefined)), result.id, result.content);
+            const resultCallId = result.id ? numberFor(result.id) : (lastCallNumbers[k] ?? numberFor(undefined));
+            finish(resultCallId, result.content);
+            out.toolResult(resultCallId, result.id, result.content);
             if (result.id && refused.has(result.id)) continue;
             const key = result.id ? pendingKeys.get(result.id) : undefined;
             if (key && isFailure(result.content)) {
@@ -240,7 +281,13 @@ export async function runReply(input: {
           const request = guard.toolCallRequest;
           const deny = (reason: string) => {
             if (request.id) refused.add(request.id);
+            setStatus(callId, { type: "toolCallDenied", denyReason: reason });
             guard.deny(reason);
+          };
+          const allow = (args?: Record<string, unknown>) => {
+            setStatus(callId, { type: "callingTool" });
+            if (args) guard.allowAndOverrideParameters(args);
+            else guard.allow();
           };
           const failed = failures.get(keyOf(request.name, request.arguments));
           if (failed && failed.count >= 2) {
@@ -254,11 +301,12 @@ export async function runReply(input: {
             return;
           }
           if (!input.confirm) {
-            guard.allow();
+            allow();
             return;
           }
           // The user approves each call, as in LM Studio's own loop. If asking fails, the call does not run.
           try {
+            setStatus(callId, { type: "confirmingToolCall" });
             const decision = await untilAborted(
               input.confirm(callId, {
                 name: request.name,
@@ -268,8 +316,7 @@ export async function runReply(input: {
               signal,
             );
             if (!decision.allow) deny(decision.reason ?? "The user declined this tool call.");
-            else if (decision.arguments) guard.allowAndOverrideParameters(decision.arguments);
-            else guard.allow();
+            else allow(decision.arguments);
           } catch (error: any) {
             deny(`The user could not be asked to approve this call (${error?.message ?? error}), so it was not run.`);
           }
