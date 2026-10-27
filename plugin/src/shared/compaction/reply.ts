@@ -185,6 +185,7 @@ export async function runReply(input: {
   };
 
   const restartMask = { keepRounds: Math.max(1, settings.keepRounds - 2), maxResultChars: settings.maxResultChars };
+  const headroom = Math.min(8000, Math.max(1500, Math.floor(settings.usable * 0.15)));
   let current = build(compacted.system, prompt);
   let produced: Msg[] = [];
   let roundsDone = 0;
@@ -199,6 +200,8 @@ export async function runReply(input: {
     // Tokens the last prediction filled, plus the rough size of the results that came after it.
     let used = 0;
     let roundResults = 0;
+    // Whether the last prediction stopped because the context was full, cut off mid-sentence.
+    let cutOff = false;
     try {
       await model.act(current, input.tools, {
         signal,
@@ -266,12 +269,14 @@ export async function runReply(input: {
         onPredictionCompleted: (result: any) => {
           input.hooks?.onPredictionCompleted?.(result);
           used = (result?.stats?.promptTokensCount ?? 0) + (result?.stats?.predictedTokensCount ?? 0);
+          cutOff = result?.stats?.stopReason === "contextLengthReached";
         },
         // Checked once the round's tools have finished and their results are in: stopping earlier
         // would abort the tools mid-run and leave calls without results.
         onRoundEnd: () => {
-          // Leave the next round room to write a whole tool call: running out mid-call ends the chat.
-          if (!roundResults || used + roundResults + 1500 <= settings.usable || restart >= MAX_RESTARTS) return;
+          // Leave the next round room to think and write a whole tool call: running out mid-call ends
+          // the chat, and a model that reasons at length spends thousands of tokens before it writes.
+          if (!roundResults || used + roundResults + headroom <= settings.usable || restart >= MAX_RESTARTS) return;
           // Only worth a restart (the model re-reads the prompt) if there is old output to hide.
           if (maskToolResults([...prompt, ...produced], restartMask).hidden === 0) return;
           overflowing = true;
@@ -324,7 +329,24 @@ export async function runReply(input: {
         handleInvalidToolRequest: (error: Error) =>
           `That tool call could not be used: ${error.message.split(/\r?\n/)[0].slice(0, 200)}. Write it again as one complete call with valid JSON arguments.`,
       });
-      return;
+      // The context filled while the model was still writing: its message stops mid-sentence and,
+      // left alone, the reply just ends. It goes on instead, if older output can make room.
+      if (!cutOff || input.signal.aborted) return;
+      const room = maskToolResults([...prompt, ...produced], restartMask);
+      if (restart >= MAX_RESTARTS || room.hidden === 0) {
+        out.notice("Context: the context is full, so the reply was cut off. Start a new chat, or raise the model's context length.");
+        return;
+      }
+      prompt = [
+        ...room.msgs,
+        { role: "user", text: "(Your last message was cut off because the context was full. Older tool output was hidden to make room: carry on from where you stopped.)", calls: [], results: [], n: 0 },
+      ];
+      produced = [];
+      repeats.clear();
+      current = build(compacted.system, prompt);
+      input.refillToolBudget?.();
+      if (settings.showNotices) out.notice("Context: the reply was cut off by a full context, so older tool output was hidden and it went on.");
+      continue;
     } catch (error) {
       if (!overflowing || input.signal.aborted) throw error;
     }
