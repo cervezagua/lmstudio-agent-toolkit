@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/cervezagua/lmstudio-agent-toolkit/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/cervezagua/lmstudio-agent-toolkit/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <img alt="Tests" src="https://img.shields.io/badge/tests-957%20passing-brightgreen">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-960%20passing-brightgreen">
   <img alt="Tested on Windows, macOS and Linux" src="https://img.shields.io/badge/tested%20on-Windows%20%7C%20macOS%20%7C%20Linux-informational">
   <a href="https://lmstudio.ai/cervezagua/agent-toolkit"><img alt="LM Studio Hub" src="https://img.shields.io/badge/LM%20Studio%20Hub-cervezagua%2Fagent--toolkit-7c3aed"></a>
 </p>
@@ -70,6 +70,7 @@ LM Studio fetches the dependencies itself. Re-run `npm run setup` after `git pul
 
 | Version | What changed |
 |---|---|
+| [**0.8.0**](https://github.com/cervezagua/lmstudio-agent-toolkit/releases/tag/v0.8.0) | **`/handoff`** writes down where the work stands, and **`/resume`** carries it into a new chat, for when a long chat gets slow. |
 | [**0.7.3**](https://github.com/cervezagua/lmstudio-agent-toolkit/releases/tag/v0.7.3) | agent-toolkit-loop follows LM Studio's **Always allow**, carries on a reply that a full context cut off, and follows up a reply that ended inside the model's thinking. The file tools can no longer change LM Studio's own settings, and errors from the toolkit's tools are checked for secrets before the model sees them. |
 | [**0.7.2**](https://github.com/cervezagua/lmstudio-agent-toolkit/releases/tag/v0.7.2) | With agent-toolkit-loop on, a tool that fails (a script in js-code-sandbox, say) gives the model its error to work with, instead of freezing the chat. If a reply does fail, it ends cleanly with the reason, so Stop is never left greyed out. |
 | [**0.7.1**](https://github.com/cervezagua/lmstudio-agent-toolkit/releases/tag/v0.7.1) | With agent-toolkit-loop on, a tool call that needs your approval shows its Approve and Deny buttons again. In 0.7.0 the reply waited for an approval that couldn't be given. |
