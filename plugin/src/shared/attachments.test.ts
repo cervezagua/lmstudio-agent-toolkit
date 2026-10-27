@@ -445,11 +445,15 @@ describe("the prompt preprocessor", () => {
   const config = (overrides: Record<string, unknown> = {}) => ({
     projectFolder: base,
     readAttachments: true,
+    enableCommands: true,
+    enableCheckpoints: false,
+    scanLoadedFiles: true,
     maxAttachmentChars: 40000,
     enableDocuments: true,
     enableFiles: true,
     enableMemory: false,
     enablePlanMode: false,
+    enableThinkTool: false,
     ...overrides,
   });
   // These run the real reader: the toolkit's own PDF reader, in its own process.

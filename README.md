@@ -37,6 +37,8 @@
 lms get cervezagua/agent-toolkit
 ```
 
+For long chats, also get its companion: `lms get cervezagua/agent-toolkit-loop`.
+
 Then, in LM Studio:
 
 1. **Load a tool-capable model** — LM Studio marks these "Tool use". Give it **32k context or more**.
@@ -91,9 +93,20 @@ One plugin, six groups. Each group is a switch in the plugin's settings, because
 
 Every tool and setting is in the [full reference](plugin/README.md).
 
-### Just one tool?
+### More plugins
 
-Three of the Web tools also come as small plugins of their own:
+**For long chats: [agent-toolkit-loop](standalone/agent-toolkit-loop/README.md).** Enable it next to agent-toolkit, and a chat keeps going past the model's context limit in the same window:
+- **It hides old tool output first,** and summarizes the earlier conversation only when that isn't enough.
+- **It keeps your own words and a list of what was done,** and the model can search the full transcript.
+- **`/btw` side questions** are answered without derailing the task.
+
+```bash
+lms get cervezagua/agent-toolkit-loop
+```
+
+It takes over LM Studio's reply loop for the chats it's enabled in; switch it off and LM Studio's own loop is back.
+
+**Just one tool?** Three of the Web tools also come as small plugins of their own:
 
 | Plugin | What it adds | Install |
 |---|---|---|
@@ -114,7 +127,14 @@ Small models often know how to call a tool but not when to stop. [**agent-toolki
 - **Write an `AGENTS.md`** in your project: how to run the tests, which folders matter, what not to touch. It's loaded into every new chat automatically, so you stop repeating yourself. `CLAUDE.md` works too.
 - **Ask for plan mode on anything big.** *"Enter plan mode and plan how you'd add X"*: while planning, the file-changing tools disappear until the model presents its plan with `exit_plan_mode`.
 - **Point at the file when you know it.** *"The bug is in `src/parse.ts`"* saves a model several searches and a lot of context.
-- **Tell it to prove its work.** *"…and run the tests to show it passes"* turns a guess into a checked result.
+- **Tell it to prove its work.** *"…and run the tests to show it passes"* turns a guess into a checked result. Or type `/test`.
+- **Use the commands.**
+  - `/review` checks your uncommitted changes without touching them.
+  - `/commit` writes the message for you.
+  - `/init` writes an `AGENTS.md`.
+  - Add your own as `.agent-toolkit/commands/<name>.md`.
+- **Undo a whole message's work with `/rewind`.** It lists your messages that changed files; `/rewind 3` puts the files back to how they were before message 3.
+- **Give skills `triggers:`.** A skill with `triggers: [deploy]` is loaded whenever your message says "deploy". Small models rarely load skills on their own.
 - **Read only the part of a page you need.** *"Fetch the pricing page, just the table"* lets the model pass a CSS selector to `fetch_url` instead of reading the whole page into its context.
 - **Summarise a video instead of watching it.** With yt-dlp installed: *"What does this talk say about caching? <YouTube link>"*.
 - **Ask for research, not a single search.** With **Web** and **Research** on: *"Research what changed in Node 24, with sources"*. It reads several pages and answers with a numbered source after each claim. It works best with SearXNG.
@@ -125,7 +145,7 @@ Small models often know how to call a tool but not when to stop. [**agent-toolki
 
 ### Long chats
 
-- **When a chat gets long, have the model call `save_session_summary`**, then start a new chat. The summary is saved as a memory, and the next chat sees it in its memory index. LM Studio plugins can't shorten the history of a running chat.
+- **Enable [agent-toolkit-loop](standalone/agent-toolkit-loop/README.md) for chats that run long.** It keeps the chat going past the context limit, and you can ask `/btw` side questions without derailing the task. If you'd rather start fresh, have the model call `save_session_summary`, then start a new chat that picks it up from the memory index.
 - **Tell it what to remember.** *"Remember that we deploy from the `release` branch"* saves a memory, which every future chat sees in its memory index and can read in full.
 - **Let it search your earlier chats.** Switch on **Search Past Chats** and ask *"what was the command we used to deploy last week?"*. It's off by default, because those chats hold everything you've typed in LM Studio.
 - **Turn a solved problem into a skill.** Switch on **Let the Model Save Skills**, and after a task say *"save what you just did as a skill"*. You see the whole skill before it's written, and future chats can load it.
@@ -205,7 +225,7 @@ For untrusted projects, switch off **Allow Shell Commands** or run LM Studio in 
 
 ## 🚧 Limitations
 
-- LM Studio plugins can't rewrite earlier chat history, so there's no automatic context compaction. Use `save_session_summary` and a new chat.
+- LM Studio plugins can't rewrite earlier chat history. agent-toolkit-loop works around that by sending the model a compacted prompt, so the chat on screen stays complete, and LM Studio's context meter still counts all of it.
 - A plugin can't add its own button to the chat, so the project folder is set in the plugin's settings rather than with a folder picker.
 - All chats share one browser.
 - Results depend on the model.

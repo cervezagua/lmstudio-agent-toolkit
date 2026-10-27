@@ -19,6 +19,8 @@ const baseConfig = {
   enableBackgroundTasks: true,
   enableNotebookTools: true,
   enableDiagnostics: true,
+  autoCheckEdits: true,
+  enableCheckpoints: true,
   enableSqlite: false,
   enableSubagent: false,
   subagentModel: "",
@@ -59,6 +61,7 @@ describe("coder-tools toolsProvider", () => {
       "task_run",
       "task_list",
       "task_output",
+      "task_wait",
       "task_stop",
       "diagnostics",
     ]);
@@ -122,6 +125,9 @@ describe("coder-tools toolsProvider", () => {
     );
     expect(await readFile(join(root, "src", "hello.txt"), "utf-8")).toBe("hi\nworld\n");
     expect(await callTool(tools, "write_file", { path: "src/hello.txt", content: "x" })).toMatch(/^Overwrote/);
+    expect(await callTool(tools, "write_file", { path: "src/hello.txt", content: "x" })).toBe(
+      "No change: src/hello.txt already has exactly this content. Move on to the next step.",
+    );
   });
 
   it("pages through long files", async () => {
@@ -139,6 +145,25 @@ describe("coder-tools toolsProvider", () => {
     );
     expect(await callTool(tools, "grep", { pattern: "([bad" })).toMatch(/^Error: Invalid regular expression/);
   });
+
+  it("reads agent-toolkit-loop's transcript in the chat's folder, and refuses to write there", async () => {
+    await mkdir(join(work, ".agent-toolkit", "compaction"), { recursive: true });
+    await writeFile(join(work, ".agent-toolkit", "compaction", "transcript.md"), "## #m1 user\nhello\n");
+    expect(await callTool(tools, "read_file", { path: ".agent-toolkit/compaction/transcript.md" })).toContain("## #m1 user");
+    expect(await callTool(tools, "write_file", { path: ".agent-toolkit/commands/deploy.md", content: "push it" })).toMatch(
+      /is a command file\. Commands are written by the user, not by tools\./,
+    );
+  });
+
+  it("says in the edit's own result when the edit broke the file's syntax", async () => {
+    await writeFile(join(root, "calc.js"), "function add(a, b) {\n  return a + b;\n}\n");
+    await callTool(tools, "read_file", { path: "calc.js" });
+    const broken = await callTool(tools, "edit_file", { path: "calc.js", old_string: "  return a + b;\n}", new_string: "  return a + b;" });
+    expect(broken).toMatch(/^Edited calc\.js: 1 replacement\.\n\nThe file was written, but node --check found a problem:/);
+    const fixed = await callTool(tools, "edit_file", { path: "calc.js", old_string: "  return a + b;", new_string: "  return a + b;\n}" });
+    expect(fixed).toBe("Edited calc.js: 1 replacement.");
+    await rm(join(root, "calc.js"));
+  }, 30000);
 
   it("refuses to edit a file it has not read, and one that changed underneath", async () => {
     await writeFile(join(root, "unseen.txt"), "first\n");
@@ -355,6 +380,13 @@ describe("coder-tools toolsProvider", () => {
     expect(output).toMatch(/^exit_code: 1\n(stdout|stderr):\n[\s\S]*does-not-exist/);
   });
 
+  // A model writing bash habits (`node x; echo "exit: $?"`) never saw that node failed.
+  it.runIf(process.platform === "win32")("says when a program failed before a later statement succeeded", async () => {
+    const output = await callTool(tools, "run_command", { command: "node -e \"process.exit(3)\"; echo done" });
+    expect(output).toContain("exit_code: 0");
+    expect(output).toContain("[a program in this command exited with code 3; exit_code is the last statement's]");
+  });
+
   it("previews, multi-edits, inserts and undoes", async () => {
     await callTool(tools, "write_file", { path: "edit.txt", content: "alpha\nbeta\ngamma\n" });
 
@@ -429,6 +461,32 @@ describe("coder-tools toolsProvider", () => {
     expect(await callTool(tools, "task_stop", { id })).toMatch(/was already finished/);
   }, 20000);
 
+  // A model waiting out a download should not spend tokens polling: task_wait holds the call instead.
+  it("waits for a background task to finish, or for a line in its output, or gives up after the limit", async () => {
+    const slow = await callTool(tools, "task_run", {
+      command: "node -e \"console.log('downloading'); setTimeout(() => console.log('download complete'), 1500)\"",
+      name: "download",
+    });
+    const id = /task (\w+)/.exec(slow)![1];
+    const done = await callTool(tools, "task_wait", { id, timeout_minutes: 1 });
+    expect(done).toMatch(/^task \w+ \(download\): exited with code 0/);
+    expect(done).toContain("download complete");
+
+    const server = await callTool(tools, "task_run", {
+      command: "node -e \"setTimeout(() => console.log('listening on 3000'), 500); setInterval(() => {}, 1000)\"",
+      name: "server",
+    });
+    const serverId = /task (\w+)/.exec(server)![1];
+    expect(await callTool(tools, "task_wait", { id: serverId, until: "listening on \\d+", timeout_minutes: 1 })).toMatch(
+      /its output matched: listening on 3000/,
+    );
+    expect(await callTool(tools, "task_wait", { id: serverId, until: "never printed", timeout_minutes: 0.1 })).toMatch(
+      /still running after 0\.1 minutes; call task_wait again/,
+    );
+    await callTool(tools, "task_stop", { id: serverId });
+    expect(await callTool(tools, "task_wait", { id: serverId, until: "([" })).toMatch(/^Error: "until" is not a valid regular expression/);
+  }, 40000);
+
   it("keeps state between commands when the shell session is enabled", async () => {
     const sessionTools = await toolsProvider(
       fakeController({ config: { ...baseConfig, projectFolder: root, persistentShell: true }, workingDirectory: work }),
@@ -438,6 +496,9 @@ describe("coder-tools toolsProvider", () => {
     const read = process.platform === "win32" ? "Write-Output $env:LMS_E2E" : "echo $LMS_E2E";
     await callTool(sessionTools, "run_command", { command: set });
     expect(await callTool(sessionTools, "run_command", { command: read })).toContain("sticky");
+    // A string spanning lines left PowerShell's stdin session waiting until the command timed out.
+    const multiline = await callTool(sessionTools, "run_command", { command: "node -e \"\nconsole.log('one')\nconsole.log('two')\"", timeout_seconds: 15 });
+    expect(multiline).toMatch(/^exit_code: 0\nstdout:\none\r?\ntwo/);
     expect(await callTool(sessionTools, "shell_reset", {})).toMatch(/restarted/);
     expect(await callTool(sessionTools, "run_command", { command: read })).not.toContain("sticky");
   }, 60000);

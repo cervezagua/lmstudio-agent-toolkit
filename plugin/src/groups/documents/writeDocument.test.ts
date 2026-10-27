@@ -330,6 +330,8 @@ describe("write_document tool", () => {
     maxPages: 10,
     maxOutputChars: 20000,
     browserChannel: browserChannel ?? "msedge",
+    enableFiles: true,
+    enableCheckpoints: true,
     ...overrides,
   });
   const provider = (overrides: Record<string, unknown> = {}) =>

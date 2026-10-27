@@ -3,7 +3,9 @@ import { configSchematics, globalConfigSchematics } from "../../config";
 import { buildContextBlock, loadInstructionFiles } from "./lib/instructions";
 import { defaultMemoryDirectory, INDEX_FILE, MemoryStore } from "./lib/memoryStore";
 import { gitSnapshot } from "./lib/gitSnapshot";
-import { defaultSkillsDirectory, listSkills, partitionSkills, renderSkillList } from "./lib/skills";
+import { readFile } from "fs/promises";
+import { defaultSkillsDirectory, listSkills, MAX_SKILL_CHARS, partitionSkills, renderSkillList, triggeredSkills } from "./lib/skills";
+import { fenced, shownName } from "../../shared/attachments";
 import { describeFinding, locateFinding, scanForInjection } from "../../shared/injectionScan";
 import { PLANNING_NOTE, readMode } from "../../shared/mode";
 import { describeRedaction, redactSecrets } from "../../shared/redact";
@@ -17,7 +19,11 @@ import { projectRoot } from "../../shared/projectFolder";
  */
 export async function memoryContext(ctl: PromptPreprocessorController): Promise<string | null> {
   const history = await ctl.pullHistory();
-  const hasEarlierUserMessage = history.getMessagesArray().some(message => message.getRole() === "user");
+  // A /btw side question is not part of the conversation: a chat that opens with one still gets its
+  // project context on the first real message.
+  const hasEarlierUserMessage = history
+    .getMessagesArray()
+    .some(message => message.getRole() === "user" && !/^\s*\/btw\b/i.test(message.getText()));
   const config = ctl.getPluginConfig(configSchematics);
 
   if (hasEarlierUserMessage) {
@@ -97,4 +103,40 @@ export async function memoryContext(ctl: PromptPreprocessorController): Promise<
   ];
   ctl.createStatus({ status: "done", text: `agent-toolkit loaded ${loaded.join(", ")}` });
   return block;
+}
+
+/**
+ * The full text of each skill whose `triggers:` appear in the user's message, on any message of the
+ * chat, unless the chat already has it. Small models rarely decide to load a skill themselves; a
+ * keyword they cannot miss. The skill is someone's text the model is told to follow, so it gets the
+ * same scan and redaction as AGENTS.md.
+ */
+export async function triggeredSkillContext(ctl: PromptPreprocessorController, userText: string): Promise<string | null> {
+  const config = ctl.getPluginConfig(configSchematics);
+  if (!config.get("enableSkills")) return null;
+  const all = await listSkills(defaultSkillsDirectory(ctl.getGlobalPluginConfig(globalConfigSchematics).get("skillsDirectory")));
+  const matches = triggeredSkills(all, userText);
+  if (matches.length === 0) return null;
+
+  const earlier = (await ctl.pullHistory()).getMessagesArray().map(message => message.getText()).join("\n");
+  const blocks: string[] = [];
+  for (const { skill, trigger } of matches) {
+    const name = shownName(skill.name);
+    if (earlier.includes(`<skill name="${name}"`)) continue;
+    const text = (await readFile(skill.file, "utf-8").catch(() => ""))
+      .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "")
+      .trim()
+      .slice(0, MAX_SKILL_CHARS);
+    if (!text) continue;
+    const [finding] = config.get("scanLoadedFiles") ? scanForInjection(text) : [];
+    if (finding) {
+      ctl.createStatus({ status: "error", text: `agent-toolkit did not load skill "${name}": ${describeFinding(finding)}` });
+      continue;
+    }
+    const body = config.get("redactSecrets") ? redactSecrets(text).text : text;
+    blocks.push(`<skill name="${name}" loaded-because="your message mentions ${shownName(trigger)}">\n${fenced(body)}\n</skill>`);
+  }
+  if (blocks.length === 0) return null;
+  ctl.createStatus({ status: "done", text: `agent-toolkit loaded the skill${blocks.length > 1 ? "s" : ""} ${matches.map(m => m.skill.name).join(", ")}` });
+  return `<context source="agent-toolkit">Skills that match the user's message. Follow them where they apply.\n${blocks.join("\n")}\n</context>`;
 }

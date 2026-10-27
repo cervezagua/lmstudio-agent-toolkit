@@ -3,6 +3,7 @@ import { commandEnv } from "../../../shared/process";
 import { randomBytes } from "crypto";
 import { mkdir, open, readFile, rename, rm, stat, writeFile } from "fs/promises";
 import { join } from "path";
+import { StringDecoder } from "string_decoder";
 import { ToolError } from "../../../shared/errors";
 import { truncate } from "../../../shared/truncate";
 
@@ -19,6 +20,34 @@ export interface TaskRecord {
 }
 
 export type TaskState = "running" | "exited" | "gone";
+
+/** The most recent output task_wait keeps, and matches "until" against. */
+const WAIT_WINDOW_BYTES = 64 * 1024;
+
+/** Waits `ms`, or less if the signal aborts. */
+const sleep = (ms: number, signal?: AbortSignal) =>
+  new Promise<void>(resolve => {
+    if (signal?.aborted) return resolve();
+    const done = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal?.addEventListener("abort", done, { once: true });
+  });
+
+/** Bytes `start` to `end` of a file. */
+async function readBytes(file: string, start: number, end: number): Promise<Buffer> {
+  const handle = await open(file, "r");
+  try {
+    const buffer = Buffer.alloc(end - start);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, start);
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
 
 /** True while the OS still has a process with this id. */
 export function isAlive(pid: number | null): boolean {
@@ -204,6 +233,60 @@ export class TaskManager {
       }
     }
     return { task, state: taskState(task), text: truncate(text, maxChars), nextOffset: size, totalBytes: size };
+  }
+
+  /**
+   * Waits for a task to finish, or for its output (from `offset`) to match `until`, checking every
+   * `pollMs`. Nothing is generated while a tool waits, so a model can wait out a long download for
+   * free and carry on when it is done.
+   */
+  async wait(
+    id: string,
+    options: { offset: number; until?: RegExp; timeoutMs: number; pollMs?: number; signal?: AbortSignal; onTick?: (elapsedMs: number) => void },
+  ): Promise<{ task: TaskRecord; state: TaskState; matched: string | null; timedOut: boolean; aborted: boolean; text: string; nextOffset: number }> {
+    const started = Date.now();
+    const pollMs = options.pollMs ?? 2000;
+    // Only the new bytes are read on each check, and "until" runs over the recent text alone, so a
+    // chatty log costs little however long the wait, and a slow pattern stays bounded.
+    let offset = options.offset;
+    let recent = "";
+    let matched: string | null = null;
+    let goneOnce = false;
+    // One decoder for the whole wait, so a character split between two reads is not garbled.
+    const decoder = new StringDecoder("utf8");
+    for (;;) {
+      // The state before the read: a task that ended in between still has its last lines read.
+      let task = await this.get(id);
+      let state = taskState(task);
+      if (state === "gone" && !goneOnce) {
+        // Just exited, and its exit code may not be saved yet: look again shortly.
+        goneOnce = true;
+        await sleep(300, options.signal);
+        task = await this.get(id);
+        state = taskState(task);
+      }
+      const size = await stat(task.logFile).then(
+        info => info.size,
+        () => 0,
+      );
+      offset = Math.min(offset, size);
+      // Everything new is read, a window at a time, so a ready line followed by a flood of output
+      // is still found; "until" runs over the window and what came just before it.
+      while (size > offset && matched === null) {
+        const end = Math.min(size, offset + WAIT_WINDOW_BYTES);
+        recent = (recent + decoder.write(await readBytes(task.logFile, offset, end))).slice(-2 * WAIT_WINDOW_BYTES);
+        offset = end;
+        if (options.until) matched = options.until.exec(recent)?.[0] ?? null;
+        recent = recent.slice(-WAIT_WINDOW_BYTES);
+      }
+      const elapsed = Date.now() - started;
+      const done = state !== "running" || matched !== null;
+      const timedOut = !done && elapsed >= options.timeoutMs;
+      const aborted = !done && !timedOut && Boolean(options.signal?.aborted);
+      if (done || timedOut || aborted) return { task, state, matched, timedOut, aborted, text: recent, nextOffset: offset };
+      options.onTick?.(elapsed);
+      await sleep(Math.min(pollMs, Math.max(50, options.timeoutMs - elapsed)), options.signal);
+    }
   }
 
   async stop(id: string) {

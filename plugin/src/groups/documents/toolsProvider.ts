@@ -10,6 +10,7 @@ import { markdownToDocxBuffer } from "./lib/writeDocx";
 import { htmlToPdfBuffer, markdownToPrintHtml } from "./lib/writePdf";
 import { DEFAULT_OCR_PROMPT, IMAGE_EXTENSIONS, ocrImageFile, pickVisionModel, visionModelName } from "./lib/vision";
 import { findAttachment } from "../../shared/attachments";
+import { recordChange } from "../../shared/checkpoints";
 import { safe, ToolError } from "../../shared/errors";
 import { isChatStateFile, readMode } from "../../shared/mode";
 import { displayPath, resolveSafe } from "../../shared/paths";
@@ -239,6 +240,9 @@ export async function toolsProvider(ctl: ToolsProviderController) {
           }
 
           await mkdir(dirname(file), { recursive: true });
+          // For /rewind: a new document can be removed again; an overwritten one is binary and not kept.
+          // Turns are only counted while the Files group is on, as /rewind is part of it.
+          if (config.get("enableFiles") && config.get("enableCheckpoints")) await recordChange(ctl.getWorkingDirectory(), file, null, !existing).catch(() => {});
           await writeFileAtomic(file, buffer);
           const left =
             omittedImages === 0

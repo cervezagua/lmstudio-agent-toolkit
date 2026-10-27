@@ -44,13 +44,13 @@ Without a Project Folder, the model works in the chat's own empty folder and is 
 | `grep` | Searches file contents, returning lines, just file names, or counts. Lines it shows can be edited straight away. |
 | `run_command` | Runs a shell command and returns its real exit code and output. |
 | `shell_reset` | Starts the shell session afresh. |
-| `task_run` · `task_list` · `task_output` · `task_stop` | Run dev servers, watchers and long builds in the background. |
+| `task_run` · `task_list` · `task_output` · `task_wait` · `task_stop` | Run dev servers, downloads and long builds in the background. `task_wait` waits for one to finish, or for a line in its output, without the model generating anything meanwhile. |
 | `diagnostics` | Runs the project's own checkers: tsc, ESLint, Ruff, Pyright, cargo, go vet. |
 | `notebook_read` · `notebook_edit` | Read and change Jupyter notebook cells. Off by default. |
 | `run_subagent` | Answers a search-heavy question in a read-only helper agent. Off by default. |
 | `sqlite_query` | Shows a SQLite database's tables, or runs one read-only query. Off by default. |
 
-Long command output is saved to a file and its path returned, so nothing is lost; a command that floods output keeps its first and last 2 million characters. A path that doesn't exist comes back with the likely one (*"Did you mean: src/signup.js?"*). `grep` gives the same results whether or not [ripgrep](https://github.com/BurntSushi/ripgrep) is installed; ripgrep just makes it faster.
+After every write or edit, a JavaScript, Python or JSON file is checked for syntax, and a problem is reported in the same result (**Check Edits**). Each of your messages is a checkpoint: `/rewind` puts files back (see [Commands](#commands)). Long command output is saved to a file and its path returned, so nothing is lost; a command that floods output keeps its first and last 2 million characters. A path that doesn't exist comes back with the likely one (*"Did you mean: src/signup.js?"*). `grep` gives the same results whether or not [ripgrep](https://github.com/BurntSushi/ripgrep) is installed; ripgrep just makes it faster.
 
 ## 🧠 Memory & Context
 
@@ -65,8 +65,24 @@ Every new chat starts with today's date, your `AGENTS.md` (or `CLAUDE.md`), your
 | `skill_save` | Lets the model save a new skill. Off by default. |
 | `chat_search` | Searches your earlier LM Studio chats. Off by default. |
 | `enter_plan_mode` · `exit_plan_mode` | Plan first: the tools that change files disappear until the plan is presented. |
+| `think` | A place for the model to reason between tool calls. For models without a thinking mode. Off by default. |
 
-Skills use the standard `SKILL.md` layout, the same as Claude Code, Codex and LM Studio Bionic. Point **Skills Directory** at `~/.lmstudio/skills` or `~/.claude/skills` and the skills you already have work here.
+Skills use the standard `SKILL.md` layout, the same as Claude Code, Codex and LM Studio Bionic. Point **Skills Directory** at `~/.lmstudio/skills` or `~/.claude/skills` and the skills you already have work here. Give a skill `triggers:` in its header, like `triggers: [deploy, release notes]`, and its full text is added to any message that mentions one, once per chat. Small models rarely decide to load a skill on their own.
+
+## Commands
+
+Start a message with a command and it becomes that command's instructions:
+
+| Command | What it does |
+|---|---|
+| `/review` | Reviews the uncommitted changes for bugs, security problems and missing tests, without changing anything. |
+| `/test` | Runs the tests and fixes the code until they pass. |
+| `/commit` | Commits related changes with a clear message. Never pushes. |
+| `/init` | Writes an `AGENTS.md` for the project, or improves the one there. |
+| `/rewind` | Lists your messages that changed files; `/rewind 3` puts every file back to how it was before message 3. Changes made by shell commands aren't tracked. |
+| `/help` | Lists the commands. |
+
+Anything after the command goes along: `/review focus on the parser`. A project can add its own as `.agent-toolkit/commands/<name>.md`, with `$ARGUMENTS` where your words go and an optional `description:` header, and can replace a built-in one. Those are scanned like `AGENTS.md`, since a cloned repository can ship them. `/btw` belongs to [agent-toolkit-loop](https://lmstudio.ai/cervezagua/agent-toolkit-loop).
 
 ## 🌿 Git & GitHub
 
@@ -135,6 +151,7 @@ Small models guess at sums and don't know what day it is. These two tools give t
 | Redact Secrets | on | Hides API keys, tokens and private keys in what tools return. Your files are never changed. |
 | Read Attached Files | on | Puts the text of a PDF, Word or text file you attach to a message into that message. |
 | Max Attachment Characters | 40000 | How much of it; never more than half of what the chat's model has left. |
+| Commands | on | `/review`, `/test`, `/commit`, `/init`, `/help`, and the project's own. |
 
 **Attached files.** Attach a document to a message and ask about it: its text goes into the message, so "summarize this" means the document. A long one is cut at the limit, and the model is told how to read the rest; a scanned PDF is read with `ocr_document`. The tools can open what you attached in that chat by its name, and nothing else from LM Studio's own folder. LM Studio's RAG plugin reads attachments too: use one of the two in a chat, not both.
 
@@ -148,7 +165,7 @@ Small models guess at sums and don't know what day it is. These two tools give t
 | Extra Blocked Command Patterns | *(none)* | Your own patterns to refuse. |
 | Persistent Shell Session | on | `cd` and variables carry over between commands. |
 | Max Read Bytes | 256 KB | Bigger files are read in parts. |
-| Background Tasks · Diagnostics | on | |
+| Background Tasks · Diagnostics · Checkpoints · Check Edits | on | |
 | Jupyter Notebook Tools · Research Sub-agent · SQLite Tool | off | |
 | Sub-agent Model | Auto | Chosen from a list of your models. |
 
@@ -159,7 +176,7 @@ Small models guess at sums and don't know what day it is. These two tools give t
 | Instruction Files | `AGENTS.md`, `CLAUDE.md`, `.lmstudio/instructions.md` | Loaded into each new chat. |
 | Inject Memory Index · Git Snapshot · Skills · Plan Mode | on | |
 | Scan Loaded Files | on | Leaves out files written to steer the model. |
-| Let the Model Save Skills · Search Past Chats | off | |
+| Let the Model Save Skills · Search Past Chats · Think Tool | off | |
 | Max Injected Characters | 12000 | |
 
 **Git & GitHub:** Allow Push *(off)* · Enable GitHub Tools *(on)*.

@@ -1,0 +1,17 @@
+{
+  "name": "lms-plugin-agent-toolkit-loop",
+  "version": "1.0.0",
+  "description": "Keeps long LM Studio agent chats going past the context limit, and answers /btw side questions",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@lmstudio/sdk": "2.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.9.0"
+  }
+}

@@ -19,11 +19,16 @@ import { globalConfigSchematics, makeConfigSchematics } from "../plugin/src/conf
 import { promptPreprocessor } from "../plugin/src/index";
 import { fakeController } from "../plugin/src/shared/testing/fake-controller";
 import { toolsProvider } from "../plugin/src/toolsProvider";
+import { runReply } from "../plugin/src/shared/compaction/reply";
 import { errorStats } from "./lib/hints";
 import { type Call, type EvalTask } from "./lib/task";
 
 const repo = join(__dirname, "..");
-const sdk = createRequire(join(repo, "plugin", "package.json"))("@lmstudio/sdk");
+const pluginRequire = createRequire(join(repo, "plugin", "package.json"));
+const sdk = pluginRequire("@lmstudio/sdk");
+// What the SDK itself sends LM Studio for a tool's parameters, to count the tool definitions fully.
+// The SDK depends on it, so it is resolved from the SDK's own folder.
+const { zodToJsonSchema } = createRequire(pluginRequire.resolve("@lmstudio/sdk"))("zod-to-json-schema");
 
 const args = process.argv.slice(2);
 const option = (name: string) => {
@@ -50,8 +55,14 @@ const contextLength = option("context") ? Number(option("context")) : undefined;
  * permission to use plugins, in LM_API_TOKEN.
  */
 const installed = args.includes("--installed");
+/** agent-toolkit-loop in front of the model: off, hiding old tool output only, or summarizing too. */
+const loopMode = (option("loop") ?? "off") as "off" | "mask" | "full";
+if (!["off", "mask", "full"].includes(loopMode)) {
+  console.error("--loop takes off, mask or full");
+  process.exit(1);
+}
 /** Results are compared only with earlier runs under the same conditions. */
-const conditions = `${installed ? "-installed" : ""}${allGroups ? "-all" : ""}${contextLength ? `-ctx${contextLength}` : ""}`;
+const conditions = `${installed ? "-installed" : ""}${allGroups ? "-all" : ""}${contextLength ? `-ctx${contextLength}` : ""}${loopMode !== "off" ? `-loop-${loopMode}` : ""}`;
 
 /**
  * The API can set the installed plugin's chat settings but not its global ones, so its memory and
@@ -113,11 +124,14 @@ interface RunResult {
   failedCalls: number;
   repeatedFailures: number;
   toolsUsed: string[];
+  /** What agent-toolkit-loop said it did to the prompt (--loop). */
+  notices?: string[];
   /** The calls that returned an error, to see what tripped the model up. */
   failures: { name: string; args: string; result: string }[];
   /** Every call, in order: to see where a failed run went wrong, and what a hint led to. */
   trace?: { name: string; args: string; result: string; failed?: boolean }[];
   answer?: string;
+  answers?: string[];
 }
 
 async function loadTasks(): Promise<{ name: string; dir: string; task: EvalTask }[]> {
@@ -164,6 +178,7 @@ async function runOnce(model: any, client: any, systemPrompt: string, name: stri
   const calls: Call[] = [];
   const pending: { id?: string; name: string; args: string }[] = [];
   const answers: string[] = [];
+  const notices: string[] = [];
   let answer = "";
   let rounds = 0;
   let peakContext = 0;
@@ -186,31 +201,80 @@ async function runOnce(model: any, client: any, systemPrompt: string, name: stri
           ? await installedTools(client, chatDir, config)
           : { tools: await toolsProvider(controller(chatDir)), dispose: () => {} };
         answer = "";
+        const record = (message: any) => {
+          conversation.append(message);
+          for (const request of message.getToolCallRequests()) {
+            pending.push({ id: request.id, name: request.name, args: JSON.stringify(request.arguments ?? {}) });
+          }
+          for (const result of message.getToolCallResults()) {
+            const found = pending.findIndex(p => result.toolCallId && p.id === result.toolCallId);
+            const request = pending.splice(found >= 0 ? found : 0, 1)[0] ?? { name: "?", args: "" };
+            const content = String(result.content);
+            const call = { ...request, result: content, failed: /^"?Error\b/.test(content) };
+            calls.push(call);
+            task.afterCall?.(call, project);
+          }
+          if (message.getRole() === "assistant") {
+            const text = withoutThinking(message.getText());
+            if (text) answer = text;
+          }
+        };
+        const completed = (result: any) => (peakContext = Math.max(peakContext, result.stats?.promptTokensCount ?? 0));
         try {
-          await model.act(conversation, tools, {
-            maxPredictionRounds: task.maxRounds ?? 40,
-            signal: abort.signal,
-            onRoundStart: () => rounds++,
-            onPredictionCompleted: (result: any) => (peakContext = Math.max(peakContext, result.stats?.promptTokensCount ?? 0)),
-            onMessage: (message: any) => {
-              conversation.append(message);
-              for (const request of message.getToolCallRequests()) {
-                pending.push({ id: request.id, name: request.name, args: JSON.stringify(request.arguments ?? {}) });
-              }
-              for (const result of message.getToolCallResults()) {
-                const found = pending.findIndex(p => result.toolCallId && p.id === result.toolCallId);
-                const request = pending.splice(found >= 0 ? found : 0, 1)[0] ?? { name: "?", args: "" };
-                const content = String(result.content);
-                const call = { ...request, result: content, failed: /^"?Error\b/.test(content) };
-                calls.push(call);
-                task.afterCall?.(call, project);
-              }
-              if (message.getRole() === "assistant") {
-                const text = withoutThinking(message.getText());
-                if (text) answer = text;
-              }
-            },
-          });
+          if (loopMode === "off") {
+            await model.act(conversation, tools, {
+              maxPredictionRounds: task.maxRounds ?? 40,
+              signal: abort.signal,
+              onRoundStart: () => rounds++,
+              onPredictionCompleted: completed,
+              onMessage: record,
+            });
+          } else {
+            // agent-toolkit-loop's reply, as it runs in LM Studio, with the in-process tools.
+            const definitions = JSON.stringify(
+              tools.map((t: any) => ({
+                name: t.name,
+                description: t.description,
+                parameters: t.parametersJsonSchema ?? (t.parametersSchema ? zodToJsonSchema(t.parametersSchema) : {}),
+              })),
+            );
+            await runReply({
+              sdk,
+              model,
+              history: conversation,
+              tools,
+              toolTokens: (await model.countTokens(definitions)) + 10 * tools.length,
+              chatDir,
+              settings: {
+                usable: contextLength ?? (await model.getContextLength()),
+                high: 0.7,
+                low: 0.45,
+                keepRounds: 6,
+                maxResultChars: 14_000,
+                summarize: loopMode === "full",
+                taskReminderEvery: 4,
+                showNotices: true,
+              },
+              out: {
+                newRound: () => rounds++,
+                text: () => {},
+                reasoning: () => {},
+                reasoningEnded: () => {},
+                toolRequest: () => {},
+                toolResult: () => {},
+                notice: text => notices.push(text),
+                // As in LM Studio, the side answer stays in the saved chat as the assistant's reply.
+                sideAnswer: text => {
+                  conversation.append("assistant", text);
+                  answer = text;
+                },
+              },
+              signal: abort.signal,
+              // The same cap as --loop off, so the modes compare.
+              maxRounds: task.maxRounds ?? 40,
+              hooks: { onMessage: record, onPredictionCompleted: completed },
+            });
+          }
         } finally {
           dispose();
         }
@@ -247,7 +311,8 @@ async function runOnce(model: any, client: any, systemPrompt: string, name: stri
     toolsUsed: [...new Set(calls.map(c => c.name))],
     failures: calls.filter(c => c.failed).map(c => ({ name: c.name, args: c.args.slice(0, 300), result: c.result.slice(0, 500) })),
     trace: calls.map(c => ({ name: c.name, args: c.args.slice(0, 300), result: c.result.slice(0, 300), failed: c.failed })),
-    ...(problems.length ? { answer } : {}),
+    ...(notices.length ? { notices } : {}),
+    ...(problems.length ? { answer, answers } : {}),
   };
 }
 
@@ -323,14 +388,22 @@ async function main() {
   // The SDK reads the API token for --installed from LM_API_TOKEN itself.
   const client = new sdk.LMStudioClient();
   // A context length of its own needs a copy of the model loaded for this run, under its own name.
-  const loaded = !contextLength && (await client.llm.listLoaded()).some((m: any) => m.identifier === modelKey || m.modelKey === modelKey);
+  const evalCopy = contextLength ? `${modelKey}@eval-${contextLength}` : undefined;
+  const alreadyLoaded = await client.llm.listLoaded();
+  // A run that was stopped never unloaded its copy, and loading it again under the same name fails.
+  const leftover = evalCopy && alreadyLoaded.find((m: any) => m.identifier === evalCopy);
+  if (leftover) {
+    console.log(`Unloading ${evalCopy}, left loaded by a run that was stopped...`);
+    await leftover.unload();
+  }
+  const loaded = !contextLength && alreadyLoaded.some((m: any) => m.identifier === modelKey || m.modelKey === modelKey);
   console.log(`${loaded ? "Using the loaded" : "Loading"} model ${modelKey}${contextLength ? ` with a ${contextLength}-token context` : ""}...`);
   // Loaded explicitly, as from LM Studio's model list: a just-in-time load would be unloaded again the
   // moment a tool loads a second model (LM Studio evicts other JIT models), ending the run.
   const model = loaded
     ? await client.llm.model(modelKey)
     : await client.llm.load(modelKey, {
-        identifier: contextLength ? `${modelKey}@eval-${contextLength}` : undefined,
+        identifier: evalCopy,
         config: { contextLength: contextLength ?? 32768 },
         verbose: false,
       });

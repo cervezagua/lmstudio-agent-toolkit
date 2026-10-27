@@ -93,6 +93,17 @@ export function makeConfigSchematics(choices?: ModelChoices) {
     true,
   )
   .field(
+    "enableCommands",
+    "boolean",
+    {
+      displayName: "Commands",
+      subtitle:
+        "Start a message with /review, /test, /commit, /init or /help, or a command of your own from the project's " +
+        ".agent-toolkit/commands/<name>.md, and it becomes that command's instructions.",
+    },
+    true,
+  )
+  .field(
     "maxAttachmentChars",
     "numeric",
     {
@@ -202,6 +213,27 @@ export function makeConfigSchematics(choices?: ModelChoices) {
     {
       displayName: "Diagnostics",
       subtitle: "Adds a diagnostics tool that runs the project's own checkers (tsc, ESLint, Ruff, Pyright, cargo, go vet).",
+      dependencies: onlyWhen("enableFiles"),
+    },
+    true,
+  )
+  .field(
+    "enableCheckpoints",
+    "boolean",
+    {
+      displayName: "Checkpoints",
+      subtitle:
+        "Keeps each file as it was before every message's changes, so /rewind can list them and /rewind 3 puts the project back to before message 3. Changes made by shell commands are not tracked.",
+      dependencies: onlyWhen("enableFiles"),
+    },
+    true,
+  )
+  .field(
+    "autoCheckEdits",
+    "boolean",
+    {
+      displayName: "Check Edits",
+      subtitle: "After a write or edit, checks the file's syntax (JavaScript, Python, JSON) and reports a problem in the same result.",
       dependencies: onlyWhen("enableFiles"),
     },
     true,
@@ -345,6 +377,16 @@ export function makeConfigSchematics(choices?: ModelChoices) {
       dependencies: onlyWhen("enableMemory"),
     },
     true,
+  )
+  .field(
+    "enableThinkTool",
+    "boolean",
+    {
+      displayName: "Think Tool",
+      subtitle: "Adds think: a place to reason between tool calls. Helps models without a thinking mode; skip it for ones that have one.",
+      dependencies: onlyWhen("enableMemory"),
+    },
+    false,
   )
   .field(
     "maxInjectedChars",

@@ -4,6 +4,7 @@ import { dirname, join, relative } from "path";
 import { z } from "zod";
 import { configSchematics } from "../../config";
 import { BackupStore } from "./lib/backups";
+import { ignoredByGit, recordChange } from "../../shared/checkpoints";
 import { findBlockedPattern, parsePatterns } from "./lib/blocklist";
 import { applyEdit, applyEdits, insertLines, previewDiff } from "./lib/edit";
 import { assertFresh, forget, recordRead, recordWrite } from "./lib/fileState";
@@ -11,6 +12,7 @@ import { assertReadableSize, looksBinary, readTextSlice } from "./lib/readText";
 import { writeFileAtomic } from "../../shared/safeWrite";
 import { overflowNote, storeOverflow } from "./lib/overflow";
 import { notFoundMessage } from "./lib/suggest";
+import { quickCheck } from "./lib/quickCheck";
 import { availableCheckers, runChecker, testHint } from "./lib/diagnostics";
 import { editNotebook, parseNotebook, renderNotebook } from "./lib/notebook";
 import { pickSubagentModel, runSubagent } from "./lib/subagent";
@@ -21,7 +23,8 @@ import { formatTaskLine, TaskManager } from "./lib/tasks";
 import { findAttachment } from "../../shared/attachments";
 import { safe, ToolError } from "../../shared/errors";
 import { isChatStateFile, PLANNING_NOTE, readMode } from "../../shared/mode";
-import { displayPath, resolveSafe } from "../../shared/paths";
+import { displayPath, isInside, realpathOfNearestExisting, resolveSafe } from "../../shared/paths";
+import { COMMANDS_FOLDER } from "../../shared/commands";
 import { findExecutable, formatRunResult, runProcess } from "../../shared/process";
 import { NO_PROJECT_FOLDER_NOTE, projectRoot } from "../../shared/projectFolder";
 import { truncate } from "../../shared/truncate";
@@ -43,7 +46,9 @@ function shellInvocation(choice: string, command: string): { file: string; args:
     const script = [
       "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8;$ProgressPreference='SilentlyContinue';$global:LASTEXITCODE=0",
       command,
-      "$__ok=$?; if (-not $__ok) { if ($global:LASTEXITCODE) { exit $global:LASTEXITCODE } else { exit 1 } }",
+      // `node app.js; echo done` ends well even when node failed: say so, or the failure is invisible.
+      "$__ok=$?; if (-not $__ok) { if ($global:LASTEXITCODE) { exit $global:LASTEXITCODE } else { exit 1 } } " +
+        `elseif ($global:LASTEXITCODE) { [Console]::Error.WriteLine("[a program in this command exited with code $($global:LASTEXITCODE); exit_code is the last statement's]") }`,
     ].join("\n");
     return { file: shell, args: ["-NoProfile", "-NonInteractive", "-Command", script] };
   }
@@ -78,7 +83,20 @@ export async function toolsProvider(ctl: ToolsProviderController) {
   // State that must not pollute the user's project lives in the chat's working directory.
   const stateDir = join(ctl.getWorkingDirectory(), ".coder-tools");
   const backups = new BackupStore(join(stateDir, "backups"));
-  const readIfExists = (file: string) => readFile(file, "utf-8").catch(() => null);
+  // Every change is kept twice: the last one per file for undo_edit, and the first one per turn for /rewind.
+  const checkpointsOn = config.get("enableCheckpoints");
+  const remember = async (file: string, previous: string | null) => {
+    await backups.save(file, previous);
+    await ignoredByGit(stateDir);
+    if (checkpointsOn) await recordChange(ctl.getWorkingDirectory(), file, previous).catch(() => {});
+  };
+  // null only for a file that does not exist: one that exists but cannot be read is an error, not
+  // "new" (a /rewind deletes files recorded as new).
+  const readIfExists = (file: string) =>
+    readFile(file, "utf-8").catch((error: NodeJS.ErrnoException) => {
+      if (error?.code === "ENOENT") return null;
+      throw new ToolError(`${show(file)} could not be read (${error?.code ?? error?.message}).`);
+    });
 
   /**
    * Paths resolve inside the project root, or inside the plugin's own state folder (overflow output).
@@ -99,6 +117,12 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       attachmentNames.set(attached.path, attached.name);
       return attached.path;
     }
+    // agent-toolkit-loop's transcript of this chat lives in the chat's own folder, outside the project.
+    // It is the only thing there the model is pointed at, so only that folder is reachable, to read.
+    if (/^\.agent-toolkit[\\/]compaction[\\/]/i.test(path.replace(/^\.[\\/]/, ""))) {
+      const inChat = await resolveSafe(ctl.getWorkingDirectory(), path).catch(() => null);
+      if (inChat && (await stat(inChat).then(s => s.isFile(), () => false))) return inChat;
+    }
     // Missing: say so with the files the model probably meant, not the system's ENOENT and full path.
     if (inRoot) throw new ToolError(await notFoundMessage(root, path, `${show(inRoot)} does not exist.`));
     try {
@@ -113,6 +137,12 @@ export async function toolsProvider(ctl: ToolsProviderController) {
     const file = await resolveSafe(root, path);
     if (await isChatStateFile(ctl.getWorkingDirectory(), file)) {
       throw new ToolError(`${show(file)} is managed by the toolkit and cannot be changed by a tool.`);
+    }
+    // A command file is followed as the user's own instruction in later chats, so only the user
+    // writes one: a model steered by a web page must not be able to plant /deploy for next time.
+    const commands = await realpathOfNearestExisting(join(root, COMMANDS_FOLDER));
+    if (isInside(commands.toLowerCase(), (await realpathOfNearestExisting(file)).toLowerCase())) {
+      throw new ToolError(`${show(file)} is a command file. Commands are written by the user, not by tools.`);
     }
     return file;
   };
@@ -149,6 +179,17 @@ export async function toolsProvider(ctl: ToolsProviderController) {
     await assertFresh(file, show(file), content);
     return { file, content };
   };
+  /**
+   * The result of a write, with the file's quick check added when it found a problem: a broken
+   * edit is reported where it happened, while the model still has the change in mind.
+   */
+  const autoCheck = config.get("autoCheckEdits");
+  const checked = async (file: string, message: string, signal?: AbortSignal) => {
+    if (!autoCheck) return message;
+    const problem = await quickCheck(file, { cwd: root, signal }).catch(() => null);
+    return problem ? `${message}\n\nThe file was written, but ${problem}` : message;
+  };
+
   // memory-tools' plan mode: while planning, the tools that change things are not offered at all.
   const planning = (await readMode(ctl.getWorkingDirectory())).planning;
 
@@ -210,16 +251,25 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         The previous content is kept, so undo_edit can restore it.
       `,
       parameters: { path: z.string(), content: z.string() },
-      implementation: safe(async ({ path, content }) => {
+      implementation: safe(async ({ path, content }, { signal }) => {
         const file = await resolveWritable(path);
         const info = await stat(file).catch(() => null);
         if (info?.isDirectory()) throw new ToolError(`"${path}" is a directory.`);
         const existing = await readIfExists(file);
+        // A small model can write the same file over and over; saying nothing changed breaks the loop.
+        if (existing === content) {
+          await recordWrite(file, content);
+          // Still checked: the same broken file written again is no reason to move on.
+          const problem = autoCheck ? await quickCheck(file, { cwd: root, signal }).catch(() => null) : null;
+          return problem
+            ? `No change: ${show(file)} already has exactly this content, and it is still broken: ${problem}`
+            : `No change: ${show(file)} already has exactly this content. Move on to the next step.`;
+        }
         await mkdir(dirname(file), { recursive: true });
-        await backups.save(file, existing);
+        await remember(file, existing);
         await writeFileAtomic(file, content);
         await recordWrite(file, content);
-        return `${existing === null ? "Created" : "Overwrote"} ${show(file)} (${Buffer.byteLength(content)} bytes).`;
+        return checked(file, `${existing === null ? "Created" : "Overwrote"} ${show(file)} (${Buffer.byteLength(content)} bytes).`, signal);
       }),
     }),
   );
@@ -240,14 +290,14 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         replace_all: z.boolean().optional(),
         preview: z.boolean().optional(),
       },
-      implementation: safe(async ({ path, old_string, new_string, replace_all, preview }) => {
+      implementation: safe(async ({ path, old_string, new_string, replace_all, preview }, { signal }) => {
         const { file, content: original } = await openForEdit(path);
         const { content, replacements } = applyEdit(original, old_string, new_string, replace_all ?? false);
         if (preview) return `Preview of ${show(file)} (nothing written):\n${previewDiff(original, content)}`;
-        await backups.save(file, original);
+        await remember(file, original);
         await writeFileAtomic(file, content);
         await recordWrite(file, content);
-        return `Edited ${show(file)}: ${replacements} replacement${replacements === 1 ? "" : "s"}.`;
+        return checked(file, `Edited ${show(file)}: ${replacements} replacement${replacements === 1 ? "" : "s"}.`, signal);
       }),
     }),
   );
@@ -267,14 +317,14 @@ export async function toolsProvider(ctl: ToolsProviderController) {
           .min(1),
         preview: z.boolean().optional(),
       },
-      implementation: safe(async ({ path, edits, preview }) => {
+      implementation: safe(async ({ path, edits, preview }, { signal }) => {
         const { file, content: original } = await openForEdit(path);
         const { content, replacements } = applyEdits(original, edits);
         if (preview) return `Preview of ${show(file)} (nothing written):\n${previewDiff(original, content)}`;
-        await backups.save(file, original);
+        await remember(file, original);
         await writeFileAtomic(file, content);
         await recordWrite(file, content);
-        return `Edited ${show(file)}: ${edits.length} edits, ${replacements} replacements.`;
+        return checked(file, `Edited ${show(file)}: ${edits.length} edits, ${replacements} replacements.`, signal);
       }),
     }),
   );
@@ -292,7 +342,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         content: z.string(),
         preview: z.boolean().optional(),
       },
-      implementation: safe(async ({ path, after_line, content, preview }) => {
+      implementation: safe(async ({ path, after_line, content, preview }, { signal }) => {
         // Inserting into a file that does not exist yet is allowed, so only existing files go
         // through the read-before-edit check.
         // resolveWritable for a new file too: the toolkit's own state files must not be created here.
@@ -301,10 +351,10 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         const { file, content: original } = existing === null ? { file: target, content: "" } : await openForEdit(path);
         const updated = insertLines(original, after_line, content);
         if (preview) return `Preview of ${show(file)} (nothing written):\n${previewDiff(original, updated)}`;
-        await backups.save(file, existing === null ? null : original);
+        await remember(file, existing === null ? null : original);
         await writeFileAtomic(file, updated);
         await recordWrite(file, updated);
-        return `Inserted ${content.split(/\r?\n/).length} line(s) into ${show(file)} after line ${after_line}.`;
+        return checked(file, `Inserted ${content.split(/\r?\n/).length} line(s) into ${show(file)} after line ${after_line}.`, signal);
       }),
     }),
   );
@@ -316,7 +366,10 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       parameters: { path: z.string() },
       implementation: safe(async ({ path }) => {
         const file = await resolveWritable(path);
+        // For /rewind only; a backup here would become the next thing undo_edit restores.
+        const before = await readIfExists(file);
         const { restored, savedAt } = await backups.restore(file);
+        if (checkpointsOn) await recordChange(ctl.getWorkingDirectory(), file, before).catch(() => {});
         forget(file);
         return restored === "deleted"
           ? `${show(file)} did not exist before that change, so it has been removed again.`
@@ -496,7 +549,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
             source,
             cellType: cell_type,
           });
-          await backups.save(file, original);
+          await remember(file, original);
           const serialized = JSON.stringify(notebook, null, 1) + "\n";
           await writeFileAtomic(file, serialized);
           await recordWrite(file, serialized);
@@ -567,6 +620,11 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         name: "run_command",
         description: text`
           Run a shell command (${shellName}) and return its exit code, stdout and stderr.
+          ${
+            shellName === "pwsh" || shellName === "powershell"
+              ? "This is PowerShell, not bash: the exit code is reported to you, so don't echo $? (True/False here); separate commands with ;."
+              : ""
+          }
           ${
             persistent
               ? "Commands share one persistent shell, so cd, environment variables and activated virtualenvs carry over between calls."
@@ -702,6 +760,49 @@ export async function toolsProvider(ctl: ToolsProviderController) {
                   ? `exited with code ${result.task.exitCode}`
                   : "no longer running (it started before the plugin restarted)";
             return `task ${id} (${result.task.name}): ${status}\nnext_offset: ${result.nextOffset}\n\n${result.text || "(no new output)"}`;
+          }),
+        }),
+        tool({
+          name: "task_wait",
+          description: text`
+            Wait for a background task to finish (or for its output to match "until", a regular
+            expression), then get the end of its output. Nothing is generated while you wait, so use
+            it for downloads, installs and long builds instead of checking task_output again and again.
+            "until" is matched from offset (default: the start); pass next_offset to match only newer lines.
+          `,
+          parameters: {
+            id: z.string(),
+            until: z.string().optional(),
+            timeout_minutes: z.number().min(0.1).max(180).optional(),
+            offset: z.number().int().min(0).optional(),
+          },
+          implementation: safe(async ({ id, until, timeout_minutes, offset }, ctx) => {
+            let pattern: RegExp | undefined;
+            try {
+              pattern = until ? new RegExp(until, "m") : undefined;
+            } catch (error) {
+              throw new ToolError(`"until" is not a valid regular expression: ${(error as Error).message}`);
+            }
+            const minutes = timeout_minutes ?? 30;
+            const task = await tasks.get(id);
+            const result = await tasks.wait(id, {
+              offset: offset ?? 0,
+              until: pattern,
+              timeoutMs: minutes * 60_000,
+              signal: ctx.signal,
+              onTick: elapsed => ctx.status(`Waiting for ${task.name}: ${Math.floor(elapsed / 60_000)} min so far`),
+            });
+            const how = result.matched
+              ? `its output matched: ${result.matched.slice(0, 200)}`
+              : result.timedOut
+                ? `still running after ${minutes} minutes; call task_wait again to keep waiting, or task_stop`
+                : result.aborted
+                  ? "the wait was stopped"
+                  : result.state === "exited"
+                    ? `exited with code ${result.task.exitCode}`
+                    : "no longer running (it started before the plugin restarted)";
+            const tail = result.text ? truncate(result.text.slice(-4000), maxOutputChars) : "(no new output)";
+            return `task ${id} (${result.task.name}): ${how}\nnext_offset: ${result.nextOffset}\n\nEnd of its output:\n${tail}`;
           }),
         }),
         tool({
