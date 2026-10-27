@@ -14,6 +14,7 @@ const CHARS_PER_TOKEN = 3.5;
 function chatOutput(ctl: PredictionLoopHandlerController): ReplyOutput {
   let text: ReturnType<typeof ctl.createContentBlock> | undefined;
   let thinking: ReturnType<typeof ctl.createContentBlock> | undefined;
+  const statuses = new Map<number, ReturnType<typeof ctl.createToolStatus>>();
   const safely = (action: () => void) => {
     try {
       action();
@@ -38,8 +39,19 @@ function chatOutput(ctl: PredictionLoopHandlerController): ReplyOutput {
           toolCallRequestId: request.id,
           name: request.name,
           parameters: request.arguments ?? {},
+          pluginIdentifier: request.pluginIdentifier,
         }),
       ),
+    // LM Studio's chat ties a call's confirmation to its status card: without one, the approval
+    // request is saved but no buttons are shown, and the reply waits forever.
+    toolStatus: (callId, status) =>
+      safely(() => {
+        const existing = statuses.get(callId);
+        if (existing) return existing.setStatus(status);
+        statuses.set(callId, ctl.createToolStatus(callId, status));
+        // The request goes in a block of its own after the card, as in LM Studio's own loop.
+        text = undefined;
+      }),
     toolResult: (callId, toolCallRequestId, content) =>
       safely(() => ctl.createContentBlock({ roleOverride: "tool" }).appendToolResult({ callId, toolCallRequestId, content })),
     notice: content => label("Context", "blue", false, content),
