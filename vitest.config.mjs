@@ -2,7 +2,7 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    include: ["plugin/src/**/*.test.ts", "standalone/*/src/**/*.test.ts"],
+    include: ["plugin/src/**/*.test.ts", "standalone/*/src/**/*.test.ts", "evals/lib/**/*.test.ts"],
     // The copies standalone plugins carry are tested where they live, in plugin/src.
 
     exclude: ["**/node_modules/**"],

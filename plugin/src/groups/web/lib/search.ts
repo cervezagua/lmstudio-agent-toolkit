@@ -204,6 +204,14 @@ export async function searchSearxng(baseUrl: string, query: string, count: numbe
     headers: { "User-Agent": USER_AGENT, Accept: "application/json" },
     signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
   }).catch(error => {
+    // SearXNG answers 403 when its JSON format is off, as in the stock Docker image. Said plainly, not
+    // as an HTML error page: a model given the page searched again and again, then gave up on search.
+    if (error instanceof ToolError && /HTTP 403/.test(error.message)) {
+      throw new ToolError(
+        `SearXNG at ${url.origin} refused the search (HTTP 403): its JSON format is switched off. ` +
+          'Enable "json" under search.formats in its settings.yml. Searching again will not help until then.',
+      );
+    }
     if (error instanceof ToolError) throw error;
     if (error instanceof SyntaxError) {
       throw new ToolError("SearXNG did not return JSON. Enable the json format under search.formats in its settings.yml.");
