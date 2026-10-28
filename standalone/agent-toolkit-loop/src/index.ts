@@ -9,6 +9,8 @@ import { runReply } from "./shared/compaction/reply";
 
 /** About as many characters as a token holds, for caps set in tokens. */
 const CHARS_PER_TOKEN = 3.5;
+/** The low end of that, for room that must not overflow: web pages, data and URLs run near it. */
+const FEW_CHARS_PER_TOKEN = 2.5;
 
 /**
  * LM Studio's folder, found once when the plugin loads, as LM Studio itself does: a pointer file
@@ -62,6 +64,7 @@ async function handlePrediction(ctl: PredictionLoopHandlerController) {
         history,
         tools: capped,
         refillToolBudget: capped.refill,
+        fitToolResults: tokens => capped.fit(tokens * FEW_CHARS_PER_TOKEN),
         toolTokens,
         chatDir: ctl.getWorkingDirectory(),
         settings: {

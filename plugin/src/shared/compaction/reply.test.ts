@@ -81,13 +81,13 @@ const chatOf = (history: any[]) => {
   return chat;
 };
 
-const run = (model: any, history: any[], overrides: Partial<ReplySettings> = {}) => {
+const run = (model: any, history: any[], overrides: Partial<ReplySettings> = {}, tools: any[] = []) => {
   const { events, out } = recorder();
   return runReply({
     sdk: { Chat },
     model,
     history: chatOf(history),
-    tools: [],
+    tools,
     toolTokens: 0,
     chatDir,
     settings: { ...settings, ...overrides },
@@ -343,12 +343,43 @@ describe("runReply", () => {
     });
     const events = await run(model, [{ role: "user", content: "read everything" }], { usable: 10_000, keepRounds: 3 });
     expect(model.actCalls).toHaveLength(2);
-    expect(events).toContain("notice:Context: the reply was filling the context, so older tool output was hidden before it went on.");
+    expect(events).toContain("notice:Context: the reply was filling the context, so older tool output and thinking were left out before it went on.");
     // Every call shown once, with the SDK's number, and every call has its result.
     expect(events.filter(e => e.startsWith("call#") || e.startsWith("result#"))).toEqual(["call#1:read_file", "result#1:" + "y".repeat(5000), "call#2:read_file", "result#2:" + "y".repeat(5000)]);
     const second = model.actCalls[1].getMessagesArray();
     expect(second.map((m: any) => m.getRole())).toEqual(["user", "assistant", "tool", "assistant", "tool"]);
     expect(second[2].getToolCallResults()[0].content).toBe("[output of read_file r1.txt (5000 characters) hidden to save context; call the tool again if you need it]");
+  });
+
+  // The SDK sends each round's thinking back in later rounds; some models' templates keep it, and a
+  // 16k context filled in three rounds with no old tool output to hide.
+  it("leaves earlier thinking out when a reply fills the context, even with no output to hide", async () => {
+    const marker = "__LM_STUDIO_INTERNAL_LSEP_SYNTHETIC_REASONING_END_f4e9a8d2c6b14d0c9e5f3a7b8c1d2e6a__";
+    const thought = "Let me check every candidate carefully. ".repeat(200);
+    // The second act call fills up the same way: a template may drop the thinking anyway, so the
+    // prompt is rebuilt for it only once per reply.
+    const model = fakeModel(async (_chat, opts, call) => {
+      if (call > 2) return;
+      opts.onRoundStart(0);
+      opts.onPredictionFragment({ content: thought, reasoningType: "reasoning" });
+      opts.onPredictionFragment({ content: "", reasoningType: "reasoningEndTag" });
+      opts.onToolCallRequestEnd(0, 1, { toolCallRequest: { id: "l1", name: "list_dir", arguments: {} } });
+      opts.onPredictionCompleted({ stats: { promptTokensCount: 9400, predictedTokensCount: 2500 } });
+      opts.onMessage(assistantCall("l1", "list_dir", {}, thought + marker + "Looking."));
+      opts.onMessage(toolResult("l1", "(empty)"));
+      opts.onRoundEnd(0);
+      if (opts.signal.aborted) {
+        const error = new Error("aborted");
+        error.name = "AbortError";
+        throw error;
+      }
+    });
+    const events = await run(model, [{ role: "user", content: "build it" }], { usable: 12_000 });
+    expect(model.actCalls).toHaveLength(2);
+    expect(events).toContain("notice:Context: the reply was filling the context, so the model's earlier thinking was left out before it went on.");
+    const assistant = model.actCalls[1].getMessagesArray().find((m: any) => m.getRole() === "assistant");
+    expect(assistant.getText()).toBe("Looking.");
+    expect(assistant.getToolCallRequests().map((r: any) => r.name)).toEqual(["list_dir"]);
   });
 
   it("drops the summary when the user edited an earlier message", async () => {
@@ -444,14 +475,33 @@ describe("runReply", () => {
     expect(second.at(-1).getText()).toMatch(/^\(Your last message was cut off because the context was full/);
   });
 
-  it("says so when a full context cut a reply off and there is nothing left to hide", async () => {
+  // With many tools on a 16k context, a model wrote a whole program in one call and ran out of room.
+  it("asks a reply cut off with nothing to hide to go on in smaller steps, once", async () => {
     const model = fakeModel(async (_chat, opts) => {
       opts.onRoundStart(0);
-      opts.onPredictionCompleted({ stats: { promptTokensCount: 9000, predictedTokensCount: 1000, stopReason: "contextLengthReached" } });
+      opts.onPredictionCompleted({ stats: { promptTokensCount: 9400, predictedTokensCount: 6600, stopReason: "contextLengthReached" } });
+      opts.onMessage(ChatMessage.from({ role: "assistant", content: [{ type: "text", text: "thinking ".repeat(2000) }] } as any));
+      opts.onRoundEnd(0);
+    });
+    const events = await run(model, [{ role: "user", content: "build csvstats.js" }], { usable: 16_000 }, [{ name: "write_file" }]);
+    expect(model.actCalls).toHaveLength(2);
+    const retry = model.actCalls[1].getMessagesArray();
+    // The cut-off message is dropped: its thinking would fill the context again.
+    expect(retry.map((m: any) => m.getText())).not.toContain("thinking ".repeat(2000));
+    expect(retry.at(-1).getText()).toMatch(/only about 6600 tokens are left for each reply[\s\S]*write_file with append: true/);
+    expect(events).toContain("notice:Context: the reply was cut off by a full context, so the model was asked to go on in smaller steps.");
+    // Cut off again: it stops, and says why.
+    expect(events).toContain("notice:Context: the context is full, so the reply was cut off. Start a new chat, or raise the model's context length.");
+  });
+
+  it("says so when a full context cut a reply off and there is no room left at all", async () => {
+    const model = fakeModel(async (_chat, opts) => {
+      opts.onRoundStart(0);
+      opts.onPredictionCompleted({ stats: { promptTokensCount: 9500, predictedTokensCount: 500, stopReason: "contextLengthReached" } });
       opts.onMessage(ChatMessage.from({ role: "assistant", content: [{ type: "text", text: "So" }] } as any));
       opts.onRoundEnd(0);
     });
-    const events = await run(model, [{ role: "user", content: "why?" }]);
+    const events = await run(model, [{ role: "user", content: "why?" }], { usable: 10_000 });
     expect(model.actCalls).toHaveLength(1);
     expect(events).toContain("notice:Context: the context is full, so the reply was cut off. Start a new chat, or raise the model's context length.");
   });
@@ -492,6 +542,31 @@ describe("runReply", () => {
     });
     await run(model, [{ role: "user", content: "read it" }], { usable: 10_000 });
     expect(model.actCalls).toHaveLength(1);
+  });
+
+  // A web page bigger than the room left made the next prediction fail outright: "request (43796
+  // tokens) exceeds the available context size (32768 tokens)".
+  it("tells capped tools how much room is left after each prediction", async () => {
+    const model = fakeModel(async (_chat, opts) => {
+      opts.onRoundStart(0);
+      opts.onPredictionCompleted({ stats: { promptTokensCount: 9000, predictedTokensCount: 100 } });
+      opts.onRoundEnd(0);
+    });
+    const fits: number[] = [];
+    const { out } = recorder();
+    await runReply({
+      sdk: { Chat },
+      model,
+      history: chatOf([{ role: "user", content: "fetch it" }]),
+      tools: [],
+      fitToolResults: tokens => fits.push(tokens),
+      toolTokens: 0,
+      chatDir,
+      settings: { ...settings, usable: 16_000 },
+      out,
+      signal: new AbortController().signal,
+    });
+    expect(fits).toEqual([16_000 - 9100 - 1000]);
   });
 
   it("keeps a summarized prompt on the next message instead of summarizing again", async () => {

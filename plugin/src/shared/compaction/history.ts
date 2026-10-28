@@ -28,6 +28,21 @@ export interface Msg {
   original?: unknown;
 }
 
+/**
+ * An assistant message without the model's thinking. Within a reply, the SDK keeps each message's
+ * thinking (before LM Studio's marker, or in <think> tags) in its text, and some models' templates
+ * send it back every round: a few rounds of long thinking can fill a small context.
+ */
+export function withoutThinking(msg: Msg): Msg {
+  if (msg.role !== "assistant") return msg;
+  const text = msg.text
+    .replace(/^[\s\S]*__LM_STUDIO_INTERNAL_LSEP_SYNTHETIC_REASONING_END_[0-9a-f]+__/, "")
+    // Only a block that opens the message: an answer can mention <think> itself (code, docs).
+    .replace(/^\s*<think>[\s\S]*?(<\/think>|$)/i, "")
+    .trimStart();
+  return text === msg.text ? msg : { ...msg, text, original: undefined };
+}
+
 /** Converts the SDK's history. Only the methods every SDK message has are used. */
 export function fromChat(messages: any[]): Msg[] {
   return messages.map((message, index) => ({

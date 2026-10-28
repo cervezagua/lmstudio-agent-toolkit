@@ -10,5 +10,5 @@
     "types": ["node"],
     "typeRoots": ["../plugin/node_modules/@types"]
   },
-  "include": ["run.ts", "lib", "tasks/*/task.ts"]
+  "include": ["run.ts", "tool-sizes.ts", "lib", "tasks/*/task.ts"]
 }

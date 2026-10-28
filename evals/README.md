@@ -31,6 +31,12 @@ It needs LM Studio running with the model available, so it is not part of `npm t
 
 Each report also has an **After an error** table: for each kind of error a tool gives, how often the model's next call to that tool worked and how many calls it took. A hint that helps (the closest text, a likely path) shows as better numbers than the plain error of the same sort. Results are compared only with earlier runs under the same options.
 
+To see how much of a small context the tool definitions take before the model writes a word, with every group on:
+
+```bash
+npx tsx evals/tool-sizes.ts
+```
+
 ## Checking real chats
 
 LM Studio's API runs MCP plugins only, so no eval can drive agent-toolkit-loop through LM Studio's own chat. What a reply leaves behind in LM Studio is checked instead:

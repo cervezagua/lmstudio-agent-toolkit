@@ -188,10 +188,13 @@ export async function toolsProvider(ctl: ToolsProviderController) {
    * edit is reported where it happened, while the model still has the change in mind.
    */
   const autoCheck = config.get("autoCheckEdits");
-  const checked = async (file: string, message: string, signal?: AbortSignal) => {
+  const checked = async (file: string, message: string, signal?: AbortSignal, inParts = false) => {
     if (!autoCheck) return message;
     const problem = await quickCheck(file, { cwd: root, signal }).catch(() => null);
-    return problem ? `${message}\n\nThe file was written, but ${problem}` : message;
+    if (!problem) return message;
+    // A file written in parts is broken until its last part is in.
+    const unfinished = inParts ? " If the file is not finished yet, add the rest with append: true and ignore this until then." : "";
+    return `${message}\n\nThe file was written, but ${problem}${unfinished}`;
   };
 
   // memory-tools' plan mode: while planning, the tools that change things are not offered at all.
@@ -252,14 +255,31 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       description: text`
         Create a file or completely overwrite an existing one with the given content. Parent folders
         are created automatically. To change part of an existing file, prefer edit_file.
-        The previous content is kept, so undo_edit can restore it.
+        The previous content is kept, so undo_edit can restore it. append: true adds the content to
+        the end instead, to write a long file in parts.
       `,
-      parameters: { path: z.string(), content: z.string() },
-      implementation: safe(async ({ path, content }, { signal }) => {
+      parameters: { path: z.string(), content: z.string(), append: z.boolean().optional() },
+      implementation: safe(async ({ path, content, append }, { signal }) => {
         const file = await resolveWritable(path);
         const info = await stat(file).catch(() => null);
         if (info?.isDirectory()) throw new ToolError(`"${path}" is a directory.`);
         const existing = await readIfExists(file);
+        if (append) {
+          if (!content) return `No change: nothing to append to ${show(file)}.`;
+          // The file is written back whole, so bytes that are not UTF-8 text would be replaced.
+          const raw = existing === null ? null : await readFile(file);
+          if (raw && Buffer.compare(Buffer.from(existing!, "utf-8"), raw) !== 0) {
+            throw new ToolError(`${show(file)} is not UTF-8 text, so append cannot add to it without damaging it.`);
+          }
+          const whole = (existing ?? "") + content;
+          await mkdir(dirname(file), { recursive: true });
+          await remember(file, existing);
+          await writeFileAtomic(file, whole);
+          await recordWrite(file, whole);
+          // No running total in the result: the same append made over and over gives the same result,
+          // so agent-toolkit-loop's repeat guard stops it.
+          return checked(file, `Appended ${Buffer.byteLength(content)} bytes to ${show(file)}.`, signal, true);
+        }
         // A small model can write the same file over and over; saying nothing changed breaks the loop.
         if (existing === content) {
           await recordWrite(file, content);
@@ -273,7 +293,8 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         await remember(file, existing);
         await writeFileAtomic(file, content);
         await recordWrite(file, content);
-        return checked(file, `${existing === null ? "Created" : "Overwrote"} ${show(file)} (${Buffer.byteLength(content)} bytes).`, signal);
+        // A new file may be the first of several parts; an overwrite is meant to be complete.
+        return checked(file, `${existing === null ? "Created" : "Overwrote"} ${show(file)} (${Buffer.byteLength(content)} bytes).`, signal, existing === null);
       }),
     }),
   );
