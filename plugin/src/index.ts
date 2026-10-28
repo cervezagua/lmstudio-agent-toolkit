@@ -4,6 +4,7 @@ import { attachmentContext, composeMessage } from "./shared/attachments";
 import { listModelChoices } from "./shared/models";
 import { allCommands, expandCommand } from "./shared/commands";
 import { rewindCommand, startTurn } from "./shared/checkpoints";
+import { doctorMessage, doctorReport, gatherDoctorFacts } from "./shared/doctor";
 import { resumeCommand } from "./shared/handoff";
 import { projectRoot } from "./shared/projectFolder";
 import { memoryContext, triggeredSkillContext } from "./groups/memory/promptPreprocessor";
@@ -30,7 +31,8 @@ export async function promptPreprocessor(ctl: PromptPreprocessorController, user
   if (/^\s*\/btw\b/i.test(userMessage.getText())) return userMessage;
 
   let userText = userMessage.getText();
-  const { root } = projectRoot(config.get("projectFolder"), () => ctl.getWorkingDirectory());
+  const project = projectRoot(config.get("projectFolder"), () => ctl.getWorkingDirectory());
+  const { root } = project;
 
   // Each message is a turn the file tools keep checkpoints for; /rewind lists or restores them.
   if (config.get("enableFiles") && config.get("enableCheckpoints")) {
@@ -47,7 +49,19 @@ export async function promptPreprocessor(ctl: PromptPreprocessorController, user
 
   // /resume carries on from the note /handoff saved in an earlier chat.
   const resume = config.get("enableCommands") ? /^\s*\/resume\b\s*([\s\S]*)$/i.exec(userText) : null;
-  if (resume) {
+  if (config.get("enableCommands") && /^\s*\/doctor\s*$/i.test(userText)) {
+    // Built from what the code finds, not left to the model, which cannot see its own setup. Nothing
+    // else is added: the report is all the model needs, and its words must not trigger skills.
+    try {
+      userMessage.replaceText(doctorMessage(doctorReport(await gatherDoctorFacts(ctl, config, project))));
+      ctl.createStatus({ status: "done", text: "agent-toolkit checked this chat's setup" });
+    } catch (error: any) {
+      if (ctl.abortSignal.aborted) throw error;
+      userMessage.replaceText(doctorMessage(`~ The check could not finish: ${String(error?.message ?? error).split("\n")[0].slice(0, 200)}`));
+      ctl.createStatus({ status: "error", text: "agent-toolkit could not finish checking this chat's setup" });
+    }
+    return userMessage;
+  } else if (resume) {
     const outcome = await resumeCommand(root, resume[1].trim(), { scan: config.get("scanLoadedFiles"), redact: config.get("redactSecrets") });
     userText = outcome.text;
     ctl.createStatus({ status: outcome.ok ? "done" : "error", text: outcome.status });

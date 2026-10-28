@@ -25,7 +25,7 @@ export interface Command {
  * Names a project's own file cannot take: a cloned repository's review.md must not turn the built-in
  * read-only /review into something else, under the same name the user trusts.
  */
-const RESERVED = new Set(["review", "init", "commit", "test", "help", "rewind", "btw", "handoff", "resume"]);
+const RESERVED = new Set(["review", "init", "commit", "test", "help", "rewind", "btw", "handoff", "resume", "doctor"]);
 
 export const BUILT_IN_COMMANDS: Command[] = [
   {
@@ -138,7 +138,7 @@ export function expandCommand(message: string, commands: Command[], options: { s
       name,
       text:
         "The user typed /help. Reply with this list of commands and one line on how to use them, nothing else:\n" +
-        `${list}\n- /resume: carry on from the note /handoff saved\n- /help: this list\nA command is typed at the start of a message, optionally followed by more details.`,
+        `${list}\n- /resume: carry on from the note /handoff saved\n- /doctor: check this chat's setup (the context, the tools, the plugins enabled)\n- /help: this list\nA command is typed at the start of a message, optionally followed by more details.`,
     };
   }
 
