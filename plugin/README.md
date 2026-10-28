@@ -35,7 +35,7 @@ Without a Project Folder, the model works in the chat's own empty folder and is 
 | Tool | What it does |
 |---|---|
 | `read_file` | Reads a file with line numbers; `offset` and `limit` page through big ones. |
-| `write_file` | Creates or overwrites a file. |
+| `write_file` | Creates or overwrites a file, or appends to it (to write a long file in parts). |
 | `edit_file` | Replaces one exact piece of text. It must match once, so nothing else changes. If the text isn't found, it shows the closest lines. |
 | `multi_edit` | Several replacements in one file; if any fails, none are written. |
 | `insert_lines` | Inserts text after a line number. |

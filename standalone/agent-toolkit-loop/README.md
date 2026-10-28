@@ -12,7 +12,7 @@ A plugin cannot make a loaded model's context bigger, and it cannot delete messa
 
 - **It does as little as it can.** Nothing changes until the prompt passes 70% of the context (**Compact At**). Then:
   1. **Old tool output is hidden first.** It's replaced by a one-line note saying where the full text is, with no model call needed. Tool calls and the assistant's own words stay. Studies of coding agents found this matches a model-written summary at half the cost.
-  2. **A summary, only if that's not enough.** Everything before the recent turns is replaced by:
+  2. **A summary, only if that's not enough,** and only when it makes the prompt smaller. On a small context, the earlier messages can be shorter than what would replace them, and then old output stays hidden instead. Everything before the recent turns is replaced by:
      - your own messages, word for word (instructions spread over many turns are what summaries lose first);
      - a list of the files changed, commands run and attempts that failed, read from the tool calls rather than recalled by the model;
      - a short running summary the model keeps up to date.
@@ -21,7 +21,9 @@ A plugin cannot make a loaded model's context bigger, and it cannot delete messa
 - **A failed call isn't repeated forever.** A call that failed twice exactly as written is refused the third time, with the reason. Older failed calls are described in a line instead of being shown again.
 - **A garbled tool call doesn't end the reply.** The model is told what was wrong and writes it again.
 - **A long reply can make room as it goes.** If a reply's own tool results fill the context, older output is hidden and the reply carries on, instead of dying in the middle of a tool call.
-- **Huge tool results are cut,** keeping their start and end, so one big result from any plugin or MCP server cannot fill the context.
+- **Earlier thinking isn't sent again.** Within one reply, LM Studio sends the model's thinking from earlier rounds back to it, for models whose template keeps it. On a small context that alone can fill it, so the loop leaves it out.
+- **A reply cut off by a full context goes on.** With nothing left to hide, the model is told how much room is left and asked once to carry on in smaller steps, such as writing a long file in parts.
+- **Huge tool results are cut,** keeping their start and end, so one big result from any plugin or MCP server cannot fill the context. Each result also gets no more than the room the reply has left.
 
 ## `/btw`: side questions
 
@@ -61,4 +63,4 @@ LM Studio still saves `/btw` messages in the chat, and its context meter counts 
 - **Everything is kept on disk.** The whole conversation, tool output included, is written to `.agent-toolkit/compaction/transcript.md` in the chat's folder, so the model can look up output that was hidden. The folder gets a `.gitignore`.
 - **It relies on LM Studio APIs marked experimental.** An LM Studio update could break it; if the tools can't be reached, it says so in the chat and answers without them.
 - **Summaries are written by your model.** A small model writes a small-model summary, which is why your own words and the list of steps are kept verbatim beside it.
-- **Tool definitions are a fixed cost** on every message, and no compaction reduces them. Switch off the agent-toolkit groups you don't need.
+- **Tool definitions are a fixed cost** on every message, and no compaction reduces them. Switch off the agent-toolkit groups you don't need; agent-toolkit's `/doctor` shows how much of the context they take.
