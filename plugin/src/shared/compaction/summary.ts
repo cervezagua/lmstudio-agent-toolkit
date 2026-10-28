@@ -5,6 +5,8 @@ import { compactionFolder, renderMessage } from "./transcript";
 
 /** After this many failures in a row, a chat stops trying to summarize and only hides old output. */
 export const MAX_SUMMARY_FAILURES = 3;
+/** Most tokens the model may write for one summary. */
+const MAX_SUMMARY_TOKENS = 900;
 
 export interface SummaryState {
   /** The last message number the summary covers. */
@@ -88,7 +90,7 @@ export async function updateSummary(
         { role: "system", content: INSTRUCTIONS },
         { role: "user", content: prompt },
       ],
-      { maxTokens: 900, temperature: 0.2, signal: options.signal },
+      { maxTokens: MAX_SUMMARY_TOKENS, temperature: 0.2, signal: options.signal },
     );
     const summary = (result.nonReasoningContent ?? result.content).replace(/<think>[\s\S]*?<\/think>/g, "").trim();
     if (!summary) throw new Error("the model wrote no summary");
