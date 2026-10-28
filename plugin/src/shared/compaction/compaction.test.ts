@@ -234,6 +234,18 @@ describe("capTools", () => {
     expect(await small.implementation()).toBe("short");
   });
 
+  it("fits the shared budget to the room left, and refills it only up to the full budget", async () => {
+    const tools = capTools([{ implementation: async () => "x".repeat(5000) }], { perResult: 4000, budget: 8000 });
+    tools.fit(1000);
+    expect(String(await tools[0].implementation())).toContain("The context for tool output is used up");
+    tools.refill();
+    tools.fit(-50);
+    expect(String(await tools[0].implementation()).length).toBeLessThan(500);
+    tools.refill();
+    tools.fit(100_000);
+    expect(String(await tools[0].implementation())).toContain("[cut to fit the context; calling the tool again returns the same text.]");
+  });
+
   // js-code-sandbox throws when a script fails; the SDK then ended the whole reply, leaving the chat
   // stuck on "calling tool" with no result.
   it("turns a tool that throws into an error result the model can read", async () => {

@@ -17,7 +17,7 @@
 | 📄 | [Documents](#-documents) | off | Read PDFs, scans and images, look at pictures, write Word and PDF files |
 | 🧮 | [Utilities](#-utilities) | off | Exact arithmetic, and today's date and time |
 
-Each group is a switch in the plugin's settings. Leave on only what you need, because small models choose better from a short tool list.
+Each group is a switch in the plugin's settings. Leave on only what you need, because small models choose better from a short tool list. The tools' descriptions also take room on every message: with every group on, about 9,600 tokens, more than half of a 16k context.
 
 ## Getting started
 

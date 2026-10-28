@@ -19,6 +19,7 @@ import { globalConfigSchematics, makeConfigSchematics } from "../plugin/src/conf
 import { promptPreprocessor } from "../plugin/src/index";
 import { fakeController } from "../plugin/src/shared/testing/fake-controller";
 import { toolsProvider } from "../plugin/src/toolsProvider";
+import { capTools } from "../plugin/src/shared/compaction/capTools";
 import { runReply } from "../plugin/src/shared/compaction/reply";
 import { errorStats } from "./lib/hints";
 import { type Call, type EvalTask } from "./lib/task";
@@ -238,15 +239,20 @@ async function runOnce(model: any, client: any, systemPrompt: string, name: stri
                 parameters: t.parametersJsonSchema ?? (t.parametersSchema ? zodToJsonSchema(t.parametersSchema) : {}),
               })),
             );
+            const usable = contextLength ?? (await model.getContextLength());
+            // Capped as agent-toolkit-loop caps them (its CHARS_PER_TOKEN and FEW_CHARS_PER_TOKEN).
+            const capped = capTools(tools, { perResult: 14_000, budget: Math.floor(usable * 0.5 * 3.5) });
             await runReply({
               sdk,
               model,
               history: conversation,
-              tools,
+              tools: capped,
+              refillToolBudget: capped.refill,
+              fitToolResults: tokens => capped.fit(tokens * 2.5),
               toolTokens: (await model.countTokens(definitions)) + 10 * tools.length,
               chatDir,
               settings: {
-                usable: contextLength ?? (await model.getContextLength()),
+                usable,
                 high: 0.7,
                 low: 0.45,
                 keepRounds: 6,

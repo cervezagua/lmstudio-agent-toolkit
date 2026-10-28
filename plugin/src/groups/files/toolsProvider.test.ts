@@ -165,6 +165,29 @@ describe("coder-tools toolsProvider", () => {
     await rm(join(root, "calc.js"));
   }, 30000);
 
+  // On a small context, one call with a whole program can run out of room halfway.
+  it("writes a long file in parts, and says a part may look broken until the rest is in", async () => {
+    const first = await callTool(tools, "write_file", { path: "parts.js", content: "function add(a, b) {\n" });
+    expect(first).toMatch(/^Created parts\.js[\s\S]*node --check found a problem[\s\S]*add the rest with append: true/);
+    expect(await callTool(tools, "write_file", { path: "parts.js", content: "  return a + b;\n}\n", append: true })).toBe(
+      "Appended 18 bytes to parts.js.",
+    );
+    expect(await readFile(join(root, "parts.js"), "utf-8")).toBe("function add(a, b) {\n  return a + b;\n}\n");
+    // Appending to a file that is not there yet creates it, and undo_edit takes back one part.
+    expect(await callTool(tools, "write_file", { path: "new.txt", content: "a", append: true })).toMatch(/^Appended 1 bytes to new\.txt/);
+    await callTool(tools, "undo_edit", { path: "parts.js" });
+    expect(await readFile(join(root, "parts.js"), "utf-8")).toBe("function add(a, b) {\n");
+    // An overwrite is meant to be complete: no hint that a broken result may be ignored.
+    expect(await callTool(tools, "write_file", { path: "parts.js", content: "function f( {\n" })).not.toMatch(/append: true/);
+    // A file that is not UTF-8 text would be damaged by writing it back whole.
+    await writeFile(join(root, "latin1.txt"), Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]));
+    expect(await callTool(tools, "write_file", { path: "latin1.txt", content: "more", append: true })).toMatch(/^Error: latin1\.txt is not UTF-8 text/);
+    expect(await readFile(join(root, "latin1.txt"))).toEqual(Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]));
+    await rm(join(root, "parts.js"));
+    await rm(join(root, "new.txt"));
+    await rm(join(root, "latin1.txt"));
+  }, 30000);
+
   it("refuses to edit a file it has not read, and one that changed underneath", async () => {
     await writeFile(join(root, "unseen.txt"), "first\n");
     expect(await callTool(tools, "edit_file", { path: "unseen.txt", old_string: "first", new_string: "second" })).toMatch(

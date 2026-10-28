@@ -9,12 +9,13 @@ const SMALL = 200;
  * result keeps its shape (an MCP result stays an MCP result), since some callers check it. The tool
  * still runs in full; only what the model reads is cut, and it is told so. A tool that throws gives
  * an "Error: ..." result instead of ending the reply. `refill` restores the
- * shared budget, for when older output was hidden to make room.
+ * shared budget, for when older output was hidden to make room; `fit` lowers it to the room the
+ * context has left, so a reply already near full is not pushed past it by one big result.
  */
 export function capTools<T extends { implementation: (...args: any[]) => any }>(
   tools: T[],
   options: { perResult: number; budget: number },
-): T[] & { refill(): void } {
+): T[] & { refill(): void; fit(chars: number): void } {
   let left = options.budget;
   const cap = (value: unknown): unknown => {
     if (typeof value === "string") {
@@ -42,5 +43,8 @@ export function capTools<T extends { implementation: (...args: any[]) => any }>(
       }
     },
   }));
-  return Object.assign(wrapped, { refill: () => void (left = options.budget) });
+  return Object.assign(wrapped, {
+    refill: () => void (left = options.budget),
+    fit: (chars: number) => void (left = Math.max(0, Math.min(left, Math.floor(chars)))),
+  });
 }

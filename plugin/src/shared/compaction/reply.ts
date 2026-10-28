@@ -1,5 +1,5 @@
 import { compact, type CompactOptions } from "./compact";
-import { fromChat, isFailure, isSideQuestion, roughSize, roughTokens, toMessageData, withoutSideQuestions, withText, type Msg } from "./history";
+import { fromChat, isFailure, isSideQuestion, roughSize, roughTokens, toMessageData, withoutSideQuestions, withoutThinking, withText, type Msg } from "./history";
 import { maskToolResults } from "./mask";
 import { openTasks } from "./pinned";
 import { updateTranscript } from "./transcript";
@@ -46,6 +46,8 @@ export interface ReplySettings extends CompactOptions {
 const MAX_SIDE_EXCHANGES = 20;
 /** Times one reply may stop to make room between rounds of tool calls before it gives up trying. */
 const MAX_RESTARTS = 3;
+/** Tokens kept free of tool results: the template's markers around them, and a start on the next message. */
+const RESULT_MARGIN = 1000;
 
 /**
  * One reply of agent-toolkit-loop: answers a /btw side question without tools, or runs the model on
@@ -77,6 +79,8 @@ export async function runReply(input: {
   maxRounds?: number;
   /** Called when older output was hidden mid-reply, so capped tools may hand out their full share again. */
   refillToolBudget?: () => void;
+  /** Called after each prediction with the tokens left for tool results, so capped tools hand out no more. */
+  fitToolResults?: (tokens: number) => void;
   /** For the eval runner: every message the reply produces, and every prediction's stats. */
   hooks?: { onMessage?: (message: any) => void; onPredictionCompleted?: (result: any) => void };
 }): Promise<void> {
@@ -88,7 +92,7 @@ export async function runReply(input: {
 
   const build = (systemText: string, list: Msg[]) => {
     const chat = sdk.Chat.from(systemText ? [{ role: "system", content: systemText }] : []);
-    for (const msg of list) chat.append(msg.original ?? toMessageData(msg));
+    for (const msg of list.map(withoutThinking)) chat.append(msg.original ?? toMessageData(msg));
     return chat;
   };
   const estimate = (systemText: string, list: Msg[]) => roughTokens(systemText) + list.reduce((s, m) => s + roughSize(m), 0) + input.toolTokens;
@@ -199,6 +203,12 @@ export async function runReply(input: {
   let lastCallNumbers: number[] = [];
   // A reply that ended with nothing but thinking is followed up once, not again and again.
   let nudgedEmpty = false;
+  // A reply cut off with nothing to hide is tried once more, asked to fit in the room there is.
+  let askedToFit = false;
+  // The prompt is rebuilt without earlier thinking at most once per reply just for that.
+  let shedThinking = false;
+  const carriedThinking = (list: Msg[]) => list.reduce((sum, m) => sum + roughTokens(m.text) - roughTokens(withoutThinking(m).text), 0);
+  const writesInParts = input.tools.some(t => t?.name === "write_file");
   for (let restart = 0; ; restart++) {
     if (input.maxRounds !== undefined && roundsDone >= input.maxRounds) return;
     const stop = new AbortController();
@@ -206,7 +216,10 @@ export async function runReply(input: {
     let overflowing = false;
     // Tokens the last prediction filled, plus the rough size of the results that came after it.
     let used = 0;
+    let promptTokens = 0;
     let roundResults = 0;
+    // Whether the restart about to happen hides old tool output (rather than only leaving out thinking).
+    let hidesOutput = false;
     // Whether the last prediction stopped because the context was full, cut off mid-sentence.
     let cutOff = false;
     // What the model wrote outside its thinking in the latest round, and whether it thought at all.
@@ -285,8 +298,13 @@ export async function runReply(input: {
         },
         onPredictionCompleted: (result: any) => {
           input.hooks?.onPredictionCompleted?.(result);
-          used = (result?.stats?.promptTokensCount ?? 0) + (result?.stats?.predictedTokensCount ?? 0);
+          promptTokens = result?.stats?.promptTokensCount ?? 0;
+          used = promptTokens + (result?.stats?.predictedTokensCount ?? 0);
           cutOff = result?.stats?.stopReason === "contextLengthReached";
+          // The round's results must fit what is left, or the next prediction is refused outright
+          // (a web page or PDF can be larger than the whole context). Room past the headroom is
+          // still made by hiding older output, between rounds.
+          input.fitToolResults?.(settings.usable - used - RESULT_MARGIN);
         },
         // Checked once the round's tools have finished and their results are in: stopping earlier
         // would abort the tools mid-run and leave calls without results.
@@ -294,8 +312,12 @@ export async function runReply(input: {
           // Leave the next round room to think and write a whole tool call: running out mid-call ends
           // the chat, and a model that reasons at length spends thousands of tokens before it writes.
           if (!roundResults || used + roundResults + headroom <= settings.usable || restart >= MAX_RESTARTS) return;
-          // Only worth a restart (the model re-reads the prompt) if there is old output to hide.
-          if (maskToolResults([...prompt, ...produced], restartMask).hidden === 0) return;
+          // Only worth a restart (the model re-reads the prompt) if there is old output to hide, or,
+          // once per reply, thinking from earlier rounds that the SDK sends back and a rebuilt prompt
+          // leaves out. Some templates drop that thinking anyway, so once is enough.
+          hidesOutput = maskToolResults([...prompt, ...produced], restartMask).hidden > 0;
+          if (!hidesOutput && (shedThinking || carriedThinking(produced) < 500)) return;
+          if (!hidesOutput) shedThinking = true;
           overflowing = true;
           stop.abort();
         },
@@ -367,6 +389,31 @@ export async function runReply(input: {
       // left alone, the reply just ends. It goes on instead, if older output can make room.
       if (!cutOff) return;
       const room = maskToolResults([...prompt, ...produced], restartMask);
+      // Nothing to hide, typically on a small context with many tools: the model spent the room on
+      // thinking, or on one big file in a single call. It goes again, told how much room there is;
+      // the cut-off message is dropped, as its thinking would fill the context again.
+      const free = settings.usable - promptTokens;
+      if (room.hidden === 0 && !askedToFit && restart < MAX_RESTARTS && free >= 1000) {
+        askedToFit = true;
+        const last = produced.at(-1);
+        const kept = last?.role === "assistant" && last.calls.length === 0 ? produced.slice(0, -1) : produced;
+        const parts = writesInParts ? " Write a long file in parts: write_file with the first part, then write_file with append: true for each next part." : "";
+        prompt = [
+          ...prompt,
+          ...kept,
+          {
+            role: "user",
+            text: `(Your last message was cut off because the context was full: only about ${free} tokens are left for each reply, thinking included. Think briefly and keep each message short.${parts} Carry on.)`,
+            calls: [],
+            results: [],
+            n: 0,
+          },
+        ];
+        produced = [];
+        current = build(compacted.system, prompt);
+        if (settings.showNotices) out.notice("Context: the reply was cut off by a full context, so the model was asked to go on in smaller steps.");
+        continue;
+      }
       if (restart >= MAX_RESTARTS || room.hidden === 0) {
         out.notice("Context: the context is full, so the reply was cut off. Start a new chat, or raise the model's context length.");
         return;
@@ -388,12 +435,20 @@ export async function runReply(input: {
     // call, so the pause is short), the reply's own messages so far included.
     prompt = maskToolResults([...prompt, ...produced], restartMask).msgs;
     produced = [];
-    // Output just hidden may need reading again, as its placeholder says.
-    repeats.clear();
     current = build(compacted.system, prompt);
-    // Room was made, so the results that follow may take their share again.
-    input.refillToolBudget?.();
-    if (settings.showNotices) out.notice("Context: the reply was filling the context, so older tool output was hidden before it went on.");
+    if (hidesOutput) {
+      // Output just hidden may need reading again, as its placeholder says.
+      repeats.clear();
+      // Room was made, so the results that follow may take their share again.
+      input.refillToolBudget?.();
+    }
+    if (settings.showNotices) {
+      out.notice(
+        hidesOutput
+          ? "Context: the reply was filling the context, so older tool output and thinking were left out before it went on."
+          : "Context: the reply was filling the context, so the model's earlier thinking was left out before it went on.",
+      );
+    }
   }
 
   /** The promise's outcome, or a rejection as soon as the signal aborts (a confirmation left open). */
