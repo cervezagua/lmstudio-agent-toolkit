@@ -87,7 +87,18 @@ export async function compact(input: {
 
   const cut = chooseCut(masked, options.usable * 0.35);
   if (cut <= 0) return settle({ system, msgs: masked, stage: 1, before, after: afterMask, note: "the recent turns alone fill the context" });
-  return settle(await summarized(cut), masked[cut].n);
+  // The record has budgets of its own, so replacing a short earlier part can make the prompt bigger
+  // (on a small context, most of it is tool definitions). Measured without the model first: the
+  // record with this chat's last summary in it, as big as the next is likely to be (none yet: without
+  // one). On a tight context even a small gain is worth having, so a first summary is tried whenever
+  // the record is smaller.
+  const estimate = await summarized(cut, state.summary || null);
+  const tooSmall = { system, msgs: masked, stage: 1 as const, before, after: afterMask, note: "the earlier part is too short to gain from a summary" };
+  if (estimate.after >= afterMask) return settle(tooSmall);
+  const result = await summarized(cut);
+  // The summary is saved, so its size holds back the next try rather than the model being asked again.
+  if (result.after >= afterMask) return settle(tooSmall);
+  return settle(result, masked[cut].n);
 
   /** The prompt with everything before `cut` replaced by a record of it. */
   async function summarized(cut: number, known?: string | null): Promise<Compacted> {

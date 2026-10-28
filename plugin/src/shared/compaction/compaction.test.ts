@@ -118,6 +118,8 @@ describe("compact", () => {
   // A stand-in for the model's count: the rough size of everything in the prompt.
   const count = async (system: string, msgs: Msg[]) =>
     roughTokens(system) + msgs.reduce((sum, m) => sum + roughTokens(m.text) + m.results.reduce((s, r) => s + roughTokens(r.content), 0), 0);
+  // Room enough that a summary, which may take up to 900 tokens, can make the prompt smaller.
+  const roomy = { ...options, usable: 4000 };
   const summarizer = (reply: string | Error) => ({
     calls: 0,
     async respond() {
@@ -146,13 +148,13 @@ describe("compact", () => {
   it("replaces older turns with a labelled record, leaving the system prompt alone", async () => {
     const msgs = [
       user("Build the parser. Keep it under 100 lines."),
-      say("p".repeat(3000)),
+      say("p".repeat(12_000)),
       user("now the tests"),
       say("q".repeat(200)),
       user("and the docs"),
     ];
     const model = summarizer("Goal: parser.\nNext step: docs.");
-    const done = await compact({ system: "You are helpful.", msgs, count, model, chatDir, options });
+    const done = await compact({ system: "You are helpful.", msgs, count, model, chatDir, options: roomy });
     expect(done.stage).toBe(2);
     expect(done.system).toBe("You are helpful.");
     const record = done.msgs[0].text;
@@ -166,11 +168,35 @@ describe("compact", () => {
   });
 
   it("still compacts when the summary fails, and says so", async () => {
-    const msgs = [user("Build it."), say("p".repeat(3000)), user("next")];
-    const done = await compact({ system: "sys", msgs, count, model: summarizer(new Error("model busy")), chatDir, options });
+    const msgs = [user("Build it."), say("p".repeat(12_000)), user("next")];
+    const done = await compact({ system: "sys", msgs, count, model: summarizer(new Error("model busy")), chatDir, options: roomy });
     expect(done.stage).toBe(2);
     expect(done.note).toMatch(/summary could not be written/);
     expect(done.msgs[0].text).toContain("[#m1] Build it.");
+  });
+
+  // On a 16k context with every tool group on, a summary made the prompt bigger (11,516 → 11,726
+  // tokens): the part it replaced was shorter than the record that replaced it.
+  it("does not summarize an earlier part too short to gain from it, and calls no model", async () => {
+    const msgs = [user("Build it."), say("ok"), user("p".repeat(3000))];
+    const model = summarizer("Goal: build it.");
+    const done = await compact({ system: "sys", msgs, count, model, chatDir, options });
+    expect(done.stage).toBe(1);
+    expect(done.note).toMatch(/too short to gain from a summary/);
+    expect(model.calls).toBe(0);
+  });
+
+  it("drops a summary that came out bigger, and does not ask for another one the next time", async () => {
+    const msgs = [user("Build it."), say("p".repeat(12_000)), user("next")];
+    const model = summarizer("s".repeat(40_000));
+    const done = await compact({ system: "sys", msgs, count, model, chatDir, options: roomy });
+    expect(done.stage).toBe(1);
+    expect(model.calls).toBe(1);
+    // The next message moves the cut forward, past what the summary covers; its size, measured
+    // in the record, still says another would not fit.
+    const again = await compact({ system: "sys", msgs: [...msgs, say("p".repeat(12_000)), user("more")], count, model, chatDir, options: roomy });
+    expect(again.stage).toBe(1);
+    expect(model.calls).toBe(1);
   });
 
   it("can cut inside one long request, between finished rounds", () => {
