@@ -1,5 +1,6 @@
 import { lstat, readdir, readFile } from "fs/promises";
 import { basename, join } from "path";
+import { HANDOFF_BODY } from "./handoff";
 import { scanForInjection, describeFinding } from "./injectionScan";
 
 /** Where a project keeps its own commands: one Markdown file each, named after the command. */
@@ -24,7 +25,7 @@ export interface Command {
  * Names a project's own file cannot take: a cloned repository's review.md must not turn the built-in
  * read-only /review into something else, under the same name the user trusts.
  */
-const RESERVED = new Set(["review", "init", "commit", "test", "help", "rewind", "btw"]);
+const RESERVED = new Set(["review", "init", "commit", "test", "help", "rewind", "btw", "handoff", "resume"]);
 
 export const BUILT_IN_COMMANDS: Command[] = [
   {
@@ -77,6 +78,12 @@ export const BUILT_IN_COMMANDS: Command[] = [
       "3. Run the tests again until they pass, or until you are blocked; then report what you changed and what still fails.",
       "$ARGUMENTS",
     ].join("\n"),
+  },
+  {
+    name: "handoff",
+    description: "Write down where the work stands, so a new chat can carry on with /resume.",
+    builtIn: true,
+    body: HANDOFF_BODY,
   },
 ];
 
@@ -131,7 +138,7 @@ export function expandCommand(message: string, commands: Command[], options: { s
       name,
       text:
         "The user typed /help. Reply with this list of commands and one line on how to use them, nothing else:\n" +
-        `${list}\n- /help: this list\nA command is typed at the start of a message, optionally followed by more details.`,
+        `${list}\n- /resume: carry on from the note /handoff saved\n- /help: this list\nA command is typed at the start of a message, optionally followed by more details.`,
     };
   }
 

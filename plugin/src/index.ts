@@ -4,6 +4,7 @@ import { attachmentContext, composeMessage } from "./shared/attachments";
 import { listModelChoices } from "./shared/models";
 import { allCommands, expandCommand } from "./shared/commands";
 import { rewindCommand, startTurn } from "./shared/checkpoints";
+import { resumeCommand } from "./shared/handoff";
 import { projectRoot } from "./shared/projectFolder";
 import { memoryContext, triggeredSkillContext } from "./groups/memory/promptPreprocessor";
 import { toolsProvider } from "./toolsProvider";
@@ -44,7 +45,13 @@ export async function promptPreprocessor(ctl: PromptPreprocessorController, user
     }
   }
 
-  if (config.get("enableCommands")) {
+  // /resume carries on from the note /handoff saved in an earlier chat.
+  const resume = config.get("enableCommands") ? /^\s*\/resume\b\s*([\s\S]*)$/i.exec(userText) : null;
+  if (resume) {
+    const outcome = await resumeCommand(root, resume[1].trim(), { scan: config.get("scanLoadedFiles"), redact: config.get("redactSecrets") });
+    userText = outcome.text;
+    ctl.createStatus({ status: outcome.ok ? "done" : "error", text: outcome.status });
+  } else if (config.get("enableCommands")) {
     const outcome = expandCommand(userText, await allCommands(root), { scan: config.get("scanLoadedFiles") });
     if (outcome.kind === "expanded") {
       userText = outcome.text;
