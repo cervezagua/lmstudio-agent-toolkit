@@ -17,7 +17,7 @@
 | 📄 | [Documents](#-documents) | off | Read PDFs, scans and images, look at pictures, write Word and PDF files |
 | 🧮 | [Utilities](#-utilities) | off | Exact arithmetic, and today's date and time |
 
-Each group is a switch in the plugin's settings. Leave on only what you need, because small models choose better from a short tool list. The tools' descriptions also take room on every message: with every group on, about 9,600 tokens, more than half of a 16k context.
+Each group is a switch in the plugin's settings. Leave on only what you need, because small models choose better from a short tool list. The tools' descriptions also take room on every message: with every group on, about 8,000 to 10,000 tokens depending on the model, half of a 16k context. `/doctor` shows the exact figure for your model.
 
 ## Getting started
 
@@ -82,6 +82,7 @@ Start a message with a command and it becomes that command's instructions:
 | `/rewind` | Lists your messages that changed files; `/rewind 3` puts every file back to how it was before message 3. Changes made by shell commands aren't tracked. |
 | `/handoff` | Has the model write down where the work stands (goal, what's done, current state, decisions, open problems, next steps) and save it to `.agent-toolkit/handoff.md`. |
 | `/resume` | In a new chat: loads that note, so the model carries on where the old chat left off. |
+| `/doctor` | Checks this chat's setup and says what to fix: how much of the context the tools take, tools offered by two plugins, whether agent-toolkit-loop runs the reply, the Project Folder, and the programs the enabled groups need. It changes nothing, though measuring the tools has every enabled plugin build them, as a reply does. |
 | `/help` | Lists the commands. |
 
 Anything after the command goes along: `/review focus on the parser`. A project can add its own as `.agent-toolkit/commands/<name>.md`, with `$ARGUMENTS` where your words go and an optional `description:` header. A project's command can't take the name of a built-in one. Those are scanned like `AGENTS.md`, since a cloned repository can ship them.
@@ -155,7 +156,7 @@ Small models guess at sums and don't know what day it is. These two tools give t
 | Redact Secrets | on | Hides API keys, tokens and private keys in what tools return. Your files are never changed. |
 | Read Attached Files | on | Puts the text of a PDF, Word or text file you attach to a message into that message. |
 | Max Attachment Characters | 40000 | How much of it; never more than half of what the chat's model has left. |
-| Commands | on | `/review`, `/test`, `/commit`, `/init`, `/handoff`, `/resume`, `/help`, and the project's own. |
+| Commands | on | `/review`, `/test`, `/commit`, `/init`, `/handoff`, `/resume`, `/doctor`, `/help`, and the project's own. |
 
 **Attached files.** Attach a document to a message and ask about it: its text goes into the message, so "summarize this" means the document. A long one is cut at the limit, and the model is told how to read the rest; a scanned PDF is read with `ocr_document`. The tools can open what you attached in that chat by its name, and nothing else from LM Studio's own folder. LM Studio's RAG plugin reads attachments too: use one of the two in a chat, not both.
 
