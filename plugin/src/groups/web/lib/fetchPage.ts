@@ -199,9 +199,77 @@ function retryDelayMs(response: Response | null, attempt: number): number {
   return Math.min(4000, 500 * 2 ** attempt);
 }
 
+/**
+ * What to try after a page that does not exist: a small model told only "404" stops there, when the
+ * page has usually just moved. The same address without its query and up to four folders above it
+ * (not the site's front page, which nearly always answers) are tried, all within a few seconds, and
+ * the nearest that answers on the same site is named, with words to search for.
+ */
+async function afterMissingPage(missing: URL, signal?: AbortSignal): Promise<string> {
+  const asked = new URL(missing.href);
+  asked.hash = "";
+  const candidates: string[] = [];
+  const add = (url: URL) => {
+    if (url.pathname !== "/" && url.href !== asked.href && !candidates.includes(url.href)) candidates.push(url.href);
+  };
+  const bare = new URL(asked.href);
+  bare.search = "";
+  add(bare);
+  const segments = bare.pathname.split("/").filter(Boolean);
+  for (let up = 1; up <= 4 && segments.length - up > 0; up++) {
+    const parent = new URL(bare.href);
+    parent.pathname = `/${segments.slice(0, segments.length - up).join("/")}/`;
+    add(parent);
+  }
+  // One budget for all of them: a missing page must not hold up the tool call for long.
+  const deadline = AbortSignal.timeout(8000);
+  let working = "";
+  for (const candidate of candidates.slice(0, 5)) {
+    if (signal?.aborted || deadline.aborted) break;
+    try {
+      const probe = await fetch(candidate, {
+        headers: { "User-Agent": USER_AGENT, Accept: "text/html,*/*;q=0.5" },
+        redirect: "follow",
+        signal: AbortSignal.any([AbortSignal.timeout(5000), deadline, ...(signal ? [signal] : [])]),
+      });
+      await probe.body?.cancel().catch(() => {});
+      // A page that sends the model to another site (a sign-in page, say) is no lead.
+      const landed = probe.url || candidate;
+      if (probe.ok && new URL(landed).host === missing.host) {
+        working = landed;
+        break;
+      }
+    } catch {
+      // Unreachable as well: nothing to suggest there.
+    }
+  }
+  // Words from the address, which may come from a page meant to steer the model: letters and digits
+  // only, so they cannot close the quote or add a line of their own.
+  const words = segments
+    .slice(-4)
+    .map(part => {
+      try {
+        return decodeURIComponent(part);
+      } catch {
+        return part;
+      }
+    })
+    .map(part => part.replace(/\.[a-z0-9]+$/i, "").replace(/[^\p{L}\p{N}]+/gu, " "))
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80)
+    .trim();
+  const search = words ? `web_search for "${words}" to find where it is now` : "web_search for the page's topic";
+  return working
+    ? ` The page may have moved: ${working} answers. Fetch it and follow its links, or ${search}.`
+    : ` The page may have moved: ${search}.`;
+}
+
 export async function fetchPage(
   url: string,
-  options: { signal?: AbortSignal; timeoutMs?: number; retries?: number; refresh?: boolean } = {},
+  /** `suggestOnMissing`: after a 404, look for a nearby page that works, for a model to try next. */
+  options: { signal?: AbortSignal; timeoutMs?: number; retries?: number; refresh?: boolean; suggestOnMissing?: boolean } = {},
 ): Promise<FetchedPage> {
   let parsed: URL;
   try {
@@ -260,7 +328,10 @@ export async function fetchPage(
   const contentType = (response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
   if (!response.ok) {
     const retried = RETRYABLE_STATUS.has(response.status) ? ` after ${retries + 1} attempts` : "";
-    throw new ToolError(`HTTP ${response.status} ${response.statusText} for ${response.url || parsed.href}${retried}.`);
+    const looksMissing = options.suggestOnMissing && (response.status === 404 || response.status === 410);
+    if (looksMissing) await response.body?.cancel().catch(() => {});
+    const missing = looksMissing ? await afterMissingPage(parsed, options.signal) : "";
+    throw new ToolError(`HTTP ${response.status} ${response.statusText} for ${response.url || parsed.href}${retried}.${missing}`);
   }
   const finalUrl = response.url || parsed.href;
   // Following redirects is convenient, but a hop to another host is worth showing to the model and

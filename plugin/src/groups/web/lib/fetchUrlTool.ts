@@ -52,7 +52,7 @@ export function makeFetchUrlTools({ maxChars, renderInBrowser, explainEmptyPages
       // ctx.status must be called as a method (it relies on `this`), so don't destructure it.
       implementation: safe(async ({ url, selector, max_chars, offset, refresh }, ctx) => {
         ctx.status(`Fetching ${url}`);
-        const page = await fetchPage(url, { signal: ctx.signal, refresh });
+        const page = await fetchPage(url, { signal: ctx.signal, refresh, suggestOnMissing: true });
         let body = page.markdown.trim();
         let note = "";
 
