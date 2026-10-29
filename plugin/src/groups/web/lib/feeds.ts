@@ -24,13 +24,18 @@ export interface Feed {
 const MAX_BYTES = 5 * 1024 * 1024;
 const USER_AGENT = "Mozilla/5.0 (compatible; agent-toolkit feed reader)";
 
+/** The character a numeric entity names; one out of range, or half a surrogate pair, becomes U+FFFD. */
+function fromCode(code: number): string {
+  return Number.isInteger(code) && code > 0 && code <= 0x10ffff && (code < 0xd800 || code > 0xdfff) ? String.fromCodePoint(code) : "\uFFFD";
+}
+
 /** Plain text from a summary that may carry HTML, whether escaped or not. */
 export function plainText(value: string, maxChars = 300): string {
   const stripped = value
     .replace(/<[^>]*>/g, " ")
     .replace(/&nbsp;/g, " ")
-    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(parseInt(code, 16)))
+    .replace(/&#(\d+);/g, (_, code) => fromCode(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) => fromCode(parseInt(code, 16)))
     .replace(/&quot;/g, '"')
     .replace(/&#39;|&apos;/g, "'")
     .replace(/&lt;/g, "<")
@@ -99,6 +104,24 @@ export function discoverFeed(html: string, pageUrl: string): string | null {
   }
 }
 
+/**
+ * Text in the charset it declares: the Content-Type header first, then the XML declaration or a
+ * <meta> near the top. Older feeds are often windows-1252 or ISO-8859-1. A copy of fetchPage's,
+ * so this file stays self-contained.
+ */
+export function decodeText(bytes: Uint8Array, contentType: string): string {
+  const head = new TextDecoder("latin1").decode(bytes.subarray(0, 2048));
+  const label =
+    /charset\s*=\s*["']?([\w.:-]+)/i.exec(contentType)?.[1] ??
+    /^\s*<\?xml[^>]*encoding\s*=\s*["']([\w.:-]+)/i.exec(head)?.[1] ??
+    /<meta[^>]*charset\s*=\s*["']?\s*([\w.:-]+)/i.exec(head)?.[1];
+  try {
+    return new TextDecoder(label ?? "utf-8").decode(bytes);
+  } catch {
+    return new TextDecoder("utf-8").decode(bytes); // a label TextDecoder does not know
+  }
+}
+
 async function download(url: string, signal?: AbortSignal): Promise<{ url: string; body: string; isHtml: boolean }> {
   let parsed: URL;
   try {
@@ -126,18 +149,25 @@ async function download(url: string, signal?: AbortSignal): Promise<{ url: strin
   const reader = response.body?.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
-  while (reader) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > MAX_BYTES) {
-      await reader.cancel();
-      throw new ToolError(`${parsed.href} is larger than 5 MB, which is not a feed.`);
+  // The timeout still runs while the body arrives, so a server that stalls part-way ends up here too.
+  try {
+    while (reader) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_BYTES) {
+        await reader.cancel();
+        throw new ToolError(`${parsed.href} is larger than 5 MB, which is not a feed.`);
+      }
+      chunks.push(value);
     }
-    chunks.push(value);
+  } catch (error: any) {
+    if (error instanceof ToolError || signal?.aborted) throw error;
+    if (error?.name === "TimeoutError" || error?.name === "AbortError") throw new ToolError(`Timed out reading ${parsed.href}.`);
+    throw new ToolError(`Could not read ${parsed.href}: ${error?.cause?.message ?? error?.message ?? error}`);
   }
-  const body = Buffer.concat(chunks).toString("utf-8");
   const type = response.headers.get("content-type") ?? "";
+  const body = decodeText(Buffer.concat(chunks), type);
   const isHtml = /html/i.test(type) && !/xml/i.test(type) ? true : /^\s*(<!doctype html|<html)/i.test(body);
   return { url: response.url || parsed.href, body, isHtml };
 }

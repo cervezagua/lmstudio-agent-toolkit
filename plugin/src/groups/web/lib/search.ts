@@ -15,10 +15,32 @@ export function decodeDuckDuckGoUrl(href: string): string {
   try {
     const url = new URL(href, "https://duckduckgo.com");
     const target = url.searchParams.get("uddg");
-    return target ? decodeURIComponent(target) : url.href;
+    return target || url.href; // searchParams has decoded it already
   } catch {
     return href;
   }
+}
+
+/**
+ * Whether a page without results is DuckDuckGo's bot check. The page repeats the query, so it is
+ * taken out first: a search for "captcha" that finds nothing is not a bot check.
+ */
+export function looksLikeBotCheck(html: string, query: string): boolean {
+  const escaped = query.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  // As typed, as HTML (with either spelling of '), and as it appears in links.
+  const forms = [
+    query,
+    escaped,
+    escaped.replace(/'/g, "&#x27;"),
+    escaped.replace(/'/g, "&#39;"),
+    encodeURIComponent(query),
+    new URLSearchParams({ q: query }).toString().slice(2),
+  ];
+  let rest = html;
+  for (const form of new Set(forms.filter(Boolean))) {
+    rest = rest.replace(new RegExp(form.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), " ");
+  }
+  return /anomaly|captcha|challenge/i.test(rest);
 }
 
 export function parseDuckDuckGoHtml(html: string): SearchResult[] {
@@ -167,7 +189,7 @@ export function searchDuckDuckGo(
       duckDuckGoLastStart = now();
       const { status, html } = await requestWithin(request, query, safeSearch, timeoutMs, signal);
       const results = parseDuckDuckGoHtml(html);
-      if (results.length > 0 || (status === 200 && !/anomaly|captcha|challenge/i.test(html))) return results.slice(0, count);
+      if (results.length > 0 || (status === 200 && !looksLikeBotCheck(html, query))) return results.slice(0, count);
       if (attempt === 2) {
         duckDuckGoRefusedUntil = now() + DUCKDUCKGO_COOL_DOWN_MS;
         throw duckDuckGoRefused(DUCKDUCKGO_COOL_DOWN_MS);
@@ -185,15 +207,19 @@ export interface BackendOptions {
   signal?: AbortSignal;
 }
 
-export async function searchSearxng(baseUrl: string, query: string, count: number, options: BackendOptions = {}): Promise<SearchResult[]> {
-  const { page = 1, safeSearch = "moderate", signal } = options;
-  if (!baseUrl.trim()) throw new ToolError("Search backend is searxng but no SearXNG URL is configured in the plugin settings.");
-  let url: URL;
+/** SearXNG's search endpoint under the configured address, which may or may not end in a slash. */
+export function searxngSearchUrl(baseUrl: string): URL {
   try {
-    url = new URL("search", baseUrl.trim().replace(/\/?$/, "/"));
+    return new URL("search", baseUrl.trim().replace(/\/?$/, "/"));
   } catch {
     throw new ToolError(`SearXNG URL "${baseUrl}" is not a valid URL.`);
   }
+}
+
+export async function searchSearxng(baseUrl: string, query: string, count: number, options: BackendOptions = {}): Promise<SearchResult[]> {
+  const { page = 1, safeSearch = "moderate", signal } = options;
+  if (!baseUrl.trim()) throw new ToolError("Search backend is searxng but no SearXNG URL is configured in the plugin settings.");
+  const url = searxngSearchUrl(baseUrl);
   url.searchParams.set("q", query);
   url.searchParams.set("format", "json");
   url.searchParams.set("pageno", String(page));
@@ -238,9 +264,15 @@ export function braveSearchUrl(query: string, count: number, page = 1, safeSearc
 export async function searchBrave(apiKey: string, query: string, count: number, options: BackendOptions = {}): Promise<SearchResult[]> {
   if (!apiKey.trim()) throw new ToolError("Search backend is brave but no Brave API key is set (Brave Search API Key, under Search Backend in the plugin's settings).");
   const url = braveSearchUrl(query, count, options.page, options.safeSearch);
+  const timeout = AbortSignal.timeout(20_000);
   const data = await getJson(url.href, {
     headers: { Accept: "application/json", "X-Subscription-Token": apiKey.trim() },
-    signal: options.signal,
+    signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout,
+  }).catch(error => {
+    if (error instanceof ToolError) throw error;
+    if (error instanceof SyntaxError) throw new ToolError("Brave did not return JSON. Try again later.");
+    if (error?.name === "TimeoutError") throw new ToolError("Brave did not answer within 20 seconds.");
+    throw new ToolError(`Could not reach Brave (${error?.cause?.code ?? error?.message ?? error}).`);
   });
   const strip = (s: string) => clean(s?.replace(/<[^>]+>/g, ""));
   return (data.web?.results ?? []).slice(0, count).map((r: any) => ({

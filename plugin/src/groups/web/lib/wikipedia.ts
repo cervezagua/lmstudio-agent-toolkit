@@ -14,7 +14,7 @@ const TIMEOUT_MS = 15_000;
 const SEARCH_LIMIT = 5;
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const CACHE_MAX_ENTRIES = 20;
-const LANGUAGE = /^[a-z]{2,3}(-[a-z0-9]+)*$/;
+const LANGUAGE = /^([a-z]{2,3}|simple)(-[a-z0-9]+)*$/; // "simple" is Simple English
 
 export interface WikipediaMatch {
   title: string;
