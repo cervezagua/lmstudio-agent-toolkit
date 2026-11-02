@@ -65,6 +65,16 @@ export async function readMode(workingDirectory: string): Promise<ChatMode> {
   }
 }
 
+/**
+ * Whether the tools that change things are left out now. Planning only counts while it can be ended:
+ * with the Memory group or Plan Mode switched off, exit_plan_mode is not offered, and a mode file left
+ * saying "planning" would keep the chat read-only for good.
+ */
+export async function isPlanning(workingDirectory: string, config: { get(key: "enableMemory" | "enablePlanMode"): unknown }): Promise<boolean> {
+  if (!(await readMode(workingDirectory)).planning) return false;
+  return config.get("enableMemory") === true && config.get("enablePlanMode") === true;
+}
+
 export async function writeMode(workingDirectory: string, mode: ChatMode): Promise<void> {
   await mkdir(workingDirectory, { recursive: true });
   await writeFile(modeFile(workingDirectory), JSON.stringify(mode, null, 2), "utf-8");

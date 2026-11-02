@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { findExecutable } from "../../../shared/process";
+import { findPython } from "../../../shared/process";
 import { quickCheck } from "./quickCheck";
 
 describe("quickCheck", () => {
@@ -28,14 +28,14 @@ describe("quickCheck", () => {
     expect(problem).not.toMatch(/^\s+at /m);
   }, 30000);
 
-  it.skipIf(!findExecutable("python") && !findExecutable("python3"))("reports a Python syntax error", async () => {
+  it.skipIf(!findPython())("reports a Python syntax error", async () => {
     expect(await check("good.py", "def f():\n    return 1\n")).toBeNull();
     expect(await check("bad.py", "def f(:\n    return 1\n")).toMatch(/^Python found a problem:/);
   }, 30000);
 
   // A project's own tokenize.py or py_compile.py used to replace the standard module during the check,
   // so a cloned repository (or the model) could run code just by having a .py file edited.
-  it.skipIf(!findExecutable("python") && !findExecutable("python3"))("never runs the project's own Python modules", async () => {
+  it.skipIf(!findPython())("never runs the project's own Python modules", async () => {
     const marker = join(dir, "ran.txt");
     const payload = `open(${JSON.stringify(marker)}, "w").write("ran")\n`;
     for (const name of ["py_compile.py", "tokenize.py", "linecache.py", "traceback.py"]) await writeFile(join(dir, name), payload);

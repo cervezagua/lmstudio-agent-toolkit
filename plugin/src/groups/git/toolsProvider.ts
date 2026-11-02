@@ -3,7 +3,7 @@ import { z } from "zod";
 import { configSchematics } from "../../config";
 import { assertNotOption, repoPath, runCli } from "./lib/cli";
 import { safe, ToolError } from "../../shared/errors";
-import { readMode } from "../../shared/mode";
+import { isPlanning } from "../../shared/mode";
 import { findExecutable } from "../../shared/process";
 import { NO_PROJECT_FOLDER_NOTE, projectRoot } from "../../shared/projectFolder";
 
@@ -27,7 +27,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
     );
 
   // memory-tools' plan mode: while planning, only the read-only git tools are offered.
-  const planning = (await readMode(ctl.getWorkingDirectory())).planning;
+  const planning = await isPlanning(ctl.getWorkingDirectory(), config);
 
   const tools: Tool[] = [];
 

@@ -1,10 +1,11 @@
 import { existsSync } from "fs";
+import { copyFile, mkdtemp, rm } from "fs/promises";
 import { tmpdir } from "os";
-import { join } from "path";
+import { isAbsolute, join } from "path";
 import { describe, expect, it } from "vitest";
 import { isChatStateFile } from "./mode";
 import { projectRoot } from "./projectFolder";
-import { CappedOutput, commandEnv, findExecutable, formatRunResult, runProcess } from "./process";
+import { CappedOutput, commandEnv, findExecutable, formatRunResult, resolveProgram, runProcess } from "./process";
 import { truncate } from "./truncate";
 
 describe("truncate", () => {
@@ -36,6 +37,32 @@ describe("CappedOutput", () => {
     expect(out.text()).toBe("12345\n[... 8 characters of output left out ...]\ndefgh");
     expect(out.recent(3)).toBe("fgh");
   });
+});
+
+describe("programs named without a folder", () => {
+  it("are looked up on PATH alone", () => {
+    const node = resolveProgram("node");
+    expect(node === "node" || isAbsolute(node)).toBe(true);
+    if (findExecutable("node")) expect(isAbsolute(node)).toBe(true);
+    expect(resolveProgram("definitely-not-installed-xyz")).toBe("definitely-not-installed-xyz");
+    expect(resolveProgram(process.execPath)).toBe(process.execPath);
+  });
+
+  // Windows searches the child's folder before PATH: a git.exe in a cloned repository would run.
+  it.runIf(process.platform === "win32" && findExecutable("git") !== null)("never runs one planted in the working folder", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "planted-"));
+    // Some machines turn the folder search off for everything; this test needs it on.
+    const saved = process.env.NoDefaultCurrentDirectoryInExePath;
+    delete process.env.NoDefaultCurrentDirectoryInExePath;
+    try {
+      await copyFile(join(process.env.SystemRoot ?? "C:\\Windows", "System32", "hostname.exe"), join(dir, "git.exe"));
+      const result = await runProcess("git", ["--version"], { cwd: dir, timeoutMs: 20000 });
+      expect(result.stdout).toMatch(/^git version/);
+    } finally {
+      if (saved !== undefined) process.env.NoDefaultCurrentDirectoryInExePath = saved;
+      await rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  }, 30000);
 });
 
 describe("runProcess", () => {

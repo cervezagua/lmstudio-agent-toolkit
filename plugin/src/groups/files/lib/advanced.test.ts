@@ -1,12 +1,14 @@
-import { mkdtemp, readdir, readFile, rm, writeFile } from "fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { BackupStore } from "./backups";
+import { BackupStore, backupName } from "./backups";
 import { applyEdits, insertLines, previewDiff } from "./edit";
 import { editNotebook, parseNotebook, renderNotebook, toSourceLines } from "./notebook";
-import { getSession, resetSession, type ShellSpec } from "./session";
-import { TaskManager, taskState } from "./tasks";
+import { getSession, resetSession, SESSION_IDLE_MS, type ShellSpec } from "./session";
+import { scopeToDirectory } from "../toolsProvider";
+import { findExecutable } from "../../../shared/process";
+import { isAlive, TaskManager, taskState } from "./tasks";
 import { ToolError } from "../../../shared/errors";
 
 let dir: string;
@@ -52,6 +54,11 @@ describe("insertLines", () => {
   it("rejects out-of-range lines", () => {
     expect(() => insertLines("a\nb", 5, "x")).toThrow(/out of range/);
   });
+
+  it("keeps a byte-order mark at the very start", () => {
+    expect(insertLines("﻿a\nb", 0, "top")).toBe("﻿top\na\nb");
+    expect(insertLines("﻿a\nb", 1, "mid")).toBe("﻿a\nmid\nb");
+  });
 });
 
 describe("previewDiff", () => {
@@ -82,6 +89,34 @@ describe("BackupStore", () => {
     await writeFile(created, "content");
     expect(await store.restore(created)).toMatchObject({ restored: "deleted" });
     await expect(readFile(created, "utf-8")).rejects.toThrow();
+  });
+
+  it("folds case into the slot only where the filesystem ignores it", () => {
+    expect(backupName("/p/Readme.md", "linux")).not.toBe(backupName("/p/README.md", "linux"));
+    expect(backupName("C:\\p\\Readme.md", "win32")).toBe(backupName("C:\\p\\README.md", "win32"));
+    expect(backupName("/p/Readme.md", "darwin")).toBe(backupName("/p/README.md", "darwin"));
+  });
+
+  it("never restores one file's backup over another", async () => {
+    const store = new BackupStore(join(dir, "backups"));
+    const kept = join(dir, "kept.txt");
+    const other = join(dir, "other.txt");
+    await store.save(kept, "kept's old content");
+    // As if the two paths shared a slot.
+    await rename(join(dir, "backups", backupName(kept)), join(dir, "backups", backupName(other)));
+    await writeFile(other, "other's content");
+    await expect(store.restore(other)).rejects.toThrow(/No undo history/);
+    expect(await readFile(other, "utf-8")).toBe("other's content");
+  });
+
+  it("brings back the exact bytes of a file that is not UTF-8 text", async () => {
+    const store = new BackupStore(join(dir, "backups"));
+    const file = join(dir, "image.bin");
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff, 0x00, 0xe9]);
+    await store.save(file, bytes);
+    await writeFile(file, "overwritten");
+    await store.restore(file);
+    expect(await readFile(file)).toEqual(bytes);
   });
 });
 
@@ -127,6 +162,19 @@ describe("notebook", () => {
     expect(notebook.cells).toHaveLength(2);
     expect(() => editNotebook(notebook, { index: 9, mode: "delete" })).toThrow(/out of range/);
     expect(() => editNotebook(notebook, { index: 0, mode: "insert" })).toThrow(/source is required/);
+  });
+
+  // nbformat allows outputs and execution_count on code cells only.
+  it("gives outputs to code cells alone", () => {
+    const notebook = parseNotebook(notebookJson);
+    editNotebook(notebook, { index: 0, mode: "insert", source: "raw text", cellType: "raw" });
+    expect(notebook.cells[0]).not.toHaveProperty("outputs");
+    expect(notebook.cells[0]).not.toHaveProperty("execution_count");
+    editNotebook(notebook, { index: 2, mode: "replace", cellType: "raw" });
+    expect(notebook.cells[2]).not.toHaveProperty("outputs");
+    expect(notebook.cells[2]).not.toHaveProperty("execution_count");
+    editNotebook(notebook, { index: 2, mode: "replace", cellType: "code" });
+    expect(notebook.cells[2]).toMatchObject({ outputs: [], execution_count: null });
   });
 });
 
@@ -325,4 +373,75 @@ describe("TaskManager index robustness", () => {
     const index = JSON.parse(await readFile(join(dir, "tasks", "tasks.json"), "utf-8"));
     expect(index.map((t: any) => t.name).sort()).toEqual(["a", "b", "c"]);
   }, 20000);
+});
+
+describe("shell sessions no chat uses any more", () => {
+  const spec: ShellSpec = { file: "definitely-not-a-shell-xyz", replArgs: [], kind: "posix" };
+
+  it("are closed once they have been idle too long", () => {
+    const start = Date.now();
+    const old = getSession(spec, join(dir, "a"), start);
+    expect(getSession(spec, join(dir, "a"), start + 60_000)).toBe(old);
+    // Another chat asks for its shell much later: the idle one is closed, and is new when asked again.
+    getSession(spec, join(dir, "b"), start + 60_000 + SESSION_IDLE_MS + 1);
+    expect(getSession(spec, join(dir, "a"), start + 60_000 + SESSION_IDLE_MS + 2)).not.toBe(old);
+    resetSession(spec, join(dir, "a"));
+    resetSession(spec, join(dir, "b"));
+  });
+});
+
+describe("commands run in another folder of the persistent shell", () => {
+  it("put the closing lines on their own", () => {
+    expect(scopeToDirectory("ls # list", "'/p/sub'", "posix")).toBe("(cd '/p/sub' || exit\nls # list\n)");
+    expect(scopeToDirectory("dir", "'C:\p'", "powershell")).toBe(
+      "Push-Location -LiteralPath 'C:\p'\ntry {\ndir\n$__scopedOk=$?\n} finally { Pop-Location }",
+    );
+  });
+
+  // `(cd dir && cmd # note)` left the ")" inside the comment, and the shell waited for it forever.
+  it.skipIf(!findExecutable("bash"))("end after a trailing comment or a heredoc (bash)", async () => {
+    const spec: ShellSpec = { file: "bash", replArgs: ["-s"], kind: "posix" };
+    await mkdir(join(dir, "sub"));
+    const session = getSession(spec, dir);
+    try {
+      const commented = await session.exec(scopeToDirectory("echo here # a note", "'sub'", "posix"), 10000);
+      expect(commented).toMatchObject({ timedOut: false, exitCode: 0 });
+      expect(commented.stdout).toBe("here");
+      const heredoc = await session.exec(scopeToDirectory("cat <<END\nfrom heredoc\nEND", "'sub'", "posix"), 10000);
+      expect(heredoc).toMatchObject({ timedOut: false, exitCode: 0, stdout: "from heredoc" });
+      expect((await session.exec(scopeToDirectory("false", "'sub'", "posix"), 10000)).exitCode).toBe(1);
+      expect((await session.exec(scopeToDirectory("true", "'missing'", "posix"), 10000)).exitCode).not.toBe(0);
+    } finally {
+      resetSession(spec, dir);
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+  }, 30000);
+});
+
+describe("background tasks from an earlier plugin process", () => {
+  // The OS reuses process ids: a pid saved before a restart can be another program's by now.
+  it("are reported as unknown, and never killed", async () => {
+    const tasks = new TaskManager(join(dir, "tasks"));
+    await mkdir(join(dir, "tasks"), { recursive: true });
+    const record = { id: "told", name: "old server", command: "npm start", cwd: dir, pid: process.pid, startedAt: new Date().toISOString(), endedAt: null, exitCode: null, logFile: join(dir, "tasks", "told.log") };
+    await writeFile(join(dir, "tasks", "tasks.json"), JSON.stringify([record]));
+    expect(taskState(await tasks.get("told"))).toBe("unknown");
+    await expect(tasks.stop("told")).rejects.toThrow(/started before the plugin restarted/);
+    expect(isAlive(process.pid)).toBe(true);
+  });
+
+  it("reads only the ends of a huge log", async () => {
+    const tasks = new TaskManager(join(dir, "tasks"));
+    await mkdir(join(dir, "tasks"), { recursive: true });
+    const logFile = join(dir, "tasks", "tbig.log");
+    await writeFile(logFile, "FIRST LINE\n" + "x".repeat(5_000_000) + "\nLAST LINE");
+    const record = { id: "tbig", name: "big", command: "build", cwd: dir, pid: null, startedAt: new Date().toISOString(), endedAt: new Date().toISOString(), exitCode: 0, logFile };
+    await writeFile(join(dir, "tasks", "tasks.json"), JSON.stringify([record]));
+    const result = await tasks.output("tbig", 0, 1000);
+    expect(result.text.startsWith("FIRST LINE")).toBe(true);
+    expect(result.text.endsWith("LAST LINE")).toBe(true);
+    expect(result.text).toMatch(/\[\d+ bytes truncated\]/);
+    expect(result.text.length).toBeLessThan(1200);
+    expect(result.nextOffset).toBe(5_000_000 + 21);
+  });
 });

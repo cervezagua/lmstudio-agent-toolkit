@@ -1,10 +1,11 @@
 import { spawn } from "child_process";
-import { commandEnv } from "../../../shared/process";
+import { commandEnv, killTree, resolveProgram } from "../../../shared/process";
 import { randomBytes } from "crypto";
-import { mkdir, open, readFile, rename, rm, stat, writeFile } from "fs/promises";
+import { mkdir, open, readFile, rm, stat } from "fs/promises";
 import { join } from "path";
 import { StringDecoder } from "string_decoder";
 import { ToolError } from "../../../shared/errors";
+import { writeFileAtomic } from "../../../shared/safeWrite";
 import { truncate } from "../../../shared/truncate";
 
 export interface TaskRecord {
@@ -17,9 +18,18 @@ export interface TaskRecord {
   endedAt: string | null;
   exitCode: number | null;
   logFile: string;
+  /** The plugin process that started it (see INSTANCE). Missing in records from older versions. */
+  owner?: string;
 }
 
-export type TaskState = "running" | "exited" | "gone";
+/**
+ * "unknown": started by an earlier plugin process. Its pid may belong to another program by now, so
+ * whether the task still runs cannot be told, and it is never killed.
+ */
+export type TaskState = "running" | "exited" | "gone" | "unknown";
+
+/** This plugin process. A pid recorded by an earlier one proves nothing: the OS reuses pids. */
+const INSTANCE = randomBytes(8).toString("hex");
 
 /** The most recent output task_wait keeps, and matches "until" against. */
 const WAIT_WINDOW_BYTES = 64 * 1024;
@@ -62,6 +72,7 @@ export function isAlive(pid: number | null): boolean {
 
 export function taskState(task: TaskRecord): TaskState {
   if (task.exitCode !== null) return "exited";
+  if (task.owner !== INSTANCE) return "unknown";
   return isAlive(task.pid) ? "running" : "gone";
 }
 
@@ -104,27 +115,8 @@ export class TaskManager {
 
   private async writeIndex(tasks: TaskRecord[]) {
     await mkdir(this.directory, { recursive: true });
-    // Write, then rename: a reader never sees a half-written index.
-    const temporary = `${this.indexFile}.${randomBytes(4).toString("hex")}.tmp`;
-    await writeFile(temporary, JSON.stringify(tasks, null, 2), "utf-8");
-    try {
-      // Windows can refuse a rename while another process has the target open (antivirus, an
-      // editor, a reader): retry briefly, then fall back to writing in place.
-      for (let attempt = 0; ; attempt++) {
-        try {
-          await rename(temporary, this.indexFile);
-          return;
-        } catch (error: any) {
-          const retryable = error?.code === "EPERM" || error?.code === "EBUSY" || error?.code === "EACCES";
-          if (!retryable || attempt >= 4) throw error;
-          await new Promise(resolve => setTimeout(resolve, 20 * (attempt + 1)));
-        }
-      }
-    } catch {
-      await writeFile(this.indexFile, JSON.stringify(tasks, null, 2), "utf-8");
-    } finally {
-      await rm(temporary, { force: true }).catch(() => {});
-    }
+    // Atomic: a reader never sees a half-written index.
+    await writeFileAtomic(this.indexFile, JSON.stringify(tasks, null, 2));
   }
 
   async list(): Promise<TaskRecord[]> {
@@ -154,7 +146,7 @@ export class TaskManager {
     const handle = await open(logFile, "a");
     let started = false;
     try {
-      const child = spawn(shell.file, shell.args(command), {
+      const child = spawn(resolveProgram(shell.file), shell.args(command), {
         cwd,
         env: commandEnv(),
         windowsHide: true,
@@ -196,6 +188,7 @@ export class TaskManager {
         endedAt: null,
         exitCode: null,
         logFile,
+        owner: INSTANCE,
       };
       await this.withIndexLock(async () => this.writeIndex([...(await this.readIndex()), task]));
       // Nothing awaits this, so a failure here must not become an unhandled rejection.
@@ -220,19 +213,22 @@ export class TaskManager {
       size = 0;
     }
     const start = Math.max(0, Math.min(offset, size));
+    // Only the start and the end are shown, so only they are read: a character is at most 4 bytes.
+    const window = maxChars * 4;
     let text = "";
-    if (size > start) {
-      const handle = await open(task.logFile, "r");
-      try {
-        const length = size - start;
-        const buffer = Buffer.alloc(length);
-        await handle.read(buffer, 0, length, start);
-        text = buffer.toString("utf-8");
-      } finally {
-        await handle.close();
-      }
+    if (size - start <= 2 * window) {
+      if (size > start) text = truncate((await readBytes(task.logFile, start, size)).toString("utf-8"), maxChars);
+    } else {
+      const head = (await readBytes(task.logFile, start, start + window)).toString("utf-8").slice(0, Math.floor(maxChars * 0.6));
+      const tail = (await readBytes(task.logFile, size - window, size)).toString("utf-8").slice(-(maxChars - head.length));
+      const dropped = size - start - Buffer.byteLength(head) - Buffer.byteLength(tail);
+      text = `${head}
+
+... [${dropped} bytes truncated] ...
+
+${tail}`;
     }
-    return { task, state: taskState(task), text: truncate(text, maxChars), nextOffset: size, totalBytes: size };
+    return { task, state: taskState(task), text, nextOffset: size, totalBytes: size };
   }
 
   /**
@@ -292,20 +288,13 @@ export class TaskManager {
   async stop(id: string) {
     const task = await this.get(id);
     const state = taskState(task);
-    if (state !== "running") return { task, state, killed: false };
-    if (process.platform === "win32") {
-      spawn("taskkill", ["/pid", String(task.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
-    } else {
-      try {
-        process.kill(-task.pid!, "SIGKILL");
-      } catch {
-        try {
-          process.kill(task.pid!, "SIGKILL");
-        } catch {
-          // already gone
-        }
-      }
+    if (state === "unknown") {
+      throw new ToolError(
+        `Task ${id} was started before the plugin restarted, so it cannot be stopped from here: its process id may belong to another program by now. If it is still running, ask the user to stop it.`,
+      );
     }
+    if (state !== "running") return { task, state, killed: false };
+    killTree(task.pid!);
     await this.update(id, { exitCode: -1, endedAt: new Date().toISOString() });
     return { task, state, killed: true };
   }
@@ -324,6 +313,6 @@ export class TaskManager {
 export function formatTaskLine(task: TaskRecord): string {
   const state = taskState(task);
   const runtime = Math.round(((task.endedAt ? Date.parse(task.endedAt) : Date.now()) - Date.parse(task.startedAt)) / 1000);
-  const status = state === "running" ? `running ${runtime}s` : state === "exited" ? `exited ${task.exitCode}` : "gone";
+  const status = state === "running" ? `running ${runtime}s` : state === "exited" ? `exited ${task.exitCode}` : state;
   return `${task.id}  [${status}]  ${task.name}`;
 }
