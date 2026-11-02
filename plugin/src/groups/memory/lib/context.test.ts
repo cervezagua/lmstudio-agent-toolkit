@@ -1,9 +1,9 @@
-import { mkdtemp, rm, writeFile } from "fs/promises";
+import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { gitSnapshot } from "./gitSnapshot";
-import { buildContextBlock } from "./instructions";
+import { buildContextBlock, loadInstructionFiles } from "./instructions";
 import { renderIndex, type Memory } from "./memoryStore";
 import { completionNudge, type Todo } from "./todos";
 import { runProcess } from "../../../shared/process";
@@ -116,6 +116,35 @@ describe("git snapshot", () => {
     await git(["init"]);
     expect(await gitSnapshot(dir)).toContain("(working tree clean)");
   }, 60000);
+
+  // It runs unasked in a folder that may have come from anyone; a .git/config naming a program for
+  // git to start must not get it started.
+  it("does not let the repository's config start an fsmonitor program", async () => {
+    const git = (args: string[]) => runProcess("git", args, { cwd: dir, timeoutMs: 15000 });
+    await git(["init"]);
+    const marker = join(dir, "MARKER").replace(/\\/g, "/");
+    const program = `"${process.execPath.replace(/\\/g, "/")}" -e "require('fs').writeFileSync('${marker}','x')"`;
+    await git(["config", "core.fsmonitor", program]);
+    await gitSnapshot(dir);
+    await expect(stat(marker)).rejects.toThrow();
+  }, 60000);
+});
+
+describe("instruction files", () => {
+  // A cloned repository could ship AGENTS.md as a link to a file elsewhere on the machine.
+  it("does not follow a link out of the project folder", async () => {
+    const project = join(dir, "project");
+    await mkdir(project);
+    await writeFile(join(dir, "outside.txt"), "CANARY-OUTSIDE");
+    await writeFile(join(project, "CLAUDE.md"), "Use tabs.");
+    try {
+      await symlink(join(dir, "outside.txt"), join(project, "AGENTS.md"));
+    } catch (error: any) {
+      if (error.code === "EPERM") return; // Windows without the right to create links
+      throw error;
+    }
+    expect(await loadInstructionFiles(project, ["AGENTS.md", "CLAUDE.md"])).toEqual([{ name: "CLAUDE.md", content: "Use tabs." }]);
+  });
 });
 
 describe("todo completion nudge", () => {

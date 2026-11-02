@@ -1,5 +1,5 @@
 import { readFile } from "fs/promises";
-import { resolveInside } from "../../../shared/paths";
+import { resolveSafe } from "../../../shared/paths";
 import { truncate } from "../../../shared/truncate";
 
 export interface InstructionFile {
@@ -7,12 +7,15 @@ export interface InstructionFile {
   content: string;
 }
 
-/** Reads whichever of `names` exist in `projectFolder` (never outside it). */
+/**
+ * Reads whichever of `names` exist in `projectFolder` (never outside it, a link included: a cloned
+ * repository could ship AGENTS.md as a link to a file elsewhere on the machine).
+ */
 export async function loadInstructionFiles(projectFolder: string, names: string[]): Promise<InstructionFile[]> {
   const found: InstructionFile[] = [];
   for (const name of names.map(n => n.trim()).filter(Boolean)) {
     try {
-      const content = (await readFile(resolveInside(projectFolder, name), "utf-8")).trim();
+      const content = (await readFile(await resolveSafe(projectFolder, name), "utf-8")).trim();
       if (content) found.push({ name, content });
     } catch {
       // missing, unreadable, or outside the project directory: skip

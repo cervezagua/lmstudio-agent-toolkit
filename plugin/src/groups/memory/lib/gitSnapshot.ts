@@ -8,7 +8,9 @@ import { commandEnv, runProcess } from "../../../shared/process";
 export async function gitSnapshot(directory: string, signal?: AbortSignal): Promise<string | null> {
   const git = async (args: string[]) => {
     try {
-      const result = await runProcess("git", ["-c", "core.quotepath=false", ...args], {
+      // It runs unasked, at the start of a chat, in a folder that may have come from anyone: a
+      // repository's own config must not get git to start a program (core.fsmonitor) here.
+      const result = await runProcess("git", ["-c", "core.quotepath=false", "-c", "core.fsmonitor=false", ...args], {
         cwd: directory,
         timeoutMs: 5000,
         signal,

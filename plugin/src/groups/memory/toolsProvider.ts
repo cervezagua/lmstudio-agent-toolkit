@@ -55,6 +55,12 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         type: z.enum(MEMORY_TYPES),
       },
       implementation: safe(async params => {
+        // A memory's description goes into every later chat, as a saved skill does, and gets the same
+        // scan: a page the model read must not be able to plant instructions for chats to come.
+        if (scan) {
+          const [finding] = scanForInjection(`${params.description}\n${params.content}`);
+          if (finding) throw new ToolError(`Not saved: the memory ${finding.reason} ("${finding.excerpt}"). Save the fact itself, not instructions.`);
+        }
         const { memory, existed } = await store.save(params);
         return `${existed ? "Updated" : "Saved"} memory "${memory.name}".`;
       }),
