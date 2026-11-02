@@ -145,7 +145,12 @@ export class ShellSession {
 
         // stderr is a separate stream from stdout, and its end can come after stdout's: wait for its
         // marker too, though not for long (a shell stopped or timed out never prints it).
+        // The first outcome stands: a shell killed for timing out exits a moment later, and that exit
+        // must not turn "timed out" into an ordinary end while stderr is still being waited for.
+        let decided = false;
         const done = (code: number | null, timeout = false, waitMs = 50) => {
+          if (decided) return;
+          decided = true;
           exitCode = code;
           timedOut = timeout;
           if (stderrDone()) return collect();
