@@ -264,8 +264,9 @@ describe("ocr-tools toolsProvider", () => {
     );
     expect(existsSync(join(work, ".agent-toolkit", "page-001.png"))).toBe(false);
 
+    // Planning counts only while Plan Mode, and the Memory group that offers it, are on.
     await writeMode(work, { planning: true });
-    expect((await provider()).map(tool => tool.name)).not.toContain("pdf_to_images");
+    expect((await provider({ enableMemory: true, enablePlanMode: true })).map(tool => tool.name)).not.toContain("pdf_to_images");
   });
 
   it("records the pages it writes for /rewind: a new one can be removed, a replaced one is not kept", async () => {
