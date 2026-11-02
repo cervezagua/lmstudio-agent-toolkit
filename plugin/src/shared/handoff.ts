@@ -1,4 +1,4 @@
-import { readFile, stat } from "fs/promises";
+import { lstat, readFile, stat } from "fs/promises";
 import { join } from "path";
 import { fenced } from "./attachments";
 import { describeFinding, scanForInjection } from "./injectionScan";
@@ -11,6 +11,7 @@ import { redactSecrets } from "./redact";
  */
 export const HANDOFF_FILE = join(".agent-toolkit", "handoff.md");
 const SHOWN_PATH = HANDOFF_FILE.replace(/\\/g, "/");
+const MAX_NOTE_BYTES = 64 * 1024;
 
 /** The instructions /handoff expands to; $ARGUMENTS is what the user added. */
 export const HANDOFF_BODY = [
@@ -36,6 +37,19 @@ export const HANDOFF_BODY = [
 export async function resumeCommand(root: string, args: string, options: { scan: boolean; redact: boolean }): Promise<{ text: string; status: string; ok: boolean }> {
   const file = join(root, HANDOFF_FILE);
   const asked = args ? ` They added: ${args}` : "";
+  // As with a project's commands, a link is not followed: a repository could ship the note as a link
+  // to a key file outside the project. A note is short, so a huge file is not one.
+  const info = await lstat(file).catch(() => null);
+  if (info && (!info.isFile() || info.size > MAX_NOTE_BYTES)) {
+    const why = info.isFile()
+      ? `it is ${Math.round(info.size / 1024)} KB, more than a note can be (${MAX_NOTE_BYTES / 1024} KB)`
+      : "it is a link or a folder, not a file";
+    return {
+      ok: false,
+      status: `agent-toolkit did not load the handoff note: ${why}`,
+      text: `The user typed /resume, but the handoff note in ${SHOWN_PATH} was not loaded: ${why}.${asked} Tell the user, and suggest they check the file.`,
+    };
+  }
   const note = await readFile(file, "utf-8").catch(() => null);
   if (note === null || !note.trim()) {
     return {

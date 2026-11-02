@@ -1,4 +1,4 @@
-import { type ChatMessage, type PluginContext, type PromptPreprocessorController } from "@lmstudio/sdk";
+import { type Chat, type ChatMessage, type PluginContext, type PromptPreprocessorController } from "@lmstudio/sdk";
 import { configSchematics, globalConfigSchematics, makeConfigSchematics } from "./config";
 import { attachmentContext, composeMessage } from "./shared/attachments";
 import { listModelChoices } from "./shared/models";
@@ -11,10 +11,19 @@ import { memoryContext, triggeredSkillContext } from "./groups/memory/promptPrep
 import { toolsProvider } from "./toolsProvider";
 
 /** About how much text the chat holds already, so attached files leave room for the rest. */
-async function historyChars(ctl: PromptPreprocessorController): Promise<number> {
+async function historyChars(pullHistory: () => Promise<Chat>): Promise<number> {
   try {
-    const history = await ctl.pullHistory();
+    const history = await pullHistory();
     return history.getMessagesArray().reduce((sum, message) => sum + message.getText().length, 0);
+  } catch {
+    return 0;
+  }
+}
+
+/** How many files are attached to the message; 0 when they cannot be listed. */
+function fileCount(ctl: PromptPreprocessorController, message: ChatMessage): number {
+  try {
+    return message.getFiles(ctl.client).length;
   } catch {
     return 0;
   }
@@ -52,6 +61,7 @@ export async function promptPreprocessor(ctl: PromptPreprocessorController, user
   if (config.get("enableCommands") && /^\s*\/doctor\s*$/i.test(userText)) {
     // Built from what the code finds, not left to the model, which cannot see its own setup. Nothing
     // else is added: the report is all the model needs, and its words must not trigger skills.
+    if (fileCount(ctl, userMessage) > 0) ctl.createStatus({ status: "error", text: "agent-toolkit did not read the attached files: /doctor only checks the setup" });
     try {
       userMessage.replaceText(doctorMessage(doctorReport(await gatherDoctorFacts(ctl, config, project))));
       ctl.createStatus({ status: "done", text: "agent-toolkit checked this chat's setup" });
@@ -75,19 +85,34 @@ export async function promptPreprocessor(ctl: PromptPreprocessorController, user
     }
   }
 
+  // Pulled once, by whichever of the steps below needs it.
+  let pulled: Promise<Chat> | undefined;
+  const pullHistory = () => (pulled ??= ctl.pullHistory());
+
   const added: string[] = [];
   // The context block is the Memory group's job, so it only comes while that group is on.
   if (config.get("enableMemory")) {
-    const block = await memoryContext(ctl);
-    if (block) added.push(block);
-    const skills = await triggeredSkillContext(ctl, userText).catch(() => null);
+    try {
+      const block = await memoryContext(ctl, await pullHistory());
+      if (block) added.push(block);
+    } catch (error: any) {
+      // Like an unreadable attachment: the message goes on without the block, and the user is told.
+      if (ctl.abortSignal.aborted) throw error;
+      ctl.createStatus({ status: "error", text: `agent-toolkit could not load the memory context: ${String(error?.message ?? error)}` });
+    }
+    // With /resume, only the user's own words pick skills, not the note a model wrote.
+    const words = resume ? resume[1] : userText;
+    const skills = await pullHistory()
+      .then(history => triggeredSkillContext(ctl, words, history))
+      .catch(() => null);
     if (skills) added.push(skills);
   }
   if (config.get("readAttachments")) {
     try {
+      // The history is only measured for a message that has files to fit in.
       const attached = await attachmentContext(ctl as any, userMessage as any, {
         maxChars: config.get("maxAttachmentChars"),
-        usedChars: (await historyChars(ctl)) + added.reduce((sum, block) => sum + block.length, 0),
+        usedChars: (fileCount(ctl, userMessage) > 0 ? await historyChars(pullHistory) : 0) + added.reduce((sum, block) => sum + block.length, 0),
         documentTools: config.get("enableDocuments"),
         fileTools: config.get("enableFiles"),
       });

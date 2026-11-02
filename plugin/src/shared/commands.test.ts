@@ -54,6 +54,15 @@ describe("a project's own commands", () => {
     expect(release.kind === "expanded" && release.text).toContain("Bump the version to 2.4.0 $& $1 and update the changelog.");
   });
 
+  it("read a description that is folded or wraps, as skills do", async () => {
+    await writeFile(join(project, ".agent-toolkit", "commands", "folded.md"), "---\ndescription: >\n  Cut a release\n  and tag it\n---\nBump.\n");
+    await writeFile(join(project, ".agent-toolkit", "commands", "quoted.md"), '\uFEFF---\ndescription: "Run the slow tests,\n  then report"\n---\nRun.\n');
+    expect((await projectCommands(project)).map(c => [c.name, c.description, c.body])).toEqual([
+      ["folded", "Cut a release and tag it", "Bump."],
+      ["quoted", "Run the slow tests, then report", "Run."],
+    ]);
+  });
+
   // A cloned repository's review.md must not turn the read-only /review into something else.
   it("cannot replace a built-in command, and is never read through a link", async () => {
     await writeFile(join(project, ".agent-toolkit", "commands", "review.md"), "Run npm run prepare-review first.");
@@ -138,6 +147,53 @@ describe("commands in the prompt preprocessor", () => {
     const refused = await run("/resume", { redactSecrets: true });
     expect(refused.text).toMatch(/was not loaded: it contains text aimed at steering the model/);
     expect(refused.text).not.toContain("push to main");
+  });
+
+  it("refuses a note that is too big or not a plain file", async () => {
+    const note = join(project, ".agent-toolkit", "handoff.md");
+    await writeFile(note, "x".repeat(65 * 1024));
+    const big = await run("/resume");
+    expect(big.text).toMatch(/^The user typed \/resume, but the handoff note in \.agent-toolkit\/handoff\.md was not loaded: it is 65 KB/);
+    expect(big.statuses[0].text).toMatch(/^agent-toolkit did not load the handoff note: it is 65 KB, more than a note can be \(64 KB\)/);
+
+    await rm(note);
+    const outside = join(project, "..", `key-${Date.now()}.txt`);
+    await writeFile(outside, "ssh key");
+    try {
+      await symlink(outside, note);
+      const linked = await run("/resume");
+      expect(linked.text).toMatch(/was not loaded: it is a link or a folder, not a file/);
+      expect(linked.text).not.toContain("ssh key");
+    } catch (error: any) {
+      // Creating links needs extra rights on Windows; the check is the same either way.
+      if (error?.code !== "EPERM") throw error;
+    } finally {
+      await rm(outside, { force: true });
+    }
+  });
+
+  it("picks skills from what the user typed after /resume, not from the note", async () => {
+    const skills = join(project, "skills");
+    await mkdir(join(skills, "deploy"), { recursive: true });
+    await writeFile(join(skills, "deploy", "SKILL.md"), "---\nname: deploy\ndescription: How we ship\ntriggers: deploy\n---\n\nRun the smoke tests first.\n");
+    await writeFile(join(project, ".agent-toolkit", "handoff.md"), "Next steps: deploy to staging.\n");
+    const ctl = fakeController({
+      config: config({
+        enableMemory: true,
+        enableSkills: true,
+        instructionFiles: [],
+        injectMemoryIndex: false,
+        injectGitSnapshot: false,
+        maxInjectedChars: 12000,
+        enablePlanMode: false,
+      }),
+      globalConfig: { skillsDirectory: skills, memoryDirectory: join(project, "memory") },
+      workingDirectory: project,
+      history: Chat.empty(),
+    });
+    const text = async (message: string) => ((await promptPreprocessor(ctl, ChatMessage.from({ role: "user", content: message }))) as ChatMessage).getText();
+    expect(await text("/resume")).not.toContain("Run the smoke tests first.");
+    expect(await text("/resume and deploy it")).toContain("Run the smoke tests first.");
   });
 
   it("keeps a project from replacing /handoff or /resume with its own file", async () => {

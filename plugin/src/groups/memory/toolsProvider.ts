@@ -30,6 +30,13 @@ export async function toolsProvider(ctl: ToolsProviderController) {
   const scan = config.get("scanLoadedFiles");
   const tools: Tool[] = [];
 
+  /** The error for a name with no memory, naming close ones so the model can retry. */
+  const noMemory = async (name: string) => {
+    const similar = await store.search(name, 3).catch(() => []);
+    const hint = similar.length ? ` Similar: ${similar.map(s => s.memory.name).join(", ")}.` : "";
+    return new ToolError(`No memory named "${name}".${hint}`);
+  };
+
   tools.push(
     tool({
       name: "memory_save",
@@ -61,11 +68,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       parameters: { name: z.string() },
       implementation: safe(async ({ name }) => {
         const memory = await store.read(name);
-        if (!memory) {
-          const similar = await store.search(name, 3).catch(() => []);
-          const hint = similar.length ? ` Similar: ${similar.map(s => s.memory.name).join(", ")}.` : "";
-          throw new ToolError(`No memory named "${name}".${hint}`);
-        }
+        if (!memory) throw await noMemory(name);
         return `# ${memory.name} (${memory.type}, updated ${memory.updated})\n${memory.description}\n\n${memory.content}`;
       }),
     }),
@@ -100,9 +103,10 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       name: "memory_delete",
       description: "Delete a saved memory that is wrong or no longer useful.",
       parameters: { name: z.string() },
-      implementation: safe(async ({ name }) =>
-        (await store.delete(name)) ? `Deleted memory "${name}".` : `Error: No memory named "${name}".`,
-      ),
+      implementation: safe(async ({ name }) => {
+        if (!(await store.delete(name))) throw await noMemory(name);
+        return `Deleted memory "${name}".`;
+      }),
     }),
   );
 

@@ -14,7 +14,8 @@ export async function gitSnapshot(directory: string, signal?: AbortSignal): Prom
         signal,
         env: commandEnv({ GIT_TERMINAL_PROMPT: "0", GIT_PAGER: "cat", NO_COLOR: "1" }),
       });
-      return result.exitCode === 0 ? result.stdout.trim() : null;
+      // trimEnd: the first `status --short` line can start with a space (" M a.ts" is unstaged).
+      return result.exitCode === 0 ? result.stdout.trimEnd() : null;
     } catch {
       return null; // git missing or unusable; the snapshot is optional
     }

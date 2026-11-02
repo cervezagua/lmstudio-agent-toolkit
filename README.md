@@ -26,7 +26,7 @@
 ---
 
 <p align="center">
-  <img src="docs/demo.png" alt="LM Studio running qwen3.8-27b with the toolkit: the model globs for the file, lists the folder, reads slugify.js and its test, runs the test, and explains that the regex strips digits." width="920">
+  <img src="docs/demo.png" alt="LM Studio running a 27B tool-use model with the toolkit: the model globs for the file, lists the folder, reads slugify.js and its test, runs the test, and explains that the regex strips digits." width="920">
 </p>
 
 <p align="center"><sub>A real session in LM Studio. The model goes on to fix the regex and re-run the test to <code>exit_code: 0</code>. Every call was shown for approval before it ran.</sub></p>
@@ -160,7 +160,7 @@ Small models often know how to call a tool but not when to stop. [**agent-toolki
 
 ### Choose and tune the model
 
-- **Bigger tool-use models plan multi-step work far better** than small ones. Checked end to end with `qwen/qwen3.8-27b`.
+- **Bigger tool-use models plan multi-step work far better** than small ones. Checked end to end with a 27B tool-use model.
 - **Switch off the groups you don't need.** Fewer tools means better choices, especially on small models.
 - **Models with their safety training stripped out** ("uncensored", "abliterated") are often worse at following tool formats and may drift between languages. If one starts answering in the wrong language, add *"Always reply in English."* to the chat's system prompt.
 - **Pick the models for OCR, the sub-agent and `research` from a dropdown** in the Documents, Files and Web settings. It lists the models you have; after downloading a new one, turn the plugin off and on to refresh the list.

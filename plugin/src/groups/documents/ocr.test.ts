@@ -1,9 +1,11 @@
 import { existsSync } from "fs";
 import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
-import { join } from "path";
+import { basename, join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { recordAttachments, setUserFilesDirectory } from "../../shared/attachments";
+import { listCheckpoints, startTurn } from "../../shared/checkpoints";
+import { writeMode } from "../../shared/mode";
 import { callTool, fakeController } from "../../shared/testing/fake-controller";
 import { extractPdfText, parsePageRange, renderPdfPages, workerCandidates } from "./lib/pdf";
 import { DEFAULT_OCR_PROMPT, ocrImageFile, pickVisionModel } from "./lib/vision";
@@ -176,6 +178,7 @@ describe("vision helpers", () => {
     expect(result).toBe("Invoice 42"); // reasoning stripped
     expect(seen.messages[0].images).toEqual([{ path: "page.png" }]);
     expect(seen.messages[0].content).toContain("Transcribe everything");
+    expect(seen.opts.maxTokens).toBe(4096); // a vision model that loops still stops
   });
 });
 
@@ -186,6 +189,8 @@ describe("ocr-tools toolsProvider", () => {
     renderScale: 1,
     maxPages: 10,
     maxOutputChars: 20000,
+    enableFiles: false,
+    enableCheckpoints: false,
     ...overrides,
   });
 
@@ -248,6 +253,34 @@ describe("ocr-tools toolsProvider", () => {
     expect(output).toMatch(/Rendered 1 of 3 pages/);
     expect(output).toContain("page 1: ocr-pages/page-001.png");
     expect((await readFile(join(root, "ocr-pages", "page-001.png"))).length).toBeGreaterThan(500);
+  }, 60000);
+
+  it("renders pages only where a tool may write, and is withheld while planning", async () => {
+    // With no Project Folder of its own the chat's folder is the root, and the toolkit's state is in it.
+    await writeFile(join(work, "doc.pdf"), makePdf(["Page one"]));
+    const tools = await toolsProvider(fakeController({ config: config({ projectFolder: work }), workingDirectory: work }));
+    expect(await callTool(tools, "pdf_to_images", { path: "doc.pdf", output_directory: ".agent-toolkit" })).toMatch(
+      /^Error: .* is managed by the toolkit and cannot be changed by a tool/,
+    );
+    expect(existsSync(join(work, ".agent-toolkit", "page-001.png"))).toBe(false);
+
+    await writeMode(work, { planning: true });
+    expect((await provider()).map(tool => tool.name)).not.toContain("pdf_to_images");
+  });
+
+  it("records the pages it writes for /rewind: a new one can be removed, a replaced one is not kept", async () => {
+    const tools = await provider({ enableFiles: true, enableCheckpoints: true });
+    await startTurn(work, "render it");
+    await callTool(tools, "pdf_to_images", { path: "doc.pdf", pages: "1" });
+    await startTurn(work, "again");
+    await callTool(tools, "pdf_to_images", { path: "doc.pdf", pages: "1-2" });
+    const [first, second] = await listCheckpoints(work);
+    // By name: the root may be spelled differently once resolved (an 8.3 short name on Windows).
+    const names = (paths: string[]) => paths.map(path => basename(path));
+    expect(names(first.files.map(f => f.path))).toEqual(["page-001.png"]);
+    expect(first.files[0].previous).toBeNull();
+    expect(names(second.files.map(f => f.path))).toEqual(["page-002.png"]);
+    expect(names(second.skipped)).toEqual(["page-001.png"]);
   }, 60000);
 
   it("refuses files outside the root and unsupported types", async () => {

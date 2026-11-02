@@ -140,6 +140,8 @@ describe("markdown helpers", () => {
 
   it("decodes character references", () => {
     expect(decodeEntities("AT&amp;T &lt;b&gt; &#169; &#x41; &nosuch; &#0;")).toBe("AT&T <b> \u00a9 A &nosuch; &#0;");
+    // Names an object inherits are no entities.
+    expect(decodeEntities("&constructor; &toString; &__proto__;")).toBe("&constructor; &toString; &__proto__;");
   });
 });
 

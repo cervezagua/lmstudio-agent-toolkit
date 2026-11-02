@@ -1,5 +1,5 @@
 import { text, tool, type LLM, type Tool, type ToolsProviderController } from "@lmstudio/sdk";
-import { mkdir, mkdtemp, rm, stat } from "fs/promises";
+import { mkdir, mkdtemp, readdir, rm, stat } from "fs/promises";
 import { tmpdir } from "os";
 import { basename, dirname, extname, join } from "path";
 import { z } from "zod";
@@ -177,32 +177,39 @@ export async function toolsProvider(ctl: ToolsProviderController) {
     }),
   );
 
-  tools.push(
-    tool({
-      name: "pdf_to_images",
-      description: text`
-        Render PDF pages as PNG files and return their paths, without reading them. Useful when the
-        user wants the page images themselves, or to inspect one page closely afterwards.
-      `,
-      parameters: { path: z.string(), pages: z.string().optional(), output_directory: z.string().optional() },
-      implementation: safe(async ({ path, pages, output_directory }, ctx) => {
-        const file = await resolveDocument(path);
-        const target = await resolveSafe(root, output_directory ?? "ocr-pages");
-        ctx.status("Rendering PDF pages");
-        const { totalPages, rendered } = await renderPdfPages(file, target, {
-          range: pages,
-          scale: config.get("renderScale"),
-          maxPages: config.get("maxPages"),
-        });
-        return `Rendered ${rendered.length} of ${totalPages} pages of ${show(file)}:\n${rendered.map(p => `page ${p.page}: ${show(p.file)}`).join("\n")}`;
-      }),
-    }),
-  );
-
   // Plan mode (the Memory group's): while planning, tools that change things are not offered.
   const planning = (await readMode(ctl.getWorkingDirectory())).planning;
 
   if (!planning) {
+    tools.push(
+      tool({
+        name: "pdf_to_images",
+        description: text`
+          Render PDF pages as PNG files and return their paths, without reading them. Useful when the
+          user wants the page images themselves, or to inspect one page closely afterwards.
+        `,
+        parameters: { path: z.string(), pages: z.string().optional(), output_directory: z.string().optional() },
+        implementation: safe(async ({ path, pages, output_directory }, ctx) => {
+          const file = await resolveDocument(path);
+          const target = await resolveWritable(output_directory ?? "ocr-pages");
+          const before = new Set(await readdir(target).catch(() => [] as string[]));
+          ctx.status("Rendering PDF pages");
+          const { totalPages, rendered } = await renderPdfPages(file, target, {
+            range: pages,
+            scale: config.get("renderScale"),
+            maxPages: config.get("maxPages"),
+          });
+          // For /rewind, as in write_document: a new page image can be removed again, a replaced one is not kept.
+          if (config.get("enableFiles") && config.get("enableCheckpoints")) {
+            for (const page of rendered) {
+              await recordChange(ctl.getWorkingDirectory(), page.file, null, !before.has(basename(page.file))).catch(() => {});
+            }
+          }
+          return `Rendered ${rendered.length} of ${totalPages} pages of ${show(file)}:\n${rendered.map(p => `page ${p.page}: ${show(p.file)}`).join("\n")}`;
+        }),
+      }),
+    );
+
     tools.push(
       tool({
         name: "write_document",

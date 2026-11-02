@@ -50,6 +50,9 @@ export function visionModelName(model: LLM): string {
   return (typeof modelKey === "string" && modelKey) || (typeof identifier === "string" && identifier) || "";
 }
 
+/** Far more than a dense page of text needs. */
+const MAX_VISION_TOKENS = 4096;
+
 /**
  * Sends one image with a prompt to the vision model and returns its reply: a transcription for
  * ocr_document, a description or an answer for view_image.
@@ -67,6 +70,7 @@ export async function ocrImageFile(
   } catch (error) {
     throw new ToolError(`Could not read the image "${file}": ${(error as Error).message}`);
   }
-  const result = await model.respond([{ role: "user", content: instructions, images: [handle] }], { signal });
+  // A cap, so a vision model that falls into repeating itself stops instead of running on.
+  const result = await model.respond([{ role: "user", content: instructions, images: [handle] }], { signal, maxTokens: MAX_VISION_TOKENS });
   return result.nonReasoningContent.trim() || result.content.trim();
 }

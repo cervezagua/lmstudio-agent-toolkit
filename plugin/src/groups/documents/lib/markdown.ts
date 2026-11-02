@@ -46,7 +46,8 @@ const NAMED_ENTITIES: Record<string, string> = {
 export function decodeEntities(text: string): string {
   if (!text.includes("&")) return text;
   return text.replace(/&(#\d{1,7}|#[Xx][a-fA-F0-9]{1,6}|\w+);/g, (whole, body: string) => {
-    if (body[0] !== "#") return NAMED_ENTITIES[body] ?? whole;
+    // Own keys only, so "&constructor;" stays text instead of reaching Object.prototype.
+    if (body[0] !== "#") return Object.hasOwn(NAMED_ENTITIES, body) ? NAMED_ENTITIES[body] : whole;
     const code = /^#[Xx]/.test(body) ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10);
     // XML cannot carry control characters or lone surrogates.
     const valid = code === 9 || code === 10 || (code >= 0x20 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff));

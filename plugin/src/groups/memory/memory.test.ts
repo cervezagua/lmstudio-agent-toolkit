@@ -68,6 +68,14 @@ describe("memory store", () => {
     expect(parseMemory(serializeMemory(memory), "x")).toEqual({ ...memory, description: "Postgres: port 5433 not default" });
   });
 
+  it("reads a memory saved with a byte-order mark", () => {
+    expect(parseMemory("\uFEFF---\nname: db\ndescription: Postgres\ntype: project\nupdated: 2026-09-15\n---\nUse port 5433.\n", "x")).toMatchObject({
+      name: "db",
+      type: "project",
+      content: "Use port 5433.",
+    });
+  });
+
   it("saves, lists, searches, and deletes with an index kept in sync", async () => {
     const store = new MemoryStore(memoryDir);
     await store.save({ name: "prefers-pnpm", description: "User uses pnpm", content: "Always run pnpm, never npm.", type: "feedback" });
@@ -225,6 +233,34 @@ describe("prompt preprocessor", () => {
       expect(statuses.some(s => s.text.includes("hid"))).toBe(false);
     });
   });
+  it("still adds the context after a chat opened with /doctor", async () => {
+    await writeFile(join(projectDir, "AGENTS.md"), "Always answer in French.");
+    for (const opened of ["/doctor", "The user ran /doctor, agent-toolkit's check of this chat's setup. Do not call any tools.\n\n✓ ..."]) {
+      const ctl = fakeController({
+        config: chatConfig(),
+        globalConfig: { memoryDirectory: memoryDir, skillsDirectory: "" },
+        workingDirectory: chatDir,
+        history: Chat.from([
+          { role: "user", content: opened },
+          { role: "assistant", content: "Everything looks fine." },
+        ]),
+      });
+      expect(((await preprocess(ctl, ChatMessage.from({ role: "user", content: "hello" }))) as ChatMessage).getText()).toContain("Always answer in French.");
+    }
+  });
+
+  it("sends the message without the context when it cannot be loaded, and says so", async () => {
+    await writeFile(memoryDir, "a file where the memory folder should be");
+    const ctl = fakeController({
+      config: chatConfig(),
+      globalConfig: { memoryDirectory: memoryDir, skillsDirectory: "" },
+      workingDirectory: chatDir,
+      history: Chat.empty(),
+    });
+    expect(((await preprocess(ctl, ChatMessage.from({ role: "user", content: "hi" }))) as ChatMessage).getText()).toBe("hi");
+    expect(ctl.statuses).toContainEqual({ status: "error", text: expect.stringMatching(/^agent-toolkit could not load the memory context: /) });
+  });
+
   it("leaves the message untouched when there is nothing to load", async () => {
     const message = ChatMessage.from({ role: "user", content: "hi" });
     const ctl = fakeController({
@@ -278,6 +314,7 @@ describe("memory-tools toolsProvider", () => {
     expect(await callTool(t, "save_session_summary", { title: "Auth refactor", summary: "Done: login. Next: logout." })).toMatch(
       /^Saved session summary as "session-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-auth-refactor"/,
     );
+    expect(await callTool(t, "memory_delete", { name: "deploy" })).toMatch(/^Error: No memory named "deploy". Similar: deploy-steps/);
     expect(await callTool(t, "memory_delete", { name: "deploy-steps" })).toBe('Deleted memory "deploy-steps".');
     expect(await callTool(t, "memory_save", { name: "x", description: "d", content: "  ", type: "user" })).toBe(
       "Error: Memory content must not be empty.",

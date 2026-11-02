@@ -90,4 +90,30 @@ describe("git-tools toolsProvider", () => {
     expect(await callTool(tools, "git_show", { ref: "--output=evil" })).toBe('Error: ref must not start with "-".');
     expect(await callTool(tools, "git_show", { ref: "nonexistent-ref" })).toMatch(/^Error: git show failed \(exit 128\)/);
   });
+
+  it("checks out a branch that exists only on the remote tracking it, not afresh from HEAD", async () => {
+    const { runCli } = await import("./lib/cli");
+    const base = await mkdtemp(join(tmpdir(), "git-tools-remote-"));
+    const clone = join(base, "clone");
+    const run = (args: string[], cwd = clone) => runCli("git", args, { cwd, maxOutputChars: 20000 });
+    try {
+      await run(["init", "--bare", "remote.git"], base);
+      await run(["init", "clone"], base);
+      await run(["config", "user.email", "test@example.com"]);
+      await run(["config", "user.name", "Test"]);
+      await writeFile(join(clone, "a.txt"), "one\n");
+      await run(["add", "a.txt"]);
+      await run(["commit", "-m", "first"]);
+      await run(["remote", "add", "origin", join(base, "remote.git")]);
+      await run(["push", "origin", "HEAD:refs/heads/topic"]);
+      await run(["fetch", "origin"]);
+
+      const remoteTools = await toolsProvider(fakeController({ config: config(clone), workingDirectory: tmpdir() }));
+      expect(await callTool(remoteTools, "git_branch", { name: "topic" })).toBe('Created branch "topic" tracking origin/topic, and switched to it.');
+      expect(await run(["rev-parse", "--abbrev-ref", "topic@{upstream}"])).toBe("origin/topic");
+      expect(await callTool(remoteTools, "git_branch", { name: "fresh" })).toBe('Created and switched to branch "fresh".');
+    } finally {
+      await rm(base, { recursive: true, force: true });
+    }
+  }, 60000);
 });

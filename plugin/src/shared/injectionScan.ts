@@ -14,17 +14,21 @@ export interface InjectionFinding {
   excerpt: string;
 }
 
-const RULES: Array<{ reason: string; pattern: RegExp }> = [
+/** `phrase`: a sentence, which a hard-wrapped file can split over two lines. */
+const RULES: Array<{ reason: string; pattern: RegExp; phrase?: boolean }> = [
   {
     reason: "tells the assistant to ignore its instructions",
+    phrase: true,
     pattern: /\b(ignore|disregard|forget|override)\b[^.\n]{0,40}\b(previous|prior|above|earlier|all|your|system)\b[^.\n]{0,30}\b(instructions?|prompts?|rules|guidelines)\b/i,
   },
   {
     reason: "tries to give the assistant a new identity",
+    phrase: true,
     pattern: /\byou are (now|no longer)\b|\bfrom now on,? you (are|will|must)\b|\bnew system prompt\b/i,
   },
   {
     reason: "tells the assistant to hide something from the user",
+    phrase: true,
     pattern: /\b(do not|don't|never)\b[^.\n]{0,20}\b(tell|inform|mention to|reveal to|show|notify)\b[^.\n]{0,15}\b(the )?user\b/i,
   },
   {
@@ -44,15 +48,26 @@ const INVISIBLE = /[​-‏‪-‮⁠-⁤⁦-⁩﻿]|\uDB40[\uDC00-\uDC7F]/;
 
 export function scanForInjection(text: string): InjectionFinding[] {
   const findings: InjectionFinding[] = [];
-  const lines = text.split(/\r?\n/);
+  // A byte-order mark at the very start of a file is ordinary, not hidden text.
+  const lines = text.split(/\r?\n/).map((line, index) => (index === 0 ? line.replace(/^﻿/, "") : line));
+  const matches = lines.map(line => RULES.map(rule => rule.pattern.test(line)));
   for (let index = 0; index < lines.length; index++) {
-    // A byte-order mark at the very start of a file is ordinary, not hidden text.
-    const line = index === 0 ? lines[index].replace(/^﻿/, "") : lines[index];
+    const line = lines[index];
     const excerpt = line.trim().slice(0, 120);
     if (INVISIBLE.test(line)) findings.push({ reason: "contains invisible characters", line: index + 1, excerpt });
-    for (const rule of RULES) {
-      if (rule.pattern.test(line)) findings.push({ reason: rule.reason, line: index + 1, excerpt });
-    }
+    RULES.forEach((rule, r) => {
+      if (matches[index][r]) {
+        findings.push({ reason: rule.reason, line: index + 1, excerpt });
+        return;
+      }
+      // A phrase hard-wrapped onto the next line ("Ignore all previous\ninstructions") is read with
+      // the two lines joined; one that either line trips on its own is reported there instead. Only
+      // phrases: a curl on one line and ".env" on the next is ordinary documentation.
+      const next = lines[index + 1];
+      if (rule.phrase && next !== undefined && !matches[index + 1][r] && rule.pattern.test(`${line} ${next}`)) {
+        findings.push({ reason: rule.reason, line: index + 1, excerpt: `${line.trim()} ${next.trim()}`.slice(0, 120) });
+      }
+    });
   }
   return findings;
 }

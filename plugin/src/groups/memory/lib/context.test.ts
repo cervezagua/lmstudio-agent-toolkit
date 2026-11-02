@@ -43,6 +43,16 @@ describe("memory index", () => {
     expect(index).toContain("50 older memories are not listed; find them with memory_search.");
   });
 
+  it("keeps the most recently updated memories when capped, still listed by name", () => {
+    // Named so the newest sort last by name: a cap by name would drop exactly those.
+    const many = Array.from({ length: 250 }, (_, i) => memory(`m${String(i).padStart(3, "0")}`, new Date(Date.UTC(2026, 0, 1) + i * 3600_000).toISOString()));
+    const listed = renderIndex(many, now)
+      .split("\n")
+      .filter(line => line.startsWith("- "))
+      .map(line => /\[(.+?)\]/.exec(line)![1]);
+    expect(listed).toEqual(Array.from({ length: 200 }, (_, i) => `m${String(i + 50).padStart(3, "0")}`));
+  });
+
   it("still handles an empty collection", () => {
     expect(renderIndex([], now)).toContain("(no memories saved yet)");
   });
@@ -87,6 +97,18 @@ describe("git snapshot", () => {
     expect(snapshot).toContain("Branch: work");
     expect(snapshot).toContain("?? b.txt");
     expect(snapshot).toContain("add a");
+  }, 60000);
+
+  it("keeps the leading space that marks a change as unstaged", async () => {
+    const git = (args: string[]) => runProcess("git", args, { cwd: dir, timeoutMs: 15000 });
+    await git(["init"]);
+    await git(["config", "user.email", "test@example.com"]);
+    await git(["config", "user.name", "Test"]);
+    await writeFile(join(dir, "a.ts"), "one\n");
+    await git(["add", "a.ts"]);
+    await git(["commit", "-m", "add a"]);
+    await writeFile(join(dir, "a.ts"), "two\n");
+    expect(await gitSnapshot(dir)).toContain("Uncommitted changes:\n M a.ts");
   }, 60000);
 
   it("says the tree is clean when it is", async () => {
