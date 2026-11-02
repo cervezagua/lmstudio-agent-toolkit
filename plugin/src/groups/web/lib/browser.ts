@@ -128,10 +128,27 @@ export class BrowserSession {
   }
 
   /** Waits briefly for navigation or client-side rendering triggered by an action. */
-  async settle() {
-    const page = this.requirePage();
+  async settle(page = this.requirePage()) {
     await page.waitForLoadState("domcontentloaded", { timeout: 10_000 }).catch(() => {});
     await page.waitForTimeout(500);
+  }
+
+  /**
+   * A snapshot of `url` from a tab of its own, closed afterwards: fetch_url's fallback must not
+   * navigate away from the page the model is working on, nor renumber its element refs.
+   */
+  async renderOnce(channel: BrowserChannel, headless: boolean, url: string, maxChars: number): Promise<string> {
+    const shared = await this.getPage(channel, headless);
+    const page = await this.context!.newPage();
+    try {
+      await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
+      await this.settle(page);
+      return formatSnapshot((await page.evaluate(SNAPSHOT_SCRIPT)) as SnapshotData, maxChars);
+    } finally {
+      await page.close().catch(() => {});
+      // The new tab, or a popup it opened, was taken for the model's page; give the model its own back.
+      if (!shared.isClosed()) this.page = shared;
+    }
   }
 
   async close() {

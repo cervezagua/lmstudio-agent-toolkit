@@ -58,12 +58,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
   // Also published on its own as the page-reader plugin, which has no browser to fall back on.
   const renderInBrowser: RenderInBrowser | undefined =
     config.get("enableBrowser") && config.get("browserFallback")
-      ? async (url, maxChars) => {
-          const browserPage = await browserSession.getPage(config.get("browserChannel") as BrowserChannel, config.get("headless"));
-          await browserPage.goto(url, { waitUntil: "domcontentloaded", timeout: 30_000 });
-          await browserSession.settle();
-          return browserSession.snapshot(maxChars);
-        }
+      ? (url, maxChars) => browserSession.renderOnce(config.get("browserChannel") as BrowserChannel, config.get("headless"), url, maxChars)
       : undefined;
   tools.push(...makeFetchUrlTools({ maxChars: maxPageChars, renderInBrowser }));
   tools.push(...makeWikipediaTools({ maxChars: maxPageChars }));
