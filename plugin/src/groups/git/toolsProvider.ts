@@ -152,6 +152,22 @@ export async function toolsProvider(ctl: ToolsProviderController) {
           await git(["switch", branch], { signal });
           return `Switched to existing branch "${branch}".`;
         }
+        if (!base) {
+          // A branch that so far exists only on the remote is checked out tracking it, as plain
+          // `git switch` would, rather than started afresh from HEAD.
+          const remotes = (await git(["remote"], { signal })).split(/\r?\n/).filter(r => r && r !== "(no output)");
+          const remote = remotes.includes("origin") ? "origin" : remotes.length === 1 ? remotes[0] : null;
+          const onRemote =
+            remote !== null &&
+            (await git(["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${branch}`], { signal }).then(
+              () => true,
+              () => false,
+            ));
+          if (onRemote) {
+            await git(["switch", "-c", branch, "--track", `${remote}/${branch}`], { signal });
+            return `Created branch "${branch}" tracking ${remote}/${branch}, and switched to it.`;
+          }
+        }
         await git(["switch", "-c", branch, ...baseArgs], { signal });
         return `Created and switched to branch "${branch}".`;
       }),

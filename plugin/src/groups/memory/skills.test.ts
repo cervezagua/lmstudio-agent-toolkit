@@ -137,6 +137,22 @@ describe("skills", () => {
     it("reads a single-quoted value, with '' for a quote", () => {
       expect(describedBy("name: a\ndescription: 'it''s fine,\n  really'")).toBe("it's fine, really");
     });
+
+    it("reads a list written at the key's own indent", () => {
+      expect(parseSkillHeader(withEol('name: a\ntriggers:\n- deploy\n- "release notes"\ndescription: ships it', "\n"), "fallback")).toEqual({
+        name: "a",
+        description: "ships it",
+        triggers: ["deploy", "release notes"],
+      });
+    });
+
+    it("reads a header that follows a byte-order mark", () => {
+      expect(parseSkillHeader("\uFEFF---\nname: a\ndescription: does things\n---\nbody", "fallback")).toEqual({
+        name: "a",
+        description: "does things",
+        triggers: [],
+      });
+    });
   });
 
   it("lists folder skills and single-file skills, ignoring README", async () => {
@@ -374,6 +390,13 @@ describe("skill and plan-mode tools", () => {
       expect(await triggeredSkillContext(preprocessorCtl([{ role: "user", content: block! }]), "deploy again")).toBeNull();
       expect(await triggeredSkillContext(preprocessorCtl(), "fix the tests")).toBeNull();
       expect(await triggeredSkillContext(preprocessorCtl([], { enableSkills: false }), "deploy")).toBeNull();
+    });
+
+    it("leaves the header of a skill saved with a byte-order mark out of its text", async () => {
+      await writeFile(join(skillsDir, "deploy", "SKILL.md"), "\uFEFF---\nname: deploy\ntriggers: deploy\n---\n\nRun the smoke tests.\n");
+      const block = await triggeredSkillContext(preprocessorCtl(), "deploy");
+      expect(block).toContain("Run the smoke tests.");
+      expect(block).not.toContain("triggers:");
     });
 
     it("leaves out a triggered skill that looks written to steer the model", async () => {

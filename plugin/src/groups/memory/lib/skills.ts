@@ -63,9 +63,11 @@ function readValue(lines: string[], start: number): { value: string; next: numbe
   const first = KEY_LINE.exec(lines[start])![2].trim();
   let index = start + 1;
   const indented = (line: string) => /^[ \t]+\S/.test(line);
+  // YAML lets a list sit at the key's own indent ("triggers:\n- deploy"), under a key with no value.
+  const listItem = (line: string) => first === "" && /^-[ \t]/.test(line);
   const followingLines = () => {
     const parts: string[] = [];
-    while (index < lines.length && (lines[index].trim() === "" || indented(lines[index]))) {
+    while (index < lines.length && (lines[index].trim() === "" || indented(lines[index]) || listItem(lines[index]))) {
       const line = lines[index].trim();
       if (line) parts.push(line);
       index++;
@@ -108,9 +110,15 @@ export function parseTriggers(value: string | undefined): string[] {
     .slice(0, 20);
 }
 
-/** Reads `name:`, `description:` and `triggers:` from a leading YAML frontmatter block, if there is one. */
-export function parseSkillHeader(text: string, fallbackName: string): { name: string; description: string; triggers: string[] } {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+/** A byte-order mark, which some Windows editors write, would hide the leading `---`. */
+export const stripBom = (text: string) => text.replace(/^\uFEFF/, "");
+
+/**
+ * The fields of a leading YAML frontmatter block, keys in lower case, each value folded into one
+ * line; `header` is the block itself, or null when there is none.
+ */
+export function readFrontmatter(text: string): { header: string | null; fields: Record<string, string> } {
+  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(stripBom(text));
   const fields: Record<string, string> = {};
   if (match) {
     const lines = match[1].split(/\r?\n/);
@@ -125,10 +133,17 @@ export function parseSkillHeader(text: string, fallbackName: string): { name: st
       i = next;
     }
   }
+  return { header: match ? match[0] : null, fields };
+}
+
+/** Reads `name:`, `description:` and `triggers:` from a leading YAML frontmatter block, if there is one. */
+export function parseSkillHeader(text: string, fallbackName: string): { name: string; description: string; triggers: string[] } {
+  text = stripBom(text);
+  const { header, fields } = readFrontmatter(text);
   let description = fields.description ?? "";
   if (!description) {
     // Fall back to the first non-empty, non-heading line of the body.
-    const body = match ? text.slice(match[0].length) : text;
+    const body = header ? text.slice(header.length) : text;
     description = body.split(/\r?\n/).map(l => l.trim()).find(l => l && !l.startsWith("#")) ?? "";
   }
   return { name: fields.name || fallbackName, description: description.slice(0, 300), triggers: parseTriggers(fields.triggers) };
