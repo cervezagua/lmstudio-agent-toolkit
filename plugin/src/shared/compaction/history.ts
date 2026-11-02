@@ -35,12 +35,22 @@ export interface Msg {
  */
 export function withoutThinking(msg: Msg): Msg {
   if (msg.role !== "assistant") return msg;
-  const text = msg.text
-    .replace(/^[\s\S]*__LM_STUDIO_INTERNAL_LSEP_SYNTHETIC_REASONING_END_[0-9a-f]+__/, "")
-    // Only a block that opens the message: an answer can mention <think> itself (code, docs).
-    .replace(/^\s*<think>[\s\S]*?(<\/think>|$)/i, "")
-    .trimStart();
+  const text = stripThinking(msg.text);
   return text === msg.text ? msg : { ...msg, text, original: undefined };
+}
+
+/**
+ * A model's text without its thinking: everything before LM Studio's end marker, and a <think> block
+ * that opens it (only that one: an answer can mention <think> itself, in code or docs). A <think> left
+ * open is kept, since in an earlier message it is the answer's own text; for a reply just written
+ * (`fresh`), it means the model was cut off while thinking, so it was all thinking.
+ */
+export function stripThinking(text: string, options: { fresh?: boolean } = {}): string {
+  const block = options.fresh ? /^\s*<think>[\s\S]*?(<\/think>|$)/i : /^\s*<think>[\s\S]*?<\/think>/i;
+  return text
+    .replace(/^[\s\S]*__LM_STUDIO_INTERNAL_LSEP_SYNTHETIC_REASONING_END_[0-9a-f]+__/, "")
+    .replace(block, "")
+    .trimStart();
 }
 
 /** Converts the SDK's history. Only the methods every SDK message has are used. */

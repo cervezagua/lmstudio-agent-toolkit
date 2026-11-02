@@ -1,3 +1,4 @@
+import { stripThinking } from "../../../shared/compaction/history";
 import { ToolError } from "../../../shared/errors";
 import { type SearchResult } from "./search";
 
@@ -49,7 +50,7 @@ const ANSWER_TOKENS = 5000;
 
 /** Removes a reasoning model's thinking, which LM Studio may leave in the reply. */
 export function withoutThinking(reply: string): string {
-  return reply.replace(/<think>[\s\S]*?(<\/think>|$)/gi, "").trim();
+  return stripThinking(reply, { fresh: true }).trim();
 }
 
 /** The model's queries, cleaned of numbering and quotes, with the question itself as a fallback. */

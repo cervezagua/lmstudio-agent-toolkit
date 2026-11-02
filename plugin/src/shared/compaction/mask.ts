@@ -11,12 +11,23 @@ const SHORT_RESULT_CHARS = 300;
  * error: a small model shown its failed call again tends to repeat it.
  *
  * Results that are kept are cut to their head and tail when longer than `maxResultChars`.
+ *
+ * `from` keeps output whole from that #m number on instead, so a boundary chosen once can stay put;
+ * the boundary used comes back as `from` (0: nothing older to hide).
  */
-export function maskToolResults(msgs: Msg[], options: { keepRounds: number; maxResultChars: number }): { msgs: Msg[]; hidden: number } {
+export function maskToolResults(
+  msgs: Msg[],
+  options: { keepRounds: number; maxResultChars: number; from?: number },
+): { msgs: Msg[]; hidden: number; from: number } {
   const byId = callsById(msgs);
   // Rounds of tool calls, newest last: each assistant message that makes calls starts one.
   const roundStarts = msgs.map((m, i) => (m.role === "assistant" && m.calls.length > 0 ? i : -1)).filter(i => i >= 0);
-  const keepFrom = roundStarts.length > options.keepRounds ? roundStarts[roundStarts.length - options.keepRounds] : 0;
+  const keepFrom =
+    options.from !== undefined
+      ? Math.max(0, msgs.findIndex(m => m.n >= options.from!))
+      : roundStarts.length > options.keepRounds
+        ? roundStarts[roundStarts.length - options.keepRounds]
+        : 0;
 
   let hidden = 0;
   const masked = msgs.map((msg, index) => {
@@ -45,7 +56,7 @@ export function maskToolResults(msgs: Msg[], options: { keepRounds: number; maxR
     });
     return changed ? { ...msg, results, original: undefined } : msg;
   });
-  return { msgs: masked, hidden };
+  return { msgs: masked, hidden, from: keepFrom > 0 ? msgs[keepFrom].n : 0 };
 }
 
 /** The call a result answers when ids are missing: the k-th call of the nearest assistant message above. */

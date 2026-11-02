@@ -20,6 +20,7 @@ import { promptPreprocessor } from "../plugin/src/index";
 import { fakeController } from "../plugin/src/shared/testing/fake-controller";
 import { toolsProvider } from "../plugin/src/toolsProvider";
 import { capTools } from "../plugin/src/shared/compaction/capTools";
+import { stripThinking } from "../plugin/src/shared/compaction/history";
 import { runReply } from "../plugin/src/shared/compaction/reply";
 import { errorStats } from "./lib/hints";
 import { type Call, type EvalTask } from "./lib/task";
@@ -103,14 +104,6 @@ const ALL_ON = [
 
 const defaults = (schematics: any) =>
   Object.fromEntries([...schematics.fields.entries()].map(([key, field]: [string, any]) => [key, field.defaultValue]));
-
-/** Takes a reasoning model's thinking out of its answer, however LM Studio marked it. */
-function withoutThinking(text: string): string {
-  return text
-    .replace(/^[\s\S]*__LM_STUDIO_INTERNAL_LSEP_SYNTHETIC_REASONING_END_[0-9a-f]+__/, "")
-    .replace(/<think>[\s\S]*?(<\/think>|$)/gi, "")
-    .trim();
-}
 
 interface RunResult {
   task: string;
@@ -216,7 +209,7 @@ async function runOnce(model: any, client: any, systemPrompt: string, name: stri
             task.afterCall?.(call, project);
           }
           if (message.getRole() === "assistant") {
-            const text = withoutThinking(message.getText());
+            const text = stripThinking(message.getText(), { fresh: true }).trim();
             if (text) answer = text;
           }
         };
@@ -249,7 +242,7 @@ async function runOnce(model: any, client: any, systemPrompt: string, name: stri
               tools: capped,
               refillToolBudget: capped.refill,
               fitToolResults: tokens => capped.fit(tokens * 2.5),
-              toolTokens: (await model.countTokens(definitions)) + 10 * tools.length,
+              toolTokens: await model.countTokens(definitions),
               chatDir,
               settings: {
                 usable,

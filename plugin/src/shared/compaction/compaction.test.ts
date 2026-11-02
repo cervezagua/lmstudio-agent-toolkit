@@ -6,7 +6,7 @@ import { capTools } from "./capTools";
 import { chooseCut, compact, type CompactOptions } from "./compact";
 import { roughTokens, safeCutPoints, withoutSideQuestions, type Msg } from "./history";
 import { headAndTail, maskToolResults } from "./mask";
-import { ledger, openTasks, userWords } from "./pinned";
+import { CHANGES, FILE_WRITES, ledger, openTasks, userWords } from "./pinned";
 import { MAX_SUMMARY_FAILURES, readSummaryState, updateSummary } from "./summary";
 import { updateTranscript } from "./transcript";
 
@@ -105,11 +105,30 @@ describe("what is pinned", () => {
   });
 
   it("shows the latest open tasks, and nothing once all are done", () => {
-    const todos = (statuses: string[]) => call("todo_write", { todos: statuses.map((status, i) => ({ content: `step ${i + 1}`, status })) });
-    expect(openTasks([user("go"), todos(["completed", "in_progress", "pending"])])).toBe(
+    const todos = (statuses: string[], content = "ok") => round("todo_write", { todos: statuses.map((status, i) => ({ content: `step ${i + 1}`, status })) }, content);
+    expect(openTasks([user("go"), ...todos(["completed", "in_progress", "pending"])])).toBe(
       "Your task list ([>] in progress, [x] done):\n[x] step 1\n[>] step 2\n[ ] step 3",
     );
-    expect(openTasks([user("go"), todos(["completed", "completed"])])).toBe("");
+    expect(openTasks([user("go"), ...todos(["completed", "completed"])])).toBe("");
+  });
+
+  // A list the user declined, a call the SDK could not use, or one cut short before its result was
+  // restated as the current list.
+  it("skips a task list that was denied, unusable or never ran", () => {
+    const list = (step: string) => ({ todos: [{ content: step, status: "in_progress" }] });
+    const good = round("todo_write", list("real step"), "ok");
+    const later = [
+      ...round("todo_write", list("denied step"), '{"error":"The user declined this tool call."}'),
+      ...round("todo_write", list("garbled step"), '"That tool call could not be used: Cannot find tool."'),
+      call("todo_write", list("unfinished step")),
+    ];
+    expect(openTasks([user("go"), ...good, ...later])).toBe("Your task list ([>] in progress, [x] done):\n[>] real step");
+  });
+
+  it("counts writes to the repository, memory and skills as changes, and only file writes in the ledger", () => {
+    for (const name of ["write_document", "git_add", "git_commit", "memory_save", "skill_save"]) expect(CHANGES.has(name)).toBe(true);
+    expect(FILE_WRITES.has("write_document")).toBe(true);
+    expect(FILE_WRITES.has("git_commit")).toBe(false);
   });
 });
 
@@ -199,6 +218,25 @@ describe("compact", () => {
     expect(model.calls).toBe(1);
   });
 
+  // Hiding the output of the last few rounds moved on with every message, so each prompt started
+  // differently from the one before and the model re-read most of it.
+  it("keeps hidden what it hid, and no more, while the prompt fits", async () => {
+    const first = [user("go"), ...round("read_file", { path: "a" }, "a".repeat(1200)), ...round("read_file", { path: "b" }, "b".repeat(1200)), ...round("read_file", { path: "c" }, "c".repeat(1200)), user("next")];
+    const model = summarizer("unused");
+    const done = await compact({ system: "sys", msgs: first, count, model, chatDir, options });
+    expect(done.stage).toBe(1);
+    expect(done.msgs[6].results[0].content).toBe("c".repeat(1200));
+    const second = [...first, say("ok"), user("more"), ...round("read_file", { path: "d" }, "d".repeat(600))];
+    const again = await compact({ system: "sys", msgs: second, count, model, chatDir, options });
+    expect(again.stage).toBe(1);
+    expect(again.fresh).toBe(false);
+    expect(again.msgs.slice(0, done.msgs.length)).toEqual(done.msgs);
+    // Past the high mark, it moves on.
+    const third = [...second, user("go on"), ...round("read_file", { path: "e" }, "e".repeat(1200))];
+    const moved = await compact({ system: "sys", msgs: third, count, model, chatDir, options });
+    expect(moved.msgs[6].results[0].content).toMatch(/^\[output of read_file c/);
+  });
+
   it("can cut inside one long request, between finished rounds", () => {
     const msgs = [user("do everything"), ...round("read_file", { path: "a" }, "a".repeat(700)), ...round("read_file", { path: "b" }, "b".repeat(70))];
     expect(chooseCut(msgs, 60)).toBe(3);
@@ -228,6 +266,13 @@ describe("updateSummary", () => {
     expect((await readSummaryState(chatDir)).failures).toBe(MAX_SUMMARY_FAILURES);
     expect(await updateSummary(model, chatDir, later, { inputTokens: 5000 })).toBe("summary 2");
     expect(prompts).toHaveLength(2);
+  });
+
+  // An unclosed <think> was kept as the summary: the model ran out of tokens while thinking.
+  it("takes a reply that is only unfinished thinking as no summary", async () => {
+    const model = { respond: async () => ({ content: "<think>Let me go through every message" }) };
+    expect(await updateSummary(model, chatDir, [user("one"), say("two")], { inputTokens: 5000 })).toBeNull();
+    expect((await readSummaryState(chatDir)).failures).toBe(1);
   });
 });
 
@@ -270,6 +315,41 @@ describe("capTools", () => {
     tools.refill();
     tools.fit(100_000);
     expect(String(await tools[0].implementation())).toContain("[cut to fit the context; calling the tool again returns the same text.]");
+  });
+
+  // A cut-off prediction left no room; the reply went on with room again, yet every later result was
+  // cut to 200 characters, since the room only ever went down.
+  it("sets the room to what it is now, up as well as down", async () => {
+    const tools = capTools([{ implementation: async () => "x".repeat(3000) }], { perResult: 4000, budget: 8000 });
+    tools.fit(0);
+    expect(String(await tools[0].implementation()).length).toBeLessThan(500);
+    tools.fit(10_000);
+    expect(await tools[0].implementation()).toBe("x".repeat(3000));
+    // Still within the shared budget: 3200 of 8000 were handed out.
+    tools.fit(100_000);
+    expect(String(await tools[0].implementation())).toBe("x".repeat(3000));
+    expect(String(await tools[0].implementation())).toContain("[cut to fit the context");
+  });
+
+  // Thousands of short file names passed both caps, each under 200 characters.
+  it("cuts a long list of short texts to its head and tail when the whole result is too big", async () => {
+    const names = Array.from({ length: 2000 }, (_, i) => `src/file-${i}.ts`);
+    const [listing] = capTools([{ implementation: async () => ({ content: [{ type: "text", text: "listing" }], files: names }) }], { perResult: 2000, budget: 100_000 });
+    const result: any = await listing.implementation();
+    expect(result.content).toEqual([{ type: "text", text: "listing" }]);
+    expect(JSON.stringify(result).length).toBeLessThan(2500);
+    expect(result.files[0]).toBe("src/file-0.ts");
+    expect(result.files.at(-1)).toBe("src/file-1999.ts");
+    expect(result.files.find((f: string) => f.includes("items left out"))).toMatch(/^\[\d+ items left out to fit the context\]$/);
+    // A short list is left as it was.
+    const [few] = capTools([{ implementation: async () => ["a", "b"] }], { perResult: 2000, budget: 100_000 });
+    expect(await few.implementation()).toEqual(["a", "b"]);
+  });
+
+  it("keeps dates, URLs and other objects as the JSON they are sent as", async () => {
+    const when = new Date("2026-01-02T03:04:05Z");
+    const [tool] = capTools([{ implementation: async () => ({ when, url: new URL("https://example.com/a"), nested: [when] }) }], { perResult: 2000, budget: 100_000 });
+    expect(await tool.implementation()).toEqual({ when: when.toJSON(), url: "https://example.com/a", nested: [when.toJSON()] });
   });
 
   // js-code-sandbox throws when a script fails; the SDK then ended the whole reply, leaving the chat

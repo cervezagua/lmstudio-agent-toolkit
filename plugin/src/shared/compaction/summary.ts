@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { join } from "path";
-import { roughTokens, type Msg } from "./history";
+import { roughTokens, stripThinking, type Msg } from "./history";
 import { compactionFolder, renderMessage } from "./transcript";
 
 /** After this many failures in a row, a chat stops trying to summarize and only hides old output. */
@@ -17,6 +17,10 @@ export interface SummaryState {
   cutAt?: number;
   /** The stage of the last compaction, so a notice is shown when something changes, not every message. */
   lastStage?: number;
+  /** Where the last masked prompt's whole tool output began (#m number), reused while it fits. */
+  maskAt?: number;
+  /** The open-task reminders added to user messages (#m number and text), kept there so the prompt's start stays the same. */
+  reminders?: { n: number; text: string }[];
 }
 
 const INSTRUCTIONS = [
@@ -92,7 +96,7 @@ export async function updateSummary(
       ],
       { maxTokens: MAX_SUMMARY_TOKENS, temperature: 0.2, signal: options.signal },
     );
-    const summary = (result.nonReasoningContent ?? result.content).replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+    const summary = stripThinking(result.nonReasoningContent ?? result.content, { fresh: true }).trim();
     if (!summary) throw new Error("the model wrote no summary");
     await writeSummaryState(chatDir, { ...state, coversUpTo: last, summary, failures: 0 });
     return summary;

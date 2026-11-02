@@ -1,7 +1,8 @@
 import { compact, type CompactOptions } from "./compact";
 import { fromChat, isFailure, isSideQuestion, roughSize, roughTokens, toMessageData, withoutSideQuestions, withoutThinking, withText, type Msg } from "./history";
 import { maskToolResults } from "./mask";
-import { openTasks } from "./pinned";
+import { CHANGES, openTasks } from "./pinned";
+import { readSummaryState, writeSummaryState } from "./summary";
 import { updateTranscript } from "./transcript";
 
 /**
@@ -48,6 +49,25 @@ const MAX_SIDE_EXCHANGES = 20;
 const MAX_RESTARTS = 3;
 /** Tokens kept free of tool results: the template's markers around them, and a start on the next message. */
 const RESULT_MARGIN = 1000;
+/** Times one reply asks again for a tool call the SDK could not read. */
+const MAX_INVALID_RETRIES = 2;
+
+/**
+ * The first line of a result, without "Error:", for a card or a refusal. The SDK sends a tool's text
+ * as a JSON string, so it is read as one first: its line breaks are escaped in it.
+ */
+function firstLine(content: string, max: number): string {
+  let text = content;
+  if (text.startsWith('"')) {
+    try {
+      const parsed = JSON.parse(text);
+      if (typeof parsed === "string") text = parsed;
+    } catch {
+      // not a JSON string after all
+    }
+  }
+  return text.replace(/^Error:\s*/, "").split(/\r?\n/)[0].slice(0, max);
+}
 
 /**
  * One reply of agent-toolkit-loop: answers a /btw side question without tools, or runs the model on
@@ -77,9 +97,9 @@ export async function runReply(input: {
   ) => Promise<{ allow: true; arguments?: Record<string, unknown> } | { allow: false; reason?: string }>;
   /** Most rounds of tool calls in the whole reply, restarts included (none: the SDK's default). */
   maxRounds?: number;
-  /** Called when older output was hidden mid-reply, so capped tools may hand out their full share again. */
+  /** Called whenever the reply starts on a new prompt, so capped tools may hand out their full share again. */
   refillToolBudget?: () => void;
-  /** Called after each prediction with the tokens left for tool results, so capped tools hand out no more. */
+  /** Called before each prompt is sent and after each prediction with the tokens left for tool results, so capped tools hand out no more. */
   fitToolResults?: (tokens: number) => void;
   /** For the eval runner: every message the reply produces, and every prediction's stats. */
   hooks?: { onMessage?: (message: any) => void; onPredictionCompleted?: (result: any) => void };
@@ -105,8 +125,10 @@ export async function runReply(input: {
   };
   const count = async (systemText: string, list: Msg[]) => {
     const rough = estimate(systemText, list);
-    // Counting exactly renders and tokenizes the whole prompt; not worth it far below the high mark.
-    if (rough < settings.usable * settings.high * 0.5 && estimateIsFair(systemText, list)) return rough;
+    // Counting exactly renders and tokenizes the whole prompt: not worth it far below the high mark,
+    // nor far above it, where compacting is due whatever the exact number.
+    const high = settings.usable * settings.high;
+    if ((rough < high * 0.5 || rough > high * 1.3) && estimateIsFair(systemText, list)) return rough;
     try {
       return (await model.countTokens(await model.applyPromptTemplate(build(systemText, list)))) + input.toolTokens;
     } catch {
@@ -124,7 +146,9 @@ export async function runReply(input: {
     compacted = await compact({ system, msgs: withoutSideQuestions(msgs), count, model, chatDir: input.chatDir, options: settings, signal: input.signal });
     if (compacted.fresh && settings.showNotices) {
       const how = compacted.stage === 1 ? "hid older tool output" : "summarized the earlier conversation";
-      out.notice(`Context: ${how}, ${compacted.before.toLocaleString("en-US")} → ${compacted.after.toLocaleString("en-US")} tokens.${compacted.note ? ` (${compacted.note})` : ""}`);
+      // Far above the high mark, the size before is the estimate (see count).
+      const about = compacted.before > settings.usable * settings.high * 1.3 ? "about " : "";
+      out.notice(`Context: ${how}, ${about}${compacted.before.toLocaleString("en-US")} → ${compacted.after.toLocaleString("en-US")} tokens.${compacted.note ? ` (${compacted.note})` : ""}`);
     }
   } catch (error: any) {
     if (input.signal.aborted) throw error;
@@ -132,15 +156,24 @@ export async function runReply(input: {
     compacted = { system, msgs: withoutSideQuestions(msgs), stage: 0 as const, before: 0, after: 0 };
   }
 
-  // The open tasks, restated at the very end where a small model attends most.
+  // The open tasks, restated at the very end where a small model attends most. A reminder stays on
+  // the message it was added to in later prompts too: taken off, the prompt would differ from the
+  // last one there, and the model re-read everything after it.
   let prompt = compacted.msgs;
   const userTurns = prompt.filter(m => m.role === "user").length;
   const tasks = openTasks(withoutSideQuestions(msgs));
   const reminderDue = settings.taskReminderEvery > 0 && userTurns % settings.taskReminderEvery === 0;
-  if (tasks && (compacted.stage > 0 || reminderDue)) {
-    const index = prompt.map(m => m.role).lastIndexOf("user");
-    if (index >= 0) prompt = prompt.map((m, i) => (i === index ? withText(m, `${m.text}\n\n(${tasks})`) : m));
+  const saved = (await readSummaryState(input.chatDir)).reminders ?? [];
+  let reminders = saved.filter(r => prompt.some(m => m.n === r.n && m.role === "user"));
+  const latest = prompt.map(m => m.role).lastIndexOf("user");
+  if (tasks && (compacted.stage > 0 || reminderDue) && latest >= 0) {
+    reminders = [...reminders.filter(r => r.n !== prompt[latest].n), { n: prompt[latest].n, text: tasks }];
   }
+  if (JSON.stringify(reminders) !== JSON.stringify(saved)) {
+    await writeSummaryState(input.chatDir, { ...(await readSummaryState(input.chatDir)), reminders }).catch(() => {});
+  }
+  const reminderOf = new Map(reminders.map(r => [r.n, r.text]));
+  prompt = prompt.map(m => (m.role === "user" && reminderOf.has(m.n) ? withText(m, `${m.text}\n\n(${reminderOf.get(m.n)})`) : m));
 
   // A call that failed twice exactly as written is refused the third time, with the reason.
   const failures = new Map<string, { count: number; reason: string }>();
@@ -151,7 +184,6 @@ export async function runReply(input: {
   // server is up, is meant to repeat.
   const repeats = new Map<string, { content: string; count: number }>();
   const MEANT_TO_REPEAT = new Set(["task_output", "task_wait", "task_list", "run_command"]);
-  const CHANGES = new Set(["write_file", "edit_file", "multi_edit", "insert_lines", "undo_edit", "notebook_edit"]);
   // A refusal's text is not a result of the call, and must not reset or feed either count.
   const refused = new Set<string>();
 
@@ -184,10 +216,11 @@ export async function runReply(input: {
   };
   const finish = (callId: number, content: string) => {
     const state = statusOf.get(callId);
-    if (state === "toolCallDenied" || state === "toolCallSucceeded" || state === "toolCallFailed") return;
+    // A call the SDK could not use already says so; its result is only the reason.
+    if (state === "toolCallDenied" || state === "toolCallSucceeded" || state === "toolCallFailed" || state === "toolCallGenerationFailed") return;
     // MCP tools report a failure as {"isError": true, ...} rather than with "Error:".
     if (isFailure(content) || /^\s*\{[\s\S]*"isError"\s*:\s*true/.test(content)) {
-      setStatus(callId, { type: "toolCallFailed", error: content.replace(/^"?Error:\s*/, "").split(/\r?\n/)[0].slice(0, 300) });
+      setStatus(callId, { type: "toolCallFailed", error: firstLine(content, 300) });
     } else {
       setStatus(callId, { type: "toolCallSucceeded", timeMs: Date.now() - (startedAt.get(callId) ?? Date.now()) });
     }
@@ -207,10 +240,28 @@ export async function runReply(input: {
   let askedToFit = false;
   // The prompt is rebuilt without earlier thinking at most once per reply just for that.
   let shedThinking = false;
+  // Times the reply stopped to make room (hiding older output, or leaving out thinking), and times
+  // it asked again for a tool call the SDK could not read: each has its own limit.
+  let restarts = 0;
+  let invalidRetries = 0;
   const carriedThinking = (list: Msg[]) => list.reduce((sum, m) => sum + roughTokens(m.text) - roughTokens(withoutThinking(m).text), 0);
   const writesInParts = input.tools.some(t => t?.name === "write_file");
-  for (let restart = 0; ; restart++) {
+  // A note to the model at the end of the prompt, added to the user message there if there is one:
+  // two user messages in a row break some templates.
+  const withNote = (list: Msg[], note: string): Msg[] => {
+    const end = list.at(-1);
+    if (end?.role === "user") return [...list.slice(0, -1), withText(end, `${end.text}\n\n${note}`)];
+    return [...list, { role: "user", text: note, calls: [], results: [], n: 0 }];
+  };
+  // The first prompt's size is known from compacting it; the reminders add little.
+  let promptSize: number | undefined = compacted.after ? compacted.after + reminders.reduce((sum, r) => sum + roughTokens(r.text), 0) : undefined;
+  for (;;) {
     if (input.maxRounds !== undefined && roundsDone >= input.maxRounds) return;
+    // Results take their share again on each new prompt, within the room it leaves. Told now, not
+    // only after a prediction: the SDK starts tools while the prediction is still streaming.
+    input.refillToolBudget?.();
+    if (input.fitToolResults) input.fitToolResults(settings.usable - (promptSize ?? (await count(compacted.system, prompt))) - RESULT_MARGIN);
+    promptSize = undefined;
     const stop = new AbortController();
     const signal = AbortSignal.any([input.signal, stop.signal]);
     let overflowing = false;
@@ -225,6 +276,8 @@ export async function runReply(input: {
     // What the model wrote outside its thinking in the latest round, and whether it thought at all.
     let roundSaid = "";
     let roundThought = false;
+    // Whether the model wrote a tool call in the latest round that the SDK could not read at all.
+    let roundUnreadable = false;
     try {
       await model.act(current, input.tools, {
         signal,
@@ -235,6 +288,7 @@ export async function runReply(input: {
           roundCallIds = [];
           roundSaid = "";
           roundThought = false;
+          roundUnreadable = false;
           out.newRound();
         },
         onPredictionFragment: (fragment: any) => {
@@ -253,8 +307,14 @@ export async function runReply(input: {
         onToolCallRequestStart: (_round: number, callId: number) => setStatus(callId, { type: "generatingToolCall" }),
         onToolCallRequestNameReceived: (_round: number, callId: number, name: string) =>
           setStatus(callId, { type: "generatingToolCall", name, pluginIdentifier: pluginOf.get(name) }),
-        onToolCallRequestFailure: (_round: number, callId: number, error: any) =>
-          setStatus(callId, { type: "toolCallGenerationFailed", error: String(error?.message ?? error).split(/\r?\n/)[0].slice(0, 300) }),
+        onToolCallRequestFailure: (_round: number, callId: number, error: any) => {
+          setStatus(callId, { type: "toolCallGenerationFailed", error: String(error?.message ?? error).split(/\r?\n/)[0].slice(0, 300) });
+          // A call to an unknown tool, or with arguments that do not fit, is in the assistant message
+          // and gets handleInvalidToolRequest's text as its result: it keeps its place in the round,
+          // so the calls after it keep theirs. One the SDK could not read at all is in neither.
+          if (typeof error?.toolName === "string") roundCallIds.push(callId);
+          else roundUnreadable = true;
+        },
         // Shown as soon as the call is written, so a confirmation never names a call the chat has not shown.
         onToolCallRequestEnd: (_round: number, callId: number, info: any) => {
           const request = info?.toolCallRequest;
@@ -269,8 +329,13 @@ export async function runReply(input: {
           const msg = { ...fromChat([message])[0], n: 0 };
           produced.push(msg);
           if (msg.calls.length) {
-            // A call without an id is matched to the SDK's number by its place in the round.
-            lastCallNumbers = msg.calls.map((call, k) => (call.id ? numberFor(call.id) : (roundCallIds[k] ?? numberFor(undefined))));
+            // Each call gets the SDK's number by its place in the round, where every call written has
+            // one (an unusable one too); the result finds it by the call's id, or by the same place.
+            lastCallNumbers = msg.calls.map((call, k) => {
+              const number = roundCallIds[k] ?? numberFor(call.id);
+              if (call.id) callIds.set(call.id, number);
+              return number;
+            });
           }
           msg.calls.forEach((call, k) => {
             showRequest(lastCallNumbers[k], { id: call.id, name: call.name, arguments: call.args });
@@ -285,11 +350,13 @@ export async function runReply(input: {
             const key = result.id ? pendingKeys.get(result.id) : undefined;
             if (key && isFailure(result.content)) {
               const seen = failures.get(key);
-              failures.set(key, { count: (seen?.count ?? 0) + 1, reason: result.content.replace(/^"?Error:\s*/, "").split(/\r?\n/)[0].slice(0, 160) });
+              failures.set(key, { count: (seen?.count ?? 0) + 1, reason: firstLine(result.content, 160) });
             } else if (key) {
-              // After a real change, the same tests failing the same way is news, not a loop.
+              // After a real change, the same tests failing the same way is news, not a loop, and a
+              // call that failed before may work now.
               if (CHANGES.has(key.split(" ")[0]) && !/^"?No change/.test(result.content)) {
                 for (const other of [...repeats.keys()]) if (other !== key) repeats.delete(other);
+                failures.clear();
               }
               const seen = repeats.get(key);
               repeats.set(key, { content: result.content, count: seen?.content === result.content ? seen.count + 1 : 1 });
@@ -298,9 +365,17 @@ export async function runReply(input: {
         },
         onPredictionCompleted: (result: any) => {
           input.hooks?.onPredictionCompleted?.(result);
-          promptTokens = result?.stats?.promptTokensCount ?? 0;
-          used = promptTokens + (result?.stats?.predictedTokensCount ?? 0);
-          cutOff = result?.stats?.stopReason === "contextLengthReached";
+          if (result?.stats?.promptTokensCount !== undefined) {
+            promptTokens = result.stats.promptTokensCount;
+            used = promptTokens + (result.stats.predictedTokensCount ?? 0);
+            cutOff = result.stats.stopReason === "contextLengthReached";
+          } else {
+            // A remote model's result has no stats: the prompt and the reply are estimated, and
+            // nothing says the reply was cut off.
+            promptTokens = estimate(compacted.system, [...prompt, ...produced]);
+            used = promptTokens + roughTokens(result?.content ?? "");
+            cutOff = false;
+          }
           // The round's results must fit what is left, or the next prediction is refused outright
           // (a web page or PDF can be larger than the whole context). Room past the headroom is
           // still made by hiding older output, between rounds.
@@ -311,7 +386,7 @@ export async function runReply(input: {
         onRoundEnd: () => {
           // Leave the next round room to think and write a whole tool call: running out mid-call ends
           // the chat, and a model that reasons at length spends thousands of tokens before it writes.
-          if (!roundResults || used + roundResults + headroom <= settings.usable || restart >= MAX_RESTARTS) return;
+          if (!roundResults || used + roundResults + headroom <= settings.usable || restarts >= MAX_RESTARTS) return;
           // Only worth a restart (the model re-reads the prompt) if there is old output to hide, or,
           // once per reply, thinking from earlier rounds that the SDK sends back and a rebuilt prompt
           // leaves out. Some templates drop that thinking anyway, so once is enough.
@@ -340,7 +415,7 @@ export async function runReply(input: {
           }
           const repeated = repeats.get(keyOf(request.name, request.arguments));
           if (repeated && repeated.count >= 2 && !MEANT_TO_REPEAT.has(request.name)) {
-            const said = repeated.content.replace(/^"|"$/g, "").split(/\r?\n/)[0].slice(0, 160);
+            const said = firstLine(repeated.content, 160);
             deny(`You already made this exact call twice and got the same result both times (${said}). Repeating it changes nothing: take the next step of the task.`);
             return;
           }
@@ -365,21 +440,34 @@ export async function runReply(input: {
             deny(`The user could not be asked to approve this call (${error?.message ?? error}), so it was not run.`);
           }
         },
-        handleInvalidToolRequest: (error: Error) =>
-          `That tool call could not be used: ${error.message.split(/\r?\n/)[0].slice(0, 200)}. Write it again as one complete call with valid JSON arguments.`,
+        // The SDK can give a result only to a call it could read; one it could not is asked for
+        // again once the round is over.
+        handleInvalidToolRequest: (error: Error, request?: unknown) =>
+          request
+            ? `That tool call could not be used: ${error.message.split(/\r?\n/)[0].slice(0, 200)}. Write it again as one complete call with valid JSON arguments.`
+            : undefined,
       });
       if (input.signal.aborted) return;
+      // A call the SDK could not read (broken JSON) gets no result, so the reply just ended there.
+      // The model is told, and writes it again.
+      if (!cutOff && roundUnreadable && produced.at(-1)?.role === "assistant" && invalidRetries < MAX_INVALID_RETRIES) {
+        invalidRetries++;
+        prompt = withNote([...prompt, ...produced], "(Your last tool call was not valid JSON, so it could not be run. Write it again as one complete call.)");
+        produced = [];
+        current = build(compacted.system, prompt);
+        if (settings.showNotices) out.notice("Context: a tool call could not be read, so the model was asked to write it again.");
+        continue;
+      }
       // A reply that ends inside the model's thinking, with no answer and no tool call, shows the
       // user nothing (a reasoning model can plan a command in its thinking and stop there). The
       // model is asked once to give its answer or make the call.
       const lastCalls = produced.at(-1)?.role === "assistant" ? produced.at(-1)!.calls.length : 0;
       if (!cutOff && roundThought && !roundSaid.trim() && roundCallIds.length === 0 && lastCalls === 0 && !nudgedEmpty) {
         nudgedEmpty = true;
-        prompt = [
-          ...prompt,
-          ...produced,
-          { role: "user", text: "(Your reply ended inside your thinking, with no answer and no tool call. Give your answer now, or make a tool call if one is still needed.)", calls: [], results: [], n: 0 },
-        ];
+        prompt = withNote(
+          [...prompt, ...produced],
+          "(Your reply ended inside your thinking, with no answer and no tool call. Give your answer now, or make a tool call if one is still needed.)",
+        );
         produced = [];
         current = build(compacted.system, prompt);
         if (settings.showNotices) out.notice("Context: the reply ended inside the model's thinking, so it was asked for its answer.");
@@ -388,44 +476,40 @@ export async function runReply(input: {
       // The context filled while the model was still writing: its message stops mid-sentence and,
       // left alone, the reply just ends. It goes on instead, if older output can make room.
       if (!cutOff) return;
-      const room = maskToolResults([...prompt, ...produced], restartMask);
+      // The cut-off message is dropped unless it made calls: unfinished, its thinking has no end
+      // marker and would go back as answer text, and it would fill the context again.
+      const end = produced.at(-1);
+      const kept = end?.role === "assistant" && end.calls.length === 0 ? produced.slice(0, -1) : produced;
+      const room = maskToolResults([...prompt, ...kept], restartMask);
       // Nothing to hide, typically on a small context with many tools: the model spent the room on
-      // thinking, or on one big file in a single call. It goes again, told how much room there is;
-      // the cut-off message is dropped, as its thinking would fill the context again.
+      // thinking, or on one big file in a single call. It goes again, told how much room there is.
       const free = settings.usable - promptTokens;
-      if (room.hidden === 0 && !askedToFit && restart < MAX_RESTARTS && free >= 1000) {
+      if (room.hidden === 0 && !askedToFit && free >= 1000) {
         askedToFit = true;
-        const last = produced.at(-1);
-        const kept = last?.role === "assistant" && last.calls.length === 0 ? produced.slice(0, -1) : produced;
         const parts = writesInParts ? " Write a long file in parts: write_file with the first part, then write_file with append: true for each next part." : "";
-        prompt = [
-          ...prompt,
-          ...kept,
-          {
-            role: "user",
-            text: `(Your last message was cut off because the context was full: only about ${free} tokens are left for each reply, thinking included. Think briefly and keep each message short.${parts} Carry on.)`,
-            calls: [],
-            results: [],
-            n: 0,
-          },
-        ];
+        prompt = withNote(
+          [...prompt, ...kept],
+          `(Your last message was cut off because the context was full: only about ${free} tokens are left for each reply, thinking included. Think briefly and keep each message short.${parts} Carry on.)`,
+        );
         produced = [];
         current = build(compacted.system, prompt);
         if (settings.showNotices) out.notice("Context: the reply was cut off by a full context, so the model was asked to go on in smaller steps.");
         continue;
       }
-      if (restart >= MAX_RESTARTS || room.hidden === 0) {
+      if (restarts >= MAX_RESTARTS || room.hidden === 0) {
         out.notice("Context: the context is full, so the reply was cut off. Start a new chat, or raise the model's context length.");
         return;
       }
-      prompt = [
-        ...room.msgs,
-        { role: "user", text: "(Your last message was cut off because the context was full. Older tool output was hidden to make room: carry on from where you stopped.)", calls: [], results: [], n: 0 },
-      ];
+      restarts++;
+      prompt = withNote(
+        room.msgs,
+        "(Your last message was cut off because the context was full, so it was left out. Older tool output was hidden to make room: carry on from your last complete step.)",
+      );
       produced = [];
+      // Output just hidden may need reading again, as its placeholder says.
       repeats.clear();
+      failures.clear();
       current = build(compacted.system, prompt);
-      input.refillToolBudget?.();
       if (settings.showNotices) out.notice("Context: the reply was cut off by a full context, so older tool output was hidden and it went on.");
       continue;
     } catch (error) {
@@ -433,14 +517,14 @@ export async function runReply(input: {
     }
     // Make room and carry on from where the reply got to: older tool output is hidden (no model
     // call, so the pause is short), the reply's own messages so far included.
+    restarts++;
     prompt = maskToolResults([...prompt, ...produced], restartMask).msgs;
     produced = [];
     current = build(compacted.system, prompt);
     if (hidesOutput) {
       // Output just hidden may need reading again, as its placeholder says.
       repeats.clear();
-      // Room was made, so the results that follow may take their share again.
-      input.refillToolBudget?.();
+      failures.clear();
     }
     if (settings.showNotices) {
       out.notice(

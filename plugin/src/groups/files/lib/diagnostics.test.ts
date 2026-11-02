@@ -100,7 +100,7 @@ describe("sub-agent", () => {
         opts.onRoundStart?.(0);
         opts.onMessage?.({ getRole: () => "assistant", getText: () => "", getToolCallRequests: () => [{ name: "grep" }], getToolCallResults: () => [] });
         opts.onRoundStart?.(1);
-        opts.onMessage?.({ getRole: () => "assistant", getText: () => "Found it in src/a.ts:12", getToolCallRequests: () => [], getToolCallResults: () => [] });
+        opts.onMessage?.({ getRole: () => "assistant", getText: () => "<think>check a.ts</think>\nFound it in src/a.ts:12", getToolCallRequests: () => [], getToolCallResults: () => [] });
       },
     } as any;
 

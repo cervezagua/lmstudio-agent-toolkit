@@ -1,4 +1,5 @@
 import { type LLM, type LMStudioClient, type Tool } from "@lmstudio/sdk";
+import { stripThinking } from "../../../shared/compaction/history";
 import { ToolError } from "../../../shared/errors";
 import { configuredModelKey } from "../../../shared/models";
 
@@ -69,7 +70,8 @@ export async function runSubagent(options: {
       onMessage: message => {
         for (const request of message.getToolCallRequests()) toolCalls.push(request.name);
         if (message.getRole() === "assistant") {
-          const text = message.getText().trim();
+          // The report is the answer, not the thinking LM Studio may leave in the text.
+          const text = stripThinking(message.getText(), { fresh: true }).trim();
           if (text) report = text; // keep the latest assistant text as the report
         }
       },
