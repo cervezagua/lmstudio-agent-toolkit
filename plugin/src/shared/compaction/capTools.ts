@@ -11,17 +11,24 @@ const SMALL = 200;
  * an "Error: ..." result instead of ending the reply. `refill` restores the
  * shared budget, for when the reply starts over on a new prompt; `fit` sets the room the context has
  * left, so a reply already near full is not pushed past it by one big result.
+ *
+ * Tools run while the model is still writing, so the room is kept between measurements too: what
+ * the model writes takes from it (`take`), and `fit` counts out the results handed out since the
+ * round began (`startRound`), which the prompt it measured did not have yet.
  */
 export function capTools<T extends { implementation: (...args: any[]) => any }>(
   tools: T[],
   options: { perResult: number; budget: number },
-): T[] & { refill(): void; fit(chars: number): void } {
-  // Characters handed out since the last refill, and the room left in the context as last told.
+): T[] & { refill(): void; fit(chars: number): void; take(chars: number): void; startRound(): void } {
+  // Characters handed out since the last refill, and since the round began; the room left in the
+  // context as last measured, less what came after.
   let spent = 0;
+  let sinceRound = 0;
   let room = Infinity;
   const left = () => Math.max(0, Math.min(options.budget - spent, room));
   const spend = (chars: number) => {
     spent += chars;
+    sinceRound += chars;
     room -= chars;
   };
   const allowance = () => Math.max(SMALL, Math.min(options.perResult, left()));
@@ -90,8 +97,11 @@ export function capTools<T extends { implementation: (...args: any[]) => any }>(
   return Object.assign(wrapped, {
     refill: () => {
       spent = 0;
+      sinceRound = 0;
       room = Infinity;
     },
-    fit: (chars: number) => void (room = Math.max(0, Math.floor(chars))),
+    fit: (chars: number) => void (room = Math.max(0, Math.floor(chars)) - sinceRound),
+    take: (chars: number) => void (room -= Math.max(0, chars)),
+    startRound: () => void (sinceRound = 0),
   });
 }

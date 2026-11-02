@@ -581,8 +581,9 @@ describe("runReply", () => {
       out,
       signal: new AbortController().signal,
     });
-    // Before the prompt is sent, for tools that start while the prediction streams; then after it.
-    expect(fits).toEqual([16_000 - 11 - 1000, 16_000 - 9100 - 1000]);
+    // Before the prompt is sent, for tools that start while the prediction streams (a prompt only
+    // estimated is taken at the dense end: 11 tokens as 16); then after it.
+    expect(fits).toEqual([16_000 - 16 - 1000, 16_000 - 9100 - 1000]);
   });
 
   it("keeps a summarized prompt on the next message instead of summarizing again", async () => {
@@ -707,6 +708,42 @@ describe("runReply", () => {
     });
     expect(model.actCalls).toHaveLength(2);
     expect(read).toBe("z".repeat(3000));
+  });
+
+  // At 16k, LM Studio refused a request "(17585 tokens) [that] exceeds the available context size":
+  // a fast tool's result came while the prediction streamed, against room measured before it, and
+  // the measurement after it forgot that result and handed the same room to the next one.
+  it("keeps the next prompt within the context when results come while the model writes", async () => {
+    const tools = capTools([{ name: "read_file", implementation: async () => "x".repeat(30_000) }], { perResult: 40_000, budget: 40_000 });
+    let nextPrompt = 0;
+    const model = fakeModel(async (_chat, opts, call) => {
+      if (call > 1) return;
+      opts.onRoundStart(0);
+      for (let i = 0; i < 20; i++) opts.onPredictionFragment({ content: "Let me read both. ".repeat(6), tokensCount: 100, reasoningType: "reasoning" });
+      const fast = String(await tools[0].implementation());
+      // Code runs denser than the estimate: the prompt was 30% bigger than it guessed.
+      opts.onPredictionCompleted({ stats: { promptTokensCount: 6000, predictedTokensCount: 2000, stopReason: "toolCalls" } });
+      const slow = String(await tools[0].implementation());
+      nextPrompt = 8000 + (fast.length + slow.length) / 2.5;
+    });
+    const { out } = recorder();
+    await runReply({
+      sdk: { Chat },
+      model,
+      history: chatOf([{ role: "user", content: "c".repeat(16_100) }]),
+      tools,
+      refillToolBudget: tools.refill,
+      fitToolResults: tokens => tools.fit(tokens * 2.5),
+      takeToolRoom: tokens => tools.take(tokens * 2.5),
+      startToolRound: tools.startRound,
+      toolTokens: 0,
+      chatDir,
+      settings: { ...settings, usable: 16_000 },
+      out,
+      signal: new AbortController().signal,
+    });
+    expect(nextPrompt).toBeGreaterThan(8000);
+    expect(nextPrompt).toBeLessThanOrEqual(16_000);
   });
 
   // The follow-ups for an empty or cut-off reply used up the restarts meant for making room.

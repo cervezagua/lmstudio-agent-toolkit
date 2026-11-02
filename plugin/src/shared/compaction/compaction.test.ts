@@ -220,18 +220,18 @@ describe("compact", () => {
 
   // Hiding the output of the last few rounds moved on with every message, so each prompt started
   // differently from the one before and the model re-read most of it.
-  it("keeps hidden what it hid, and no more, while the prompt fits", async () => {
-    const first = [user("go"), ...round("read_file", { path: "a" }, "a".repeat(1200)), ...round("read_file", { path: "b" }, "b".repeat(1200)), ...round("read_file", { path: "c" }, "c".repeat(1200)), user("next")];
+  it("keeps hidden what it hid, and no more, while the prompt stays under the low mark", async () => {
+    const first = [user("go"), ...round("read_file", { path: "a" }, "a".repeat(1200)), ...round("read_file", { path: "b" }, "b".repeat(1200)), ...round("read_file", { path: "c" }, "c".repeat(900)), user("next")];
     const model = summarizer("unused");
     const done = await compact({ system: "sys", msgs: first, count, model, chatDir, options });
     expect(done.stage).toBe(1);
-    expect(done.msgs[6].results[0].content).toBe("c".repeat(1200));
-    const second = [...first, say("ok"), user("more"), ...round("read_file", { path: "d" }, "d".repeat(600))];
+    expect(done.msgs[6].results[0].content).toBe("c".repeat(900));
+    const second = [...first, say("ok"), user("more"), ...round("read_file", { path: "d" }, "d".repeat(200))];
     const again = await compact({ system: "sys", msgs: second, count, model, chatDir, options });
     expect(again.stage).toBe(1);
     expect(again.fresh).toBe(false);
     expect(again.msgs.slice(0, done.msgs.length)).toEqual(done.msgs);
-    // Past the high mark, it moves on.
+    // Past the low mark, the reply's room matters more: it moves on.
     const third = [...second, user("go on"), ...round("read_file", { path: "e" }, "e".repeat(1200))];
     const moved = await compact({ system: "sys", msgs: third, count, model, chatDir, options });
     expect(moved.msgs[6].results[0].content).toMatch(/^\[output of read_file c/);
@@ -329,6 +329,22 @@ describe("capTools", () => {
     tools.fit(100_000);
     expect(String(await tools[0].implementation())).toBe("x".repeat(3000));
     expect(String(await tools[0].implementation())).toContain("[cut to fit the context");
+  });
+
+  it("counts what the model writes, and results the measured prompt did not have yet, against the room", async () => {
+    const tools = capTools([{ implementation: async () => "x".repeat(3000) }], { perResult: 10_000, budget: 100_000 });
+    tools.fit(5000);
+    tools.startRound();
+    tools.take(1500);
+    // Handed out while the prediction streamed: 3000 of the 3500 left.
+    expect(await tools[0].implementation()).toBe("x".repeat(3000));
+    // Measured after the prediction, without that result: it is still counted.
+    tools.fit(4000);
+    expect(String(await tools[0].implementation()).length).toBeLessThan(1500);
+    // A new round's prompt has those results in it, so the next measurement is taken as it is.
+    tools.startRound();
+    tools.fit(4000);
+    expect(await tools[0].implementation()).toBe("x".repeat(3000));
   });
 
   // Thousands of short file names passed both caps, each under 200 characters.

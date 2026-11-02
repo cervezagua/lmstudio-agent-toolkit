@@ -101,6 +101,12 @@ export async function runReply(input: {
   refillToolBudget?: () => void;
   /** Called before each prompt is sent and after each prediction with the tokens left for tool results, so capped tools hand out no more. */
   fitToolResults?: (tokens: number) => void;
+  /**
+   * Called with the tokens the model writes as it writes them, and when each round starts: tools
+   * run while the prediction streams, and the room for their results shrinks with it.
+   */
+  takeToolRoom?: (tokens: number) => void;
+  startToolRound?: () => void;
   /** For the eval runner: every message the reply produces, and every prediction's stats. */
   hooks?: { onMessage?: (message: any) => void; onPredictionCompleted?: (result: any) => void };
 }): Promise<void> {
@@ -125,10 +131,8 @@ export async function runReply(input: {
   };
   const count = async (systemText: string, list: Msg[]) => {
     const rough = estimate(systemText, list);
-    // Counting exactly renders and tokenizes the whole prompt: not worth it far below the high mark,
-    // nor far above it, where compacting is due whatever the exact number.
-    const high = settings.usable * settings.high;
-    if ((rough < high * 0.5 || rough > high * 1.3) && estimateIsFair(systemText, list)) return rough;
+    // Counting exactly renders and tokenizes the whole prompt; not worth it far below the high mark.
+    if (rough < settings.usable * settings.high * 0.5 && estimateIsFair(systemText, list)) return rough;
     try {
       return (await model.countTokens(await model.applyPromptTemplate(build(systemText, list)))) + input.toolTokens;
     } catch {
@@ -136,6 +140,18 @@ export async function runReply(input: {
       return rough;
     }
   };
+  // Nor is the whole history worth counting when it is far over the high mark: compacting is due
+  // whatever the exact number. Only that first size is taken this way; the sizes compacting decides
+  // by are counted, as code can run well over the estimate.
+  const roughly = (systemText: string, list: Msg[]) => {
+    const rough = estimate(systemText, list);
+    return rough > settings.usable * settings.high * 1.3 && estimateIsFair(systemText, list) ? rough : undefined;
+  };
+  // The size of a prompt about to be sent, for the room tool results have: counted, or when it was
+  // only estimated (a small prompt), taken at the dense end, as code and data run near 2.5
+  // characters a token. Too little room only cuts a result; too much overflows the context.
+  const sizeForRoom = (counted: number, systemText: string, list: Msg[]) =>
+    counted === estimate(systemText, list) ? Math.ceil(counted * 1.4) : counted;
 
   const last = msgs[msgs.length - 1];
   if (last && isSideQuestion(last)) return answerSideQuestion();
@@ -143,11 +159,10 @@ export async function runReply(input: {
   // The conversation without side questions, made to fit.
   let compacted;
   try {
-    compacted = await compact({ system, msgs: withoutSideQuestions(msgs), count, model, chatDir: input.chatDir, options: settings, signal: input.signal });
+    compacted = await compact({ system, msgs: withoutSideQuestions(msgs), count, roughly, model, chatDir: input.chatDir, options: settings, signal: input.signal });
     if (compacted.fresh && settings.showNotices) {
       const how = compacted.stage === 1 ? "hid older tool output" : "summarized the earlier conversation";
-      // Far above the high mark, the size before is the estimate (see count).
-      const about = compacted.before > settings.usable * settings.high * 1.3 ? "about " : "";
+      const about = compacted.beforeEstimated ? "about " : "";
       out.notice(`Context: ${how}, ${about}${compacted.before.toLocaleString("en-US")} → ${compacted.after.toLocaleString("en-US")} tokens.${compacted.note ? ` (${compacted.note})` : ""}`);
     }
   } catch (error: any) {
@@ -254,13 +269,18 @@ export async function runReply(input: {
     return [...list, { role: "user", text: note, calls: [], results: [], n: 0 }];
   };
   // The first prompt's size is known from compacting it; the reminders add little.
-  let promptSize: number | undefined = compacted.after ? compacted.after + reminders.reduce((sum, r) => sum + roughTokens(r.text), 0) : undefined;
+  let promptSize: number | undefined = compacted.after
+    ? sizeForRoom(compacted.after, compacted.system, compacted.msgs) + reminders.reduce((sum, r) => sum + roughTokens(r.text), 0)
+    : undefined;
   for (;;) {
     if (input.maxRounds !== undefined && roundsDone >= input.maxRounds) return;
     // Results take their share again on each new prompt, within the room it leaves. Told now, not
     // only after a prediction: the SDK starts tools while the prediction is still streaming.
     input.refillToolBudget?.();
-    if (input.fitToolResults) input.fitToolResults(settings.usable - (promptSize ?? (await count(compacted.system, prompt))) - RESULT_MARGIN);
+    if (input.fitToolResults) {
+      promptSize ??= sizeForRoom(await count(compacted.system, prompt), compacted.system, prompt);
+      input.fitToolResults(settings.usable - promptSize - RESULT_MARGIN);
+    }
     promptSize = undefined;
     const stop = new AbortController();
     const signal = AbortSignal.any([input.signal, stop.signal]);
@@ -289,9 +309,11 @@ export async function runReply(input: {
           roundSaid = "";
           roundThought = false;
           roundUnreadable = false;
+          input.startToolRound?.();
           out.newRound();
         },
         onPredictionFragment: (fragment: any) => {
+          input.takeToolRoom?.(fragment.tokensCount ?? roughTokens(fragment.content ?? ""));
           if (fragment.reasoningType === "reasoning") {
             roundThought = true;
             out.reasoning(fragment.content);
@@ -307,6 +329,9 @@ export async function runReply(input: {
         onToolCallRequestStart: (_round: number, callId: number) => setStatus(callId, { type: "generatingToolCall" }),
         onToolCallRequestNameReceived: (_round: number, callId: number, name: string) =>
           setStatus(callId, { type: "generatingToolCall", name, pluginIdentifier: pluginOf.get(name) }),
+        // A call's arguments (a whole file, for write_file) take room too, and may not come as
+        // fragments; counted twice at worst, which only cuts this round's results sooner.
+        onToolCallRequestArgumentFragmentGenerated: (_round: number, _callId: number, content: string) => input.takeToolRoom?.(roughTokens(String(content ?? ""))),
         onToolCallRequestFailure: (_round: number, callId: number, error: any) => {
           setStatus(callId, { type: "toolCallGenerationFailed", error: String(error?.message ?? error).split(/\r?\n/)[0].slice(0, 300) });
           // A call to an unknown tool, or with arguments that do not fit, is in the assistant message

@@ -30,6 +30,8 @@ export interface Compacted {
   note?: string;
   /** Whether the prompt is now made differently than for the last message, so the user should be told. */
   fresh?: boolean;
+  /** Whether `before` is an estimate (see `roughly`). */
+  beforeEstimated?: boolean;
 }
 
 /**
@@ -37,19 +39,21 @@ export interface Compacted {
  * the model a full re-read on the next message:
  * 1. Under the high mark, nothing changes.
  * 2. Otherwise old tool output is hidden (no model call). Done if that gets under the low mark; what
- *    was hidden stays hidden, and no more, on later messages until the prompt passes the high mark again.
+ *    was hidden stays hidden, and no more, on later messages while the prompt stays under it.
  * 3. Otherwise everything before the recent turns is replaced, in a record that opens the
  *    conversation, by the user's own words, a list of what happened read from the tool calls, a
  *    running summary written by the model, and where the full transcript is. The cut is remembered
  *    and kept on later messages until the prompt passes the high mark again.
  *
  * `count` returns the tokens of a prompt made of a system prompt and messages (the caller counts
- * the tool definitions in too).
+ * the tool definitions in too). `roughly` may give the whole history's size without counting it,
+ * when it is clearly over the high mark; every size a decision rests on is counted.
  */
 export async function compact(input: {
   system: string;
   msgs: Msg[];
   count: (system: string, msgs: Msg[]) => Promise<number>;
+  roughly?: (system: string, msgs: Msg[]) => number | undefined;
   model: Summarizer;
   chatDir: string;
   options: CompactOptions;
@@ -65,16 +69,19 @@ export async function compact(input: {
     if ((changed || maskAt !== state.maskAt) && !input.readOnly) {
       await writeSummaryState(input.chatDir, { ...(await readSummaryState(input.chatDir)), lastStage: result.stage, cutAt, maskAt }).catch(() => {});
     }
-    return { ...result, fresh: changed && result.stage > 0 };
+    return { ...result, fresh: changed && result.stage > 0, beforeEstimated: estimated };
   };
 
-  const before = await count(system, msgs);
+  const estimatedBefore = input.roughly?.(system, msgs);
+  const estimated = estimatedBefore !== undefined;
+  const before = estimatedBefore ?? (await count(system, msgs));
   if (before <= options.usable * options.high) return settle({ system, msgs, stage: 0, before, after: before });
 
   const maskOptions = { keepRounds: options.keepRounds, maxResultChars: options.maxResultChars };
   const fresh = maskToolResults(msgs, maskOptions);
-  // Where older output was hidden last time is kept while the prompt fits, as the cut below is:
-  // moving it on every message changes the prompt's start, so the model re-reads all of it.
+  // Where older output was hidden last time is kept while the prompt is under the low mark, where
+  // hiding it would have stopped: moving it on every message changes the prompt's start, so the
+  // model re-reads all of it. Above that, the room the reply has matters more.
   const kept = state.maskAt && state.maskAt <= fresh.from ? maskToolResults(msgs, { ...maskOptions, from: state.maskAt }) : fresh;
   let masked = fresh.msgs;
 
@@ -87,13 +94,14 @@ export async function compact(input: {
       if (index > 0 && safeCutPoints(masked).includes(index)) {
         // With the summary already written (or none, if it failed): keeping a prompt never calls the model.
         const prompt = await summarized(index, state.summary || null);
-        if (prompt.after <= options.usable * options.high) return settle(prompt, state.cutAt, mask.from);
+        const mark = mask === fresh ? options.high : options.low;
+        if (prompt.after <= options.usable * mark) return settle(prompt, state.cutAt, mask.from);
       }
     }
   }
   if (kept !== fresh && state.lastStage === 1) {
     const afterKept = await count(system, kept.msgs);
-    if (afterKept <= options.usable * options.high) return settle({ system, msgs: kept.msgs, stage: 1, before, after: afterKept }, undefined, kept.from);
+    if (afterKept <= options.usable * options.low) return settle({ system, msgs: kept.msgs, stage: 1, before, after: afterKept }, undefined, kept.from);
   }
   masked = fresh.msgs;
   const maskAt = fresh.from;

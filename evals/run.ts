@@ -242,6 +242,8 @@ async function runOnce(model: any, client: any, systemPrompt: string, name: stri
               tools: capped,
               refillToolBudget: capped.refill,
               fitToolResults: tokens => capped.fit(tokens * 2.5),
+              takeToolRoom: tokens => capped.take(tokens * 2.5),
+              startToolRound: capped.startRound,
               toolTokens: await model.countTokens(definitions),
               chatDir,
               settings: {
