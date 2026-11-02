@@ -1,8 +1,10 @@
 import { callsById, describeCall, isFailure, roughTokens, type Msg } from "./history";
 import { precedingCall } from "./mask";
 
-/** Tools whose calls change a file, and the argument that names it. */
-const WRITES = new Set(["write_file", "edit_file", "multi_edit", "insert_lines", "undo_edit", "notebook_edit", "write_document"]);
+/** Tools whose calls change the file their `path` argument names, for the ledger. */
+export const FILE_WRITES = new Set(["write_file", "edit_file", "multi_edit", "insert_lines", "undo_edit", "notebook_edit", "write_document"]);
+/** Tools whose calls change something: files, the repository, memory or skills. */
+export const CHANGES = new Set([...FILE_WRITES, "git_init", "git_add", "git_commit", "git_branch", "memory_save", "memory_delete", "skill_save"]);
 
 /**
  * What happened, read from the tool calls by code rather than recalled by a model: the files that
@@ -20,7 +22,7 @@ export function ledger(msgs: Msg[], maxTokens: number): string {
       if (!call) continue;
       if (isFailure(result.content)) {
         lines.push(`- failed: ${describeCall(call)}: ${result.content.replace(/^"?Error:\s*/, "").split(/\r?\n/)[0].slice(0, 140)}`);
-      } else if (WRITES.has(call.name) && typeof call.args.path === "string") {
+      } else if (FILE_WRITES.has(call.name) && typeof call.args.path === "string") {
         changed.add(call.args.path);
       } else if (call.name === "run_command" && typeof call.args.command === "string") {
         const exit = /exit_code:\s*(-?\d+)/.exec(result.content)?.[1];
@@ -86,10 +88,10 @@ export function openTasks(msgs: Msg[]): string {
     const k = msgs[i].calls.map(c => c.name).lastIndexOf("todo_write");
     if (k < 0) continue;
     const call = msgs[i].calls[k];
-    // A list the tool refused (two tasks in progress, say) is not the list.
+    // A list the tool refused (two tasks in progress, say), the user denied, or that never ran is not the list.
     const reply = msgs[i + 1]?.role === "tool" ? msgs[i + 1].results : [];
     const result = (call.id && reply.find(r => r.id === call.id)) || reply[k];
-    if (result && isFailure(result.content)) continue;
+    if (!result || isFailure(result.content) || /^\s*\{\s*"error"\s*:|^"?That tool call could not be used/.test(result.content)) continue;
     const todos = Array.isArray(call.args.todos) ? (call.args.todos as { content?: unknown; status?: unknown }[]) : [];
     if (!todos.some(t => t.status !== "completed")) return "";
     const mark = (status: unknown) => (status === "completed" ? "[x]" : status === "in_progress" ? "[>]" : "[ ]");

@@ -120,8 +120,9 @@ function fakeModel(rounds: { thinking?: string; text?: string; calls?: Call[]; f
           const results = [];
           for (const { call, allowed, reason } of decisions) {
             const tool = tools.find(t => t.name === call.name);
-            const output = allowed ? await tool.implementation(call.arguments ?? {}) : JSON.stringify({ error: reason });
-            results.push({ type: "toolCallResult", toolCallId: call.id, content: typeof output === "string" ? output : JSON.stringify(output) });
+            // As the SDK does: a tool's result is sent as JSON, a text included, and a refusal as {"error": ...}.
+            const output = allowed ? JSON.stringify(await tool.implementation(call.arguments ?? {})) : JSON.stringify({ error: reason });
+            results.push({ type: "toolCallResult", toolCallId: call.id, content: output });
           }
           opts.onMessage(ChatMessage.from({ role: "tool", content: results } as any));
         }
@@ -198,6 +199,16 @@ describe("agent-toolkit-loop in LM Studio's chat", () => {
     });
     expect(await reply(lmStudio, model, [throwing])).toEqual([]);
     expect(cardOf(lmStudio.steps, 100)).toBe("toolCallFailed");
+  });
+
+  // The SDK sends the error as a JSON string: the card showed its escaped "\n" and all that followed.
+  it("shows the first line of a tool's error on its card", async () => {
+    const lmStudio = fakeLmStudio();
+    const model = fakeModel([[{ calls: [{ id: "a", name: "run_command" }] }, { text: "Fixing the path." }]]);
+    const failing = tool("run_command", () => 'Error: "C:\\tmp\\x" was not found.\nRun list_dir to see what is there.');
+    expect(await reply(lmStudio, model, [failing])).toEqual([]);
+    const card: any = lmStudio.steps.find(step => step.type === "toolStatus" && step.callId === 100)?.statusState?.status;
+    expect(card).toEqual({ type: "toolCallFailed", error: '"C:\\tmp\\x" was not found.' });
   });
 
   it("ends a reply that failed mid-call with its reason, and no card left running", async () => {

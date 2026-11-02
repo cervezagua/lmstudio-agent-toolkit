@@ -65,6 +65,8 @@ async function handlePrediction(ctl: PredictionLoopHandlerController) {
         tools: capped,
         refillToolBudget: capped.refill,
         fitToolResults: tokens => capped.fit(tokens * FEW_CHARS_PER_TOKEN),
+        takeToolRoom: tokens => capped.take(tokens * FEW_CHARS_PER_TOKEN),
+        startToolRound: capped.startRound,
         toolTokens,
         chatDir: ctl.getWorkingDirectory(),
         settings: {

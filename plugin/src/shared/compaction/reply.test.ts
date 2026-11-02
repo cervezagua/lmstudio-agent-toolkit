@@ -3,6 +3,7 @@ import { mkdtemp, readFile, rm } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { capTools } from "./capTools";
 import { fromChat } from "./history";
 import { openTasks } from "./pinned";
 import { runReply, type ReplyOutput, type ReplySettings } from "./reply";
@@ -50,6 +51,16 @@ const assistantCall = (id: string, name: string, args: Record<string, unknown>, 
     content: [...(text ? [{ type: "text", text }] : []), { type: "toolCallRequest", toolCallRequest: { type: "function", id, name, arguments: args } }],
   } as any);
 const toolResult = (id: string, content: string) => ChatMessage.from({ role: "tool", content: [{ type: "toolCallResult", toolCallId: id, content }] } as any);
+/** One assistant message with several calls, and one tool message with their results: [id, name] and [id, content]. */
+const assistantCalls = (...calls: [string | undefined, string][]) =>
+  ChatMessage.from({
+    role: "assistant",
+    content: calls.map(([id, name]) => ({ type: "toolCallRequest", toolCallRequest: { type: "function", id, name, arguments: {} } })),
+  } as any);
+const toolResults = (...results: [string | undefined, string][]) =>
+  ChatMessage.from({ role: "tool", content: results.map(([id, content]) => ({ type: "toolCallResult", toolCallId: id, content })) } as any);
+/** What the SDK throws when a reply is stopped mid-act. */
+const abortError = () => Object.assign(new Error("aborted"), { name: "AbortError" });
 
 /** A model whose act() plays a script, and whose token count is the rough length of the prompt. */
 function fakeModel(script: (chat: any, opts: any, call: number) => Promise<void>) {
@@ -178,7 +189,7 @@ describe("runReply", () => {
         allow: () => {},
         deny: (reason: string) => (denied = reason),
       });
-      invalid = opts.handleInvalidToolRequest(new Error("Unterminated string in JSON at position 208"), undefined);
+      invalid = opts.handleInvalidToolRequest(new Error("Unterminated string in JSON at position 208"), { name: "edit_file", arguments: {} });
     });
     await run(model, [{ role: "user", content: "edit it" }]);
     expect(denied).toBe("This exact call already failed twice (old_string was not found in the file.). Change the arguments, or try another way.");
@@ -319,7 +330,7 @@ describe("runReply", () => {
       [{ role: "user", content: "start" }, { role: "assistant", content: "x".repeat(4000) }, { role: "user", content: "next" }],
       { usable: 1000 },
     );
-    expect(events.find(e => e.startsWith("notice:"))).toMatch(/^notice:Context: summarized the earlier conversation, [\d,]+ → [\d,]+ tokens\./);
+    expect(events.find(e => e.startsWith("notice:"))).toMatch(/^notice:Context: summarized the earlier conversation, (about )?[\d,]+ → [\d,]+ tokens\./);
   });
 
   it("makes room and carries on when a reply outgrows the context between rounds", async () => {
@@ -471,8 +482,10 @@ describe("runReply", () => {
     expect(model.actCalls).toHaveLength(2);
     expect(events).toContain("notice:Context: the reply was cut off by a full context, so older tool output was hidden and it went on.");
     const second = model.actCalls[1].getMessagesArray();
-    expect(second.at(-2).getText()).toBe("So the driver was never");
-    expect(second.at(-1).getText()).toMatch(/^\(Your last message was cut off because the context was full/);
+    // The unfinished message is left out, as when there is nothing to hide: its thinking has no end marker.
+    expect(second.map((m: any) => m.getText())).not.toContain("So the driver was never");
+    expect(second.at(-2).getRole()).toBe("tool");
+    expect(second.at(-1).getText()).toMatch(/^\(Your last message was cut off because the context was full, so it was left out/);
   });
 
   // With many tools on a 16k context, a model wrote a whole program in one call and ran out of room.
@@ -488,7 +501,9 @@ describe("runReply", () => {
     const retry = model.actCalls[1].getMessagesArray();
     // The cut-off message is dropped: its thinking would fill the context again.
     expect(retry.map((m: any) => m.getText())).not.toContain("thinking ".repeat(2000));
-    expect(retry.at(-1).getText()).toMatch(/only about 6600 tokens are left for each reply[\s\S]*write_file with append: true/);
+    // With nothing else written, the note goes in the user's message: two user messages in a row break some templates.
+    expect(retry.map((m: any) => m.getRole())).toEqual(["user"]);
+    expect(retry[0].getText()).toMatch(/^build csvstats\.js\n\n\(Your last message was cut off[\s\S]*only about 6600 tokens are left for each reply[\s\S]*write_file with append: true/);
     expect(events).toContain("notice:Context: the reply was cut off by a full context, so the model was asked to go on in smaller steps.");
     // Cut off again: it stops, and says why.
     expect(events).toContain("notice:Context: the context is full, so the reply was cut off. Start a new chat, or raise the model's context length.");
@@ -566,7 +581,9 @@ describe("runReply", () => {
       out,
       signal: new AbortController().signal,
     });
-    expect(fits).toEqual([16_000 - 9100 - 1000]);
+    // Before the prompt is sent, for tools that start while the prediction streams (a prompt only
+    // estimated is taken at the dense end: 11 tokens as 16); then after it.
+    expect(fits).toEqual([16_000 - 16 - 1000, 16_000 - 9100 - 1000]);
   });
 
   it("keeps a summarized prompt on the next message instead of summarizing again", async () => {
@@ -590,5 +607,225 @@ describe("runReply", () => {
     expect(summaries).toBe(1);
     expect(second.filter(e => e.startsWith("notice:"))).toEqual([]);
     expect(model.actCalls[1].getMessagesArray()[0].getText()).toBe(firstPrompt);
+  });
+
+  // A call with broken JSON gets no result from the SDK, and the reply simply stopped there.
+  it("asks again for a tool call the SDK could not read, twice at most", async () => {
+    const model = fakeModel(async (_chat, opts) => {
+      opts.onRoundStart(0);
+      opts.onToolCallRequestStart(0, 1, {});
+      opts.onToolCallRequestFailure(0, 1, new Error("Unterminated string in JSON at position 208"));
+      opts.onPredictionCompleted({ stats: { promptTokensCount: 100, predictedTokensCount: 50, stopReason: "eosFound" } });
+      opts.onMessage(ChatMessage.from({ role: "assistant", content: [{ type: "text", text: "Writing it." }] } as any));
+      opts.onRoundEnd(0);
+    });
+    const events = await run(model, [{ role: "user", content: "write it" }]);
+    expect(model.actCalls).toHaveLength(3);
+    expect(model.actCalls[1].getMessagesArray().map((m: any) => m.getText())).toEqual([
+      "write it",
+      "Writing it.",
+      "(Your last tool call was not valid JSON, so it could not be run. Write it again as one complete call.)",
+    ]);
+    expect(events.filter(e => e.startsWith("notice:"))).toHaveLength(2);
+  });
+
+  // A call to a tool that does not exist got a second card, marked as succeeded, and without ids
+  // the results after it landed on the wrong cards.
+  for (const withIds of [true, false]) {
+    it(`keeps an unusable call on its own card, with${withIds ? "" : "out"} ids`, async () => {
+      const id = (name: string) => (withIds ? name : undefined);
+      const model = fakeModel(async (_chat, opts) => {
+        opts.onRoundStart(0);
+        opts.onToolCallRequestEnd(0, 1, { toolCallRequest: { id: id("a"), name: "read_file", arguments: {} } });
+        opts.onToolCallRequestStart(0, 2, {});
+        opts.onToolCallRequestFailure(0, 2, Object.assign(new Error("Cannot find tool with name reed_file."), { toolName: "reed_file" }));
+        opts.onToolCallRequestEnd(0, 3, { toolCallRequest: { id: id("c"), name: "list_dir", arguments: {} } });
+        opts.onMessage(assistantCalls([id("a"), "read_file"], [id("b"), "reed_file"], [id("c"), "list_dir"]));
+        opts.onMessage(toolResults([id("a"), "A"], [id("b"), '"That tool call could not be used: Cannot find tool with name reed_file."'], [id("c"), "C"]));
+      });
+      const statuses: string[] = [];
+      const { events, out } = recorder();
+      out.toolStatus = (callId, status) => statuses.push(`${callId}:${status.type}`);
+      await runReply({ sdk: { Chat }, model, history: chatOf([{ role: "user", content: "look" }]), tools: [], toolTokens: 0, chatDir, settings, out, signal: new AbortController().signal });
+      expect(events.filter(e => e.startsWith("call#") || e.startsWith("result#"))).toEqual([
+        "call#1:read_file",
+        "call#3:list_dir",
+        "call#2:reed_file",
+        "result#1:A",
+        'result#2:"That tool call could not be used: Cannot find tool with name reed_file."',
+        "result#3:C",
+      ]);
+      expect(statuses.filter(s => s.startsWith("2:"))).toEqual(["2:generatingToolCall", "2:toolCallGenerationFailed"]);
+      expect(statuses.filter(s => s.startsWith("3:")).at(-1)).toBe("3:toolCallSucceeded");
+    });
+  }
+
+  // A remote model reports no token counts, so the reply never made room and overflowed.
+  it("estimates how full the context is when the model reports no stats", async () => {
+    const model = fakeModel(async (_chat, opts, call) => {
+      if (call > 1) return;
+      for (const [round, id] of [[0, "r1"], [1, "r2"]] as const) {
+        opts.onRoundStart(round);
+        opts.onPredictionCompleted({ content: "" });
+        opts.onMessage(assistantCall(id, "read_file", { path: `${id}.txt` }));
+        opts.onMessage(toolResult(id, "y".repeat(20_000)));
+        opts.onRoundEnd(round);
+        if (opts.signal.aborted) throw abortError();
+      }
+    });
+    const events = await run(model, [{ role: "user", content: "read everything" }], { usable: 10_000, keepRounds: 3 });
+    expect(model.actCalls).toHaveLength(2);
+    expect(events).toContain("notice:Context: the reply was filling the context, so older tool output and thinking were left out before it went on.");
+  });
+
+  // After a cut-off prediction left no room, every later result was cut to 200 characters.
+  it("gives tool results room again once a cut-off reply starts over", async () => {
+    const tools = capTools([{ name: "read_file", implementation: async () => "z".repeat(3000) }], { perResult: 10_000, budget: 20_000 });
+    let read = "";
+    const model = fakeModel(async (_chat, opts, call) => {
+      opts.onRoundStart(0);
+      if (call === 2) {
+        read = String(await tools[0].implementation());
+        return;
+      }
+      opts.onPredictionCompleted({ stats: { promptTokensCount: 9400, predictedTokensCount: 6600, stopReason: "contextLengthReached" } });
+      opts.onMessage(ChatMessage.from({ role: "assistant", content: [{ type: "text", text: "thinking ".repeat(2000) }] } as any));
+      opts.onRoundEnd(0);
+    });
+    const { out } = recorder();
+    await runReply({
+      sdk: { Chat },
+      model,
+      history: chatOf([{ role: "user", content: "read it" }]),
+      tools,
+      refillToolBudget: tools.refill,
+      fitToolResults: tokens => tools.fit(tokens * 2.5),
+      toolTokens: 0,
+      chatDir,
+      settings: { ...settings, usable: 16_000 },
+      out,
+      signal: new AbortController().signal,
+    });
+    expect(model.actCalls).toHaveLength(2);
+    expect(read).toBe("z".repeat(3000));
+  });
+
+  // At 16k, LM Studio refused a request "(17585 tokens) [that] exceeds the available context size":
+  // a fast tool's result came while the prediction streamed, against room measured before it, and
+  // the measurement after it forgot that result and handed the same room to the next one.
+  it("keeps the next prompt within the context when results come while the model writes", async () => {
+    const tools = capTools([{ name: "read_file", implementation: async () => "x".repeat(30_000) }], { perResult: 40_000, budget: 40_000 });
+    let nextPrompt = 0;
+    const model = fakeModel(async (_chat, opts, call) => {
+      if (call > 1) return;
+      opts.onRoundStart(0);
+      for (let i = 0; i < 20; i++) opts.onPredictionFragment({ content: "Let me read both. ".repeat(6), tokensCount: 100, reasoningType: "reasoning" });
+      const fast = String(await tools[0].implementation());
+      // Code runs denser than the estimate: the prompt was 30% bigger than it guessed.
+      opts.onPredictionCompleted({ stats: { promptTokensCount: 6000, predictedTokensCount: 2000, stopReason: "toolCalls" } });
+      const slow = String(await tools[0].implementation());
+      nextPrompt = 8000 + (fast.length + slow.length) / 2.5;
+    });
+    const { out } = recorder();
+    await runReply({
+      sdk: { Chat },
+      model,
+      history: chatOf([{ role: "user", content: "c".repeat(16_100) }]),
+      tools,
+      refillToolBudget: tools.refill,
+      fitToolResults: tokens => tools.fit(tokens * 2.5),
+      takeToolRoom: tokens => tools.take(tokens * 2.5),
+      startToolRound: tools.startRound,
+      toolTokens: 0,
+      chatDir,
+      settings: { ...settings, usable: 16_000 },
+      out,
+      signal: new AbortController().signal,
+    });
+    expect(nextPrompt).toBeGreaterThan(8000);
+    expect(nextPrompt).toBeLessThanOrEqual(16_000);
+  });
+
+  // The follow-ups for an empty or cut-off reply used up the restarts meant for making room.
+  it("keeps all its restarts for making room after a reply was followed up", async () => {
+    const model = fakeModel(async (_chat, opts, call) => {
+      if (call === 1) {
+        opts.onRoundStart(0);
+        opts.onPredictionFragment({ content: "Hmm.", reasoningType: "reasoning" });
+        opts.onRoundEnd(0);
+        return;
+      }
+      for (const [round, id] of [[0, "r1"], [1, "r2"]] as const) {
+        opts.onRoundStart(round);
+        opts.onPredictionCompleted({ stats: { promptTokensCount: round ? 9000 : 2000, predictedTokensCount: 100 } });
+        opts.onMessage(assistantCall(id, "read_file", { path: `${id}.txt` }));
+        opts.onMessage(toolResult(id, "y".repeat(5000)));
+        opts.onRoundEnd(round);
+        if (opts.signal.aborted) throw abortError();
+      }
+    });
+    await run(model, [{ role: "user", content: "read everything" }], { usable: 10_000, keepRounds: 3 });
+    // The follow-up, three restarts that make room, and the last try that goes on as it is.
+    expect(model.actCalls).toHaveLength(5);
+  });
+
+  it("lets a call that failed be tried again after a change, documents and commits included", async () => {
+    const decisions: string[] = [];
+    const guard = (name: string, args: Record<string, unknown>) => ({
+      toolCallRequest: { name, arguments: args },
+      allow: () => decisions.push(`allow ${name}`),
+      deny: (reason: string) => decisions.push(`deny ${name}: ${reason}`),
+    });
+    const both = (opts: any, id: string, name: string, args: Record<string, unknown>, content: string) => {
+      opts.onMessage(assistantCall(id, name, args));
+      opts.onMessage(toolResult(id, content));
+    };
+    const model = fakeModel(async (_chat, opts) => {
+      // Failed twice, then the missing file was written: reading it may work now.
+      for (const id of ["r1", "r2"]) both(opts, id, "read_file", { path: "notes.txt" }, '"Error: notes.txt does not exist."');
+      both(opts, "w1", "write_file", { path: "notes.txt", content: "x" }, '"Wrote notes.txt."');
+      await opts.guardToolCall(0, 1, guard("read_file", { path: "notes.txt" }));
+      // The same result twice, then a document written or a commit made: news again.
+      for (const id of ["s1", "s2"]) both(opts, id, "git_status", {}, '"2 files changed"');
+      both(opts, "d1", "write_document", { path: "report.docx" }, '"Wrote report.docx."');
+      await opts.guardToolCall(0, 2, guard("git_status", {}));
+      for (const id of ["s3", "s4"]) both(opts, id, "git_status", {}, '"1 file changed"');
+      both(opts, "g1", "git_commit", { message: "fix" }, '"Committed."');
+      await opts.guardToolCall(0, 3, guard("git_status", {}));
+    });
+    await run(model, [{ role: "user", content: "write the notes" }]);
+    expect(decisions).toEqual(["allow read_file", "allow git_status", "allow git_status"]);
+  });
+
+  // The reminder was put only on the latest message, so the next prompt differed from the last one
+  // there and the model re-read the whole previous turn.
+  it("keeps a task reminder where it was added, so the next prompt starts the same", async () => {
+    const todos = { todos: [{ content: "add tests", status: "in_progress" }] };
+    const history = [{ role: "user", content: "plan it" }, assistantCall("t1", "todo_write", todos), toolResult("t1", "ok"), { role: "user", content: "go on" }];
+    const model = fakeModel(async () => {});
+    await run(model, history, { taskReminderEvery: 2 });
+    const first = model.actCalls[0].getMessagesArray().map((m: any) => m.getText());
+    expect(first.at(-1)).toMatch(/^go on\n\n\(Your task list/);
+    await run(model, [...history, { role: "assistant", content: "Working on it." }, { role: "user", content: "and then?" }], { taskReminderEvery: 2 });
+    const second = model.actCalls[1].getMessagesArray().map((m: any) => m.getText());
+    expect(second.slice(0, first.length)).toEqual(first);
+    expect(second.at(-1)).toBe("and then?");
+  });
+
+  it("does not count a prompt far above the high mark exactly", async () => {
+    const lengths: number[] = [];
+    const model: any = fakeModel(async () => {});
+    const countTokens = model.countTokens;
+    model.countTokens = async (text: string) => {
+      lengths.push(text.length);
+      return countTokens(text);
+    };
+    const events = await run(
+      model,
+      [{ role: "user", content: "start" }, assistantCall("r1", "read_file", { path: "big.txt" }), toolResult("r1", "y".repeat(100_000)), { role: "user", content: "next" }],
+      { usable: 10_000 },
+    );
+    expect(lengths.every(length => length < 50_000)).toBe(true);
+    expect(events.find(e => e.startsWith("notice:"))).toMatch(/, about [\d,]+ → /);
   });
 });
