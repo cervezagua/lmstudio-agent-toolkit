@@ -2,7 +2,7 @@ import { constants } from "fs";
 import { access, stat } from "fs/promises";
 import { join } from "path";
 import { TOOLKIT_VERSION } from "../version";
-import { findExecutable } from "./process";
+import { findExecutable, findPython, resolveShellName } from "./process";
 
 /** A plugin enabled in the chat, as LM Studio describes it to the plugin. */
 export interface EnabledPlugin {
@@ -130,17 +130,10 @@ export async function gatherDoctorFacts(ctl: any, config: { get(key: string): an
   if (config.get("enableFiles")) {
     need("rg", false, "grep is much faster with ripgrep (rg); without it, it searches more slowly in Node");
     if (config.get("allowShell")) {
-      const shell = config.get("shell");
-      const wanted = shell === "auto" ? (process.platform === "win32" ? ["pwsh", "powershell"] : ["bash", "sh"]) : [shell];
-      need(
-        wanted[0],
-        true,
-        "run_command runs commands with it",
-        wanted.some(name => findExecutable(name) !== null),
-      );
+      // The shell run_command will really use, so "auto" is reported as the one it picks.
+      need(resolveShellName(config.get("shell")), true, "run_command runs commands with it");
     }
-    if (config.get("autoCheckEdits"))
-      need("python", false, "edited Python files are checked for syntax errors", findExecutable("python") !== null || findExecutable("python3") !== null);
+    if (config.get("autoCheckEdits")) need("python", false, "edited Python files are checked for syntax errors", findPython() !== null);
   }
   if (config.get("enableGit")) {
     need("git", true, "the Git group's tools run it");

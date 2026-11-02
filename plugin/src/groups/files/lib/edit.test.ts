@@ -28,6 +28,11 @@ describe("applyEdit", () => {
     expect(result.content).toBe("first\r\nsecond\r\nline three\r\n");
   });
 
+  it("gives new lines the file's CRLF when a one-line old_string matched as sent", () => {
+    const file = "line one\r\nline two\r\n";
+    expect(applyEdit(file, "line one", "first\nadded").content).toBe("first\r\nadded\r\nline two\r\n");
+  });
+
   describe("deleting (an empty new_string)", () => {
     it("takes the line break too when the text was a whole line, and only then", () => {
       expect(applyEdit("a\nfoo\nb\n", "foo", "").content).toBe("a\nb\n");

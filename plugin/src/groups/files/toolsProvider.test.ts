@@ -4,6 +4,7 @@ import { basename, join } from "path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { execFileSync } from "child_process";
 import { readAttachments, recordAttachments, setUserFilesDirectory } from "../../shared/attachments";
+import { listCheckpoints, startTurn } from "../../shared/checkpoints";
 import { callTool, fakeController } from "../../shared/testing/fake-controller";
 import { toolsProvider } from "./toolsProvider";
 
@@ -168,7 +169,12 @@ describe("coder-tools toolsProvider", () => {
   // On a small context, one call with a whole program can run out of room halfway.
   it("writes a long file in parts, and says a part may look broken until the rest is in", async () => {
     const first = await callTool(tools, "write_file", { path: "parts.js", content: "function add(a, b) {\n" });
-    expect(first).toMatch(/^Created parts\.js[\s\S]*node --check found a problem[\s\S]*add the rest with append: true/);
+    expect(first).toMatch(/^Created parts\.js[\s\S]*node --check found a problem[\s\S]*If this was only the first part of the file, add the rest with append: true\.$/);
+    // A new file may be complete: its problem is not to be ignored.
+    expect(first).not.toContain("ignore this");
+    const appended = await callTool(tools, "write_file", { path: "parts.js", content: "  // more\n", append: true });
+    expect(appended).toMatch(/add the rest with append: true and ignore this until then\.$/);
+    await callTool(tools, "undo_edit", { path: "parts.js" });
     expect(await callTool(tools, "write_file", { path: "parts.js", content: "  return a + b;\n}\n", append: true })).toBe(
       "Appended 18 bytes to parts.js.",
     );
@@ -524,5 +530,71 @@ describe("coder-tools toolsProvider", () => {
     expect(multiline).toMatch(/^exit_code: 0\nstdout:\none\r?\ntwo/);
     expect(await callTool(sessionTools, "shell_reset", {})).toMatch(/restarted/);
     expect(await callTool(sessionTools, "run_command", { command: read })).not.toContain("sticky");
+  }, 60000);
+
+  // Decoding cp1252 as UTF-8 turns "é" into U+FFFD; writing that back destroyed the original bytes.
+  it("refuses to edit a file that is not UTF-8 text, and leaves it as it was", async () => {
+    const bytes = Buffer.from("caf\xe9 au lait\n", "latin1");
+    await writeFile(join(root, "cp1252.txt"), bytes);
+    await callTool(tools, "read_file", { path: "cp1252.txt" });
+    expect(await callTool(tools, "edit_file", { path: "cp1252.txt", old_string: "au lait", new_string: "noir" })).toMatch(
+      /^Error: cp1252\.txt is not UTF-8 text, so it cannot be edited without damaging it/,
+    );
+    expect(await callTool(tools, "insert_lines", { path: "cp1252.txt", after_line: 0, content: "x" })).toMatch(/is not UTF-8 text/);
+    expect(await readFile(join(root, "cp1252.txt"))).toEqual(bytes);
+    await rm(join(root, "cp1252.txt"));
+  });
+
+  it("brings back the exact bytes of a binary file it overwrote, and /rewind does not pretend to", async () => {
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0xff, 0xfe, 0x00, 0xe9]);
+    await writeFile(join(root, "logo.png"), bytes);
+    const turn = await startTurn(work, "replace the logo");
+    expect(await callTool(tools, "write_file", { path: "logo.png", content: "not an image" })).toMatch(/^Overwrote logo\.png/);
+    const checkpoint = (await listCheckpoints(work)).find(c => c.turn === turn.turn)!;
+    expect(checkpoint.skipped.map(f => basename(f))).toContain("logo.png");
+    expect(checkpoint.files.map(f => basename(f.path))).not.toContain("logo.png");
+    expect(await callTool(tools, "undo_edit", { path: "logo.png" })).toMatch(/^Restored logo\.png/);
+    expect(await readFile(join(root, "logo.png"))).toEqual(bytes);
+    await rm(join(root, "logo.png"));
+  });
+
+  it("does not undo over a change made since", async () => {
+    await callTool(tools, "write_file", { path: "undo-fresh.txt", content: "one\n" });
+    await callTool(tools, "write_file", { path: "undo-fresh.txt", content: "two\n" });
+    await writeFile(join(root, "undo-fresh.txt"), "the user's three\n");
+    expect(await callTool(tools, "undo_edit", { path: "undo-fresh.txt" })).toMatch(/^Error: undo-fresh\.txt changed on disk since you read it/);
+    expect(await readFile(join(root, "undo-fresh.txt"), "utf-8")).toBe("the user's three\n");
+    await rm(join(root, "undo-fresh.txt"));
+  });
+
+  it("creates the folders for insert_lines into a new file", async () => {
+    expect(await callTool(tools, "insert_lines", { path: "deep/new/dir/notes.txt", after_line: 0, content: "first" })).toMatch(/^Inserted 1 line/);
+    expect(await readFile(join(root, "deep", "new", "dir", "notes.txt"), "utf-8")).toBe("first");
+    await rm(join(root, "deep"), { recursive: true });
+  });
+
+  it("reaches only the transcript folder in the chat's folder, also through ../", async () => {
+    await mkdir(join(work, ".agent-toolkit", "compaction"), { recursive: true });
+    await writeFile(join(work, "secret.txt"), "not for the model");
+    const escape = await callTool(tools, "read_file", { path: ".agent-toolkit/compaction/../../secret.txt" });
+    expect(escape).toMatch(/^Error:/);
+    expect(escape).not.toContain("not for the model");
+    await rm(join(work, "secret.txt"));
+  });
+
+  it("keeps a failing command's exit code when it runs in another folder of the persistent shell", async () => {
+    const sessionTools = await toolsProvider(
+      fakeController({ config: { ...baseConfig, projectFolder: root, persistentShell: true }, workingDirectory: work }),
+    );
+    await mkdir(join(root, "elsewhere"), { recursive: true });
+    try {
+      const failed = await callTool(sessionTools, "run_command", { command: "node -e \"process.exit(5)\"", cwd: "elsewhere", timeout_seconds: 15 });
+      expect(failed).toMatch(/^exit_code: 5/);
+      const ok = await callTool(sessionTools, "run_command", { command: "node -e \"console.log(process.cwd())\" # where", cwd: "elsewhere", timeout_seconds: 15 });
+      expect(ok).toMatch(/^exit_code: 0\nstdout:\n.*elsewhere/);
+    } finally {
+      await callTool(sessionTools, "shell_reset", {});
+      await rm(join(root, "elsewhere"), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
   }, 60000);
 });

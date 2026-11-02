@@ -332,6 +332,8 @@ describe("write_document tool", () => {
     browserChannel: browserChannel ?? "msedge",
     enableFiles: true,
     enableCheckpoints: true,
+    enableMemory: true,
+    enablePlanMode: true,
     ...overrides,
   });
   const provider = (overrides: Record<string, unknown> = {}) =>
@@ -393,6 +395,8 @@ describe("write_document tool", () => {
     const names = (await provider()).map(tool => tool.name);
     expect(names).not.toContain("write_document");
     expect(names).toContain("read_document_text");
+    // With Plan Mode off, nothing could end the planning: it no longer counts.
+    expect((await provider({ enablePlanMode: false })).map(tool => tool.name)).toContain("write_document");
   });
 
   it.runIf(browserChannel)(

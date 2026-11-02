@@ -13,7 +13,7 @@ import { findAttachment } from "../../shared/attachments";
 import { recordChange } from "../../shared/checkpoints";
 import { safe, ToolError } from "../../shared/errors";
 import { isLmStudioFile } from "../../shared/lmStudioFiles";
-import { isChatStateFile, readMode } from "../../shared/mode";
+import { isChatStateFile, isPlanning } from "../../shared/mode";
 import { displayPath, resolveSafe } from "../../shared/paths";
 import { projectRoot } from "../../shared/projectFolder";
 import { writeFileAtomic } from "../../shared/safeWrite";
@@ -200,7 +200,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
   );
 
   // Plan mode (the Memory group's): while planning, tools that change things are not offered.
-  const planning = (await readMode(ctl.getWorkingDirectory())).planning;
+  const planning = await isPlanning(ctl.getWorkingDirectory(), config);
 
   if (!planning) {
     tools.push(
