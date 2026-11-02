@@ -1,5 +1,6 @@
 import { lstat, readdir, readFile } from "fs/promises";
 import { basename, join } from "path";
+import { readFrontmatter, stripBom } from "../groups/memory/lib/skills";
 import { HANDOFF_BODY } from "./handoff";
 import { scanForInjection, describeFinding } from "./injectionScan";
 
@@ -99,14 +100,15 @@ export async function projectCommands(projectFolder: string): Promise<Command[]>
     if (!/^[a-z][a-z0-9-]{0,40}$/.test(name) || RESERVED.has(name)) continue;
     const info = await lstat(join(folder, file)).catch(() => null);
     if (!info?.isFile()) continue;
-    const text = await readFile(join(folder, file), "utf-8").catch(() => null);
-    if (text === null) continue;
-    const header = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
-    const description = header ? /^description:\s*["']?(.*?)["']?\s*$/im.exec(header[1])?.[1] ?? "" : "";
+    const read = await readFile(join(folder, file), "utf-8").catch(() => null);
+    if (read === null) continue;
+    const text = stripBom(read);
+    // The skills' reader, so `description: >` and a quoted value that wraps read the same here.
+    const { header, fields } = readFrontmatter(text);
     commands.push({
       name,
-      description: description.slice(0, 200),
-      body: (header ? text.slice(header[0].length) : text).trim(),
+      description: (fields.description ?? "").slice(0, 200),
+      body: (header ? text.slice(header.length) : text).trim(),
       builtIn: false,
     });
   }

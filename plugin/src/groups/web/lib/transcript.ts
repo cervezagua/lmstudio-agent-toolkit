@@ -17,7 +17,25 @@ import { findExecutable, runProcess } from "../../../shared/process";
  */
 export function vttToText(vtt: string): string {
   const lines: string[] = [];
-  for (const raw of vtt.replace(/\r\n?/g, "\n").split("\n")) {
+  const rows = vtt.replace(/\r\n?/g, "\n").split("\n");
+  // The header (WEBVTT, Kind:, Language:) and NOTE, STYLE and REGION blocks run to the next blank line.
+  let skipping = false;
+  for (const [index, raw] of rows.entries()) {
+    if (!raw.trim()) {
+      skipping = false;
+      continue;
+    }
+    if (/-->/.test(raw)) {
+      skipping = false; // a timing line, which no such block may contain
+      continue;
+    }
+    if (skipping) continue;
+    const startsBlock = index === 0 || !rows[index - 1].trim(); // a caption line may begin "NOTE" too
+    if (startsBlock && /^(WEBVTT|NOTE|STYLE|REGION)([ \t]|$)/.test(raw)) {
+      skipping = true;
+      continue;
+    }
+    if (/-->/.test(rows[index + 1] ?? "")) continue; // a cue's identifier, often its number
     const line = raw
       .replace(/<\d{2}:\d{2}:\d{2}\.\d{3}>/g, "") // inline word timings
       .replace(/<\/?[a-z][^>]*>/gi, "") // <c>, <i>, <v Speaker> and friends
@@ -27,9 +45,6 @@ export function vttToText(vtt: string): string {
       .replace(/&gt;/g, ">")
       .trim();
     if (!line) continue;
-    if (/^WEBVTT\b/.test(line) || /^(Kind|Language|NOTE|STYLE|REGION)\b/.test(line)) continue;
-    if (/^\d+$/.test(line)) continue; // cue number
-    if (/-->/.test(line)) continue; // timing line
     if (lines[lines.length - 1] === line) continue;
     lines.push(line);
   }

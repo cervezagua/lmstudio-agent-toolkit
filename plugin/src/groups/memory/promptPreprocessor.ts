@@ -1,10 +1,10 @@
-import { type PromptPreprocessorController } from "@lmstudio/sdk";
+import { type Chat, type PromptPreprocessorController } from "@lmstudio/sdk";
 import { configSchematics, globalConfigSchematics } from "../../config";
 import { buildContextBlock, loadInstructionFiles } from "./lib/instructions";
 import { defaultMemoryDirectory, INDEX_FILE, MemoryStore } from "./lib/memoryStore";
 import { gitSnapshot } from "./lib/gitSnapshot";
 import { readFile } from "fs/promises";
-import { defaultSkillsDirectory, listSkills, MAX_SKILL_CHARS, partitionSkills, renderSkillList, triggeredSkills } from "./lib/skills";
+import { defaultSkillsDirectory, listSkills, MAX_SKILL_CHARS, partitionSkills, renderSkillList, stripBom, triggeredSkills } from "./lib/skills";
 import { fenced, shownName } from "../../shared/attachments";
 import { describeFinding, locateFinding, scanForInjection } from "../../shared/injectionScan";
 import { PLANNING_NOTE, readMode } from "../../shared/mode";
@@ -17,13 +17,13 @@ import { projectRoot } from "../../shared/projectFolder";
  * is added only once. On later ones only a reminder while planning mode is on. The plugin's prompt
  * preprocessor (src/index.ts) puts it in front of the user's words, with anything else it adds.
  */
-export async function memoryContext(ctl: PromptPreprocessorController): Promise<string | null> {
-  const history = await ctl.pullHistory();
-  // A /btw side question is not part of the conversation: a chat that opens with one still gets its
-  // project context on the first real message.
+export async function memoryContext(ctl: PromptPreprocessorController, pulled?: Chat): Promise<string | null> {
+  const history = pulled ?? (await ctl.pullHistory());
+  // A /btw side question is not part of the conversation, and /doctor (or the report it was replaced
+  // with) gets no context: a chat that opens with either still gets it on the first real message.
   const hasEarlierUserMessage = history
     .getMessagesArray()
-    .some(message => message.getRole() === "user" && !/^\s*\/btw\b/i.test(message.getText()));
+    .some(message => message.getRole() === "user" && !/^\s*(\/btw\b|\/doctor\s*$|The user ran \/doctor\b)/i.test(message.getText()));
   const config = ctl.getPluginConfig(configSchematics);
 
   if (hasEarlierUserMessage) {
@@ -111,19 +111,19 @@ export async function memoryContext(ctl: PromptPreprocessorController): Promise<
  * keyword they cannot miss. The skill is someone's text the model is told to follow, so it gets the
  * same scan and redaction as AGENTS.md.
  */
-export async function triggeredSkillContext(ctl: PromptPreprocessorController, userText: string): Promise<string | null> {
+export async function triggeredSkillContext(ctl: PromptPreprocessorController, userText: string, pulled?: Chat): Promise<string | null> {
   const config = ctl.getPluginConfig(configSchematics);
   if (!config.get("enableSkills")) return null;
   const all = await listSkills(defaultSkillsDirectory(ctl.getGlobalPluginConfig(globalConfigSchematics).get("skillsDirectory")));
   const matches = triggeredSkills(all, userText);
   if (matches.length === 0) return null;
 
-  const earlier = (await ctl.pullHistory()).getMessagesArray().map(message => message.getText()).join("\n");
+  const earlier = (pulled ?? (await ctl.pullHistory())).getMessagesArray().map(message => message.getText()).join("\n");
   const blocks: string[] = [];
   for (const { skill, trigger } of matches) {
     const name = shownName(skill.name);
     if (earlier.includes(`<skill name="${name}"`)) continue;
-    const text = (await readFile(skill.file, "utf-8").catch(() => ""))
+    const text = stripBom(await readFile(skill.file, "utf-8").catch(() => ""))
       .replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/, "")
       .trim()
       .slice(0, MAX_SKILL_CHARS);

@@ -1,6 +1,6 @@
 import { spawn } from "child_process";
 import { existsSync } from "fs";
-import { delimiter, join } from "path";
+import { delimiter, extname, join } from "path";
 import { truncate } from "./truncate";
 
 export interface RunOptions {
@@ -72,11 +72,13 @@ export function findExecutable(name: string): string | null {
     process.platform === "win32"
       ? ["", ...(env.PATHEXT ?? "").split(";").filter(Boolean).map(e => e.toLowerCase())]
       : [""];
+  // On Windows a name without an extension is not runnable as it is, but "cmd.exe" already has one.
+  const runnableAsNamed = process.platform !== "win32" || extensions.includes(extname(name).toLowerCase());
   let found: string | null = null;
   outer: for (const dir of path.split(delimiter).filter(Boolean)) {
     for (const ext of extensions) {
       const candidate = join(dir, name + ext);
-      if (existsSync(candidate) && (ext !== "" || process.platform !== "win32")) {
+      if (existsSync(candidate) && (ext !== "" || runnableAsNamed)) {
         found = candidate;
         break outer;
       }
@@ -86,9 +88,41 @@ export function findExecutable(name: string): string | null {
   return found;
 }
 
-function killTree(pid: number) {
+/**
+ * The program to spawn for `file`. Windows looks for a bare name in the child's own folder before
+ * PATH, so a git.exe planted in a cloned project would run instead of the real one: a bare name is
+ * looked up on PATH alone here. Only an .exe or .com, which is what Node can start directly; anything
+ * else, and a name not found, is passed on as it was, so a missing program still fails with ENOENT.
+ */
+export function resolveProgram(file: string): string {
+  if (/[\\/]/.test(file)) return file;
+  const found = findExecutable(file);
+  if (!found) return file;
+  return process.platform !== "win32" || /\.(exe|com)$/i.test(found) ? found : file;
+}
+
+/** The shell "auto" stands for here: PowerShell 7 or Windows PowerShell on Windows, bash or sh elsewhere. */
+export function resolveShellName(choice: string): string {
+  if (choice !== "auto") return choice;
+  if (process.platform === "win32") return findExecutable("pwsh") ? "pwsh" : "powershell";
+  return findExecutable("bash") ? "bash" : "sh";
+}
+
+/**
+ * A Python 3 to check files with. `python` can still be Python 2 on macOS and Linux, so python3 comes
+ * first there; on Windows python3 is usually only the Store's placeholder, and python the real one.
+ */
+export function findPython(): string | null {
+  return process.platform === "win32"
+    ? (findExecutable("python") ?? findExecutable("python3"))
+    : (findExecutable("python3") ?? findExecutable("python"));
+}
+
+/** Kills a process and everything it started (on Unix, its process group). */
+export function killTree(pid: number) {
   if (process.platform === "win32") {
-    spawn("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+    // Without a listener, a taskkill that cannot be started throws in the plugin's own process.
+    spawn(resolveProgram("taskkill"), ["/pid", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore", env: commandEnv() }).on("error", () => {});
   } else {
     try {
       process.kill(-pid, "SIGKILL");
@@ -148,7 +182,7 @@ export class CappedOutput {
  */
 export function runProcess(file: string, args: string[], options: RunOptions): Promise<RunResult> {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(file, args, {
+    const child = spawn(resolveProgram(file), args, {
       cwd: options.cwd,
       env: options.env ?? commandEnv(),
       windowsHide: true,

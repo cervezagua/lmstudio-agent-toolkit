@@ -162,6 +162,9 @@ describe("redactSecrets", () => {
       ['$env:DEPLOY_TOKEN = "abcdef0123456789"', '$env:DEPLOY_TOKEN = "[redacted: token]"'],
       ["tool login --password=hunter2hunter2", "tool login --password=[redacted: password]"],
       ["X-Api-Key: abcdef0123456789", "X-Api-Key: [redacted: API key]"],
+      // Starts with "my" or "your", but names no placeholder: a real value.
+      ["DB_PASSWORD=MyS3cret!2024", "DB_PASSWORD=[redacted: password]"],
+      ["API_TOKEN=yourstruly99Kx", "API_TOKEN=[redacted: token]"],
     ])("hides the value and keeps the name: %s", (line, expected) => {
       const result = redactSecrets(`# settings\n${line}\nPORT=8080`);
       expect(result.text).toBe(`# settings\n${expected}\nPORT=8080`);
@@ -180,6 +183,8 @@ describe("redactSecrets", () => {
       "API_KEY=YOUR_API_KEY",
       "API_KEY=xxxxxxxxxxxxxxxx",
       "API_KEY=<your key here>",
+      "DB_PASSWORD=my-secret-here",
+      'API_KEY="your token"',
       "API_KEY=${API_KEY}",
       "API_KEY=$OTHER_VARIABLE",
       'API_KEY="{{ vault_api_key }}"',

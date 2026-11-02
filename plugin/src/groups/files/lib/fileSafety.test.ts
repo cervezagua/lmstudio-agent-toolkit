@@ -1,19 +1,20 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from "fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, utimes, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { applyEdit, applyEdits } from "./edit";
-import { assertFresh, clearFileState, forget, recordRead, recordWrite } from "./fileState";
+import { FileState, fileStateFor } from "./fileState";
 import { assertReadableSize, looksBinary, readTextSlice } from "./readText";
 import { writeFileAtomic } from "../../../shared/safeWrite";
 import { suggestPaths } from "./suggest";
 import { ToolError } from "../../../shared/errors";
 
 let dir: string;
+let state: FileState;
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "coder-safety-"));
-  clearFileState();
+  state = new FileState();
 });
 
 afterEach(async () => {
@@ -24,47 +25,63 @@ describe("file state (read before edit)", () => {
   it("refuses a file the model never read", async () => {
     const file = join(dir, "a.txt");
     await writeFile(file, "content");
-    await expect(assertFresh(file, "a.txt", "content")).rejects.toThrow(/have not read a.txt/);
+    await expect(state.assertFresh(file, "a.txt", "content")).rejects.toThrow(/have not read a.txt/);
   });
 
   it("accepts a file that was read and is unchanged", async () => {
     const file = join(dir, "a.txt");
     await writeFile(file, "content");
-    await recordRead(file);
-    await expect(assertFresh(file, "a.txt", "content")).resolves.toBeUndefined();
+    await state.recordRead(file);
+    await expect(state.assertFresh(file, "a.txt", "content")).resolves.toBeUndefined();
   });
 
   it("refuses a file whose content changed since it was read", async () => {
     const file = join(dir, "a.txt");
     await writeFile(file, "before");
-    await recordRead(file);
+    await state.recordRead(file);
     await writeFile(file, "after");
-    await expect(assertFresh(file, "a.txt", "after")).rejects.toThrow(/changed on disk since you read it/);
+    await expect(state.assertFresh(file, "a.txt", "after")).rejects.toThrow(/changed on disk since you read it/);
   });
 
   it("accepts a touched file whose content is identical (antivirus, cloud sync)", async () => {
     const file = join(dir, "a.txt");
     await writeFile(file, "same");
-    await recordRead(file);
+    await state.recordRead(file);
     const later = new Date(Date.now() + 60_000);
     await utimes(file, later, later);
-    await expect(assertFresh(file, "a.txt", "same")).resolves.toBeUndefined();
+    await expect(state.assertFresh(file, "a.txt", "same")).resolves.toBeUndefined();
   });
 
   it("treats our own writes as read, and forget() undoes that", async () => {
     const file = join(dir, "a.txt");
     await writeFile(file, "written");
-    await recordWrite(file, "written");
-    await expect(assertFresh(file, "a.txt", "written")).resolves.toBeUndefined();
-    forget(file);
-    await expect(assertFresh(file, "a.txt", "written")).rejects.toThrow(/have not read/);
+    await state.recordWrite(file, "written");
+    await expect(state.assertFresh(file, "a.txt", "written")).resolves.toBeUndefined();
+    state.forget(file);
+    await expect(state.assertFresh(file, "a.txt", "written")).rejects.toThrow(/have not read/);
   });
 
   it("remembers CRLF files exactly", async () => {
     const file = join(dir, "crlf.txt");
     await writeFile(file, "one\r\ntwo\r\n");
-    await recordRead(file);
-    await expect(assertFresh(file, "crlf.txt", "one\r\ntwo\r\n")).resolves.toBeUndefined();
+    await state.recordRead(file);
+    await expect(state.assertFresh(file, "crlf.txt", "one\r\ntwo\r\n")).resolves.toBeUndefined();
+  });
+
+  // Two chats on one project folder: what the model saw in one says nothing about the other.
+  it("keeps each chat's reads to itself", async () => {
+    const file = join(dir, "shared.txt");
+    await writeFile(file, "content");
+    await fileStateFor(join(dir, "chat-a")).recordRead(file);
+    await expect(fileStateFor(join(dir, "chat-a")).assertFresh(file, "shared.txt", "content")).resolves.toBeUndefined();
+    await expect(fileStateFor(join(dir, "chat-b")).assertFresh(file, "shared.txt", "content")).rejects.toThrow(/have not read/);
+  });
+
+  it.skipIf(process.platform === "win32" || process.platform === "darwin")("tells apart files whose names differ only in case", async () => {
+    await writeFile(join(dir, "Readme.md"), "one");
+    await writeFile(join(dir, "README.md"), "two");
+    await state.recordRead(join(dir, "Readme.md"));
+    await expect(state.assertFresh(join(dir, "README.md"), "README.md", "two")).rejects.toThrow(/have not read/);
   });
 });
 
@@ -81,6 +98,18 @@ describe("atomic write", () => {
     const file = join(dir, "fresh.txt");
     await writeFileAtomic(file, "hello");
     expect(await readFile(file, "utf-8")).toBe("hello");
+  });
+
+  // A rename over a link replaced the link with a plain file, cutting it off from its target.
+  it("writes through a symbolic link, keeping the link", async (ctx) => {
+    const target = join(dir, "target.txt");
+    const link = join(dir, "link.txt");
+    await writeFile(target, "old");
+    // Windows allows symbolic links only with Developer Mode or as administrator.
+    if (!(await symlink(target, link).then(() => true, () => false))) return ctx.skip();
+    await writeFileAtomic(link, "new");
+    expect((await lstat(link)).isSymbolicLink()).toBe(true);
+    expect(await readFile(target, "utf-8")).toBe("new");
   });
 
   it.runIf(process.platform !== "win32")("keeps the original file mode", async () => {

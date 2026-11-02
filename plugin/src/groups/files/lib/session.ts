@@ -1,6 +1,6 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "child_process";
 import { ToolError } from "../../../shared/errors";
-import { CappedOutput, commandEnv } from "../../../shared/process";
+import { CappedOutput, commandEnv, killTree, resolveProgram } from "../../../shared/process";
 import { randomUUID } from "crypto";
 
 export interface ShellSpec {
@@ -27,18 +27,24 @@ export interface SessionResult {
 export class ShellSession {
   private child: ChildProcessWithoutNullStreams | null = null;
   private busy = false;
+  /** When getSession last handed this session out, for closing the ones no chat uses any more. */
+  lastUsed = Date.now();
 
   constructor(
     private readonly spec: ShellSpec,
     private readonly cwd: string,
   ) {}
 
+  get isBusy() {
+    return this.busy;
+  }
+
   get isRunning() {
     return this.child !== null && this.child.exitCode === null && !this.child.killed;
   }
 
   private start() {
-    const child = spawn(this.spec.file, this.spec.replArgs, {
+    const child = spawn(resolveProgram(this.spec.file), this.spec.replArgs, {
       cwd: this.cwd,
       windowsHide: true,
       detached: process.platform !== "win32",
@@ -66,12 +72,14 @@ export class ShellSession {
   private wrap(command: string, marker: string): string {
     if (this.spec.kind === "powershell") {
       return [
-        "$global:LASTEXITCODE=0",
+        "$global:LASTEXITCODE=0; $__scopedOk=$null",
         command,
         // PowerShell reading commands from stdin keeps waiting after a string that spans lines (a
         // multi-line `python -c "..."`) until a blank line ends the statement.
         "",
-        `$__ok=$?; $__code=if ($__ok) { 0 } elseif ($global:LASTEXITCODE) { $global:LASTEXITCODE } else { 1 }`,
+        // A command run in another folder saved its own status: here $? would be Pop-Location's.
+        `$__ok=$?; if ($null -ne $__scopedOk) { $__ok=$__scopedOk }`,
+        `$__code=if ($__ok) { 0 } elseif ($global:LASTEXITCODE) { $global:LASTEXITCODE } else { 1 }`,
         // `node app.js; echo done` ends well even when node failed: say so, or the failure is invisible.
         `if ($__ok -and $global:LASTEXITCODE) { [Console]::Error.WriteLine("[a program in this command exited with code $($global:LASTEXITCODE); exit_code is the last statement's]") }`,
         `[Console]::Out.WriteLine("${marker}:$__code"); [Console]::Out.Flush()`,
@@ -104,12 +112,16 @@ export class ShellSession {
 
       return await new Promise<SessionResult>((resolve, reject) => {
         let settled = false;
+        let stderrWait: ReturnType<typeof setTimeout> | undefined;
+        let exitCode: number | null = null;
+        let timedOut = false;
         // Everything this command put on the long-lived shell comes off again here. A listener left
         // behind keeps the command's whole output alive for as long as the shell runs.
         const release = () => {
           if (settled) return false;
           settled = true;
           clearTimeout(timer);
+          clearTimeout(stderrWait);
           child.stdout.off("data", onStdout);
           child.stderr.off("data", onStderr);
           child.off("exit", onExit);
@@ -121,24 +133,40 @@ export class ShellSession {
           if (release()) resolve(result);
         };
 
-        const done = (exitCode: number | null, timedOut = false) => {
-          // Give stderr a moment to arrive; it is a separate stream from stdout.
-          setTimeout(() => {
-            finish({
-              stdout: stdout.text().replace(stdoutMarker, "").trimEnd(),
-              stderr: stderr.text().split(marker)[0].trimEnd(),
-              exitCode,
-              timedOut,
-            });
-          }, 50);
+        const collect = () =>
+          finish({
+            stdout: stdout.text().replace(stdoutMarker, "").trimEnd(),
+            // Anything up to an earlier command's marker is that command's, arrived late.
+            stderr: stderr.text().split(marker)[0].replace(/^[\s\S]*__LMS_[0-9a-f]{32}__\r?\n?/, "").trimEnd(),
+            exitCode,
+            timedOut,
+          });
+        const stderrDone = () => stderr.recent(markerWindow).includes(marker);
+
+        // stderr is a separate stream from stdout, and its end can come after stdout's: wait for its
+        // marker too, though not for long (a shell stopped or timed out never prints it).
+        // The first outcome stands: a shell killed for timing out exits a moment later, and that exit
+        // must not turn "timed out" into an ordinary end while stderr is still being waited for.
+        let decided = false;
+        const done = (code: number | null, timeout = false, waitMs = 50) => {
+          if (decided) return;
+          decided = true;
+          exitCode = code;
+          timedOut = timeout;
+          if (stderrDone()) return collect();
+          clearTimeout(stderrWait);
+          stderrWait = setTimeout(collect, waitMs);
         };
 
         const onStdout = (chunk: string) => {
           stdout.push(chunk);
           const match = stdoutMarker.exec(stdout.recent(markerWindow));
-          if (match) done(Number(match[1]));
+          if (match) done(Number(match[1]), false, 2000);
         };
-        const onStderr = (chunk: string) => stderr.push(chunk);
+        const onStderr = (chunk: string) => {
+          stderr.push(chunk);
+          if (stderrWait && stderrDone()) collect();
+        };
 
         const onAbort = () => {
           this.dispose();
@@ -187,27 +215,30 @@ export class ShellSession {
     const child = this.child;
     this.child = null;
     if (!child || child.pid === undefined) return; // no shell, or one that never started
-    try {
-      if (process.platform === "win32") {
-        spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
-      } else if (child.pid) {
-        process.kill(-child.pid, "SIGKILL");
-      }
-    } catch {
-      child.kill("SIGKILL");
-    }
+    killTree(child.pid);
   }
 }
 
 /** One session per root directory + shell, reused across predictions in this plugin process. */
 const sessions = new Map<string, ShellSession>();
 
-export function getSession(spec: ShellSpec, cwd: string): ShellSession {
+/** A session no chat has used for this long is closed: every chat without a Project Folder has its own. */
+export const SESSION_IDLE_MS = 15 * 60_000;
+
+export function getSession(spec: ShellSpec, cwd: string, now = Date.now()): ShellSession {
+  for (const [key, session] of sessions) {
+    if (!session.isBusy && now - session.lastUsed > SESSION_IDLE_MS) {
+      session.dispose();
+      sessions.delete(key);
+    }
+  }
   const key = `${spec.file}::${cwd}`;
-  const existing = sessions.get(key);
-  if (existing) return existing;
-  const session = new ShellSession(spec, cwd);
-  sessions.set(key, session);
+  let session = sessions.get(key);
+  if (!session) {
+    session = new ShellSession(spec, cwd);
+    sessions.set(key, session);
+  }
+  session.lastUsed = now;
   return session;
 }
 

@@ -129,7 +129,9 @@ function isPlaceholder(value: string): boolean {
   const lower = value.trim().toLowerCase();
   if (lower === "" || lower.startsWith("[redacted")) return true;
   if (/^(null|none|nil|undefined|true|false|password|passwd|secret|token|todo|tbd|dummy)$/.test(lower)) return true;
-  if (/^(your|my)[-_ ]?|^change[-_ ]?(me|this|it)|^replace[-_ ]?(me|this|with)|^x{3,}/.test(lower)) return true;
+  if (/^change[-_ ]?(me|this|it)|^replace[-_ ]?(me|this|with)|^x{3,}/.test(lower)) return true;
+  // your-api-key, my_secret_here, "your token": a stand-in names what goes there. MyS3cret!2024 does not.
+  if (/^(your|my)[-_ ](.*[-_ ])?(api|key|secret|token|password|passwd|pass|pwd|value|here)([-_ ]|$)/.test(lower)) return true;
   if (/example|placeholder|changeme/.test(lower)) return true;
   // <token>, ${TOKEN}, $TOKEN, $(command), %TOKEN%, {{ token }}, {token}, %s
   if (/^<.*>$|^\$[{(a-z_]|^%[a-z_]+%$|^\{.*\}$|^%[sd]$/.test(lower)) return true;

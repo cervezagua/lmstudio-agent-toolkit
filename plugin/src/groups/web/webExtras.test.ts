@@ -2,8 +2,9 @@ import { mkdtemp, rm } from "fs/promises";
 import { createServer, type Server } from "http";
 import { tmpdir } from "os";
 import { join } from "path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { callTool, fakeController } from "../../shared/testing/fake-controller";
+import { ToolError } from "../../shared/errors";
 import { findExecutable } from "../../shared/process";
 import { USER_AGENT } from "../../shared/userAgent";
 import { TOOLKIT_VERSION } from "../../version";
@@ -33,7 +34,7 @@ let baseUrl: string;
 
 beforeAll(async () => {
   server = createServer((req, res) => {
-    const send = (status: number, type: string, body: string) => {
+    const send = (status: number, type: string, body: string | Buffer) => {
       res.writeHead(status, { "Content-Type": type });
       res.end(body);
     };
@@ -41,6 +42,10 @@ beforeAll(async () => {
     if (path === "/rss.xml") return send(200, "application/rss+xml", RSS);
     if (path === "/atom.xml") return send(200, "application/atom+xml; charset=utf-8", ATOM);
     if (path === "/page") return send(200, "text/html", PAGE);
+    if (path === "/latin1.xml") {
+      const rss = `<?xml version="1.0" encoding="windows-1252"?><rss version="2.0"><channel><title>Caf\xe9 news</title></channel></rss>`;
+      return send(200, "application/rss+xml", Buffer.from(rss, "latin1"));
+    }
     if (path === "/plain-page") return send(200, "text/html", "<!doctype html><html><body><p>No feed here</p></body></html>");
     if (path === "/notes.txt") return send(200, "text/plain", "just text");
     if (path === "/searx/search") return send(200, "application/json", '{"results":[]}');
@@ -92,6 +97,30 @@ describe("feeds", () => {
     expect(plainText("&lt;b&gt;bold&lt;/b&gt; &#169; &#x263A;")).toBe("bold © ☺");
     expect(plainText("word ".repeat(100), 20)).toMatch(/…$/);
     expect(parseFeed("<html><body>no</body></html>", "x")).toBeNull();
+  });
+
+  // One bad entity threw a RangeError and lost the whole feed.
+  it("shows entities outside Unicode, or half a surrogate pair, as a replacement character", () => {
+    expect(plainText("a&#99999999;b &#xD800;c &#x110000;d &#0;e")).toBe("a\uFFFDb \uFFFDc \uFFFDd \uFFFDe");
+  });
+
+  it("reads a feed in the encoding its XML declaration names", async () => {
+    expect((await readFeed(`${baseUrl}/latin1.xml`)).title).toBe("Café news");
+  });
+
+  it("turns a feed that stalls part-way into an error the model can act on", async () => {
+    const stalled = new ReadableStream({
+      start: controller => {
+        controller.enqueue(new TextEncoder().encode("<rss>"));
+        controller.error(new DOMException("The operation timed out.", "TimeoutError"));
+      },
+    });
+    const spy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response(stalled, { status: 200 }));
+    try {
+      await expect(readFeed("https://feeds.example/rss")).rejects.toThrow(new ToolError("Timed out reading https://feeds.example/rss."));
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
@@ -182,6 +211,32 @@ describe("transcripts", () => {
       "<v Speaker>today we talk</v>",
     ].join("\r\n");
     expect(vttToText(vtt)).toBe("hello everyone\nwelcome to the & show\ntoday we talk");
+  });
+
+  // Caption lines that began "Language" or were only a number were dropped as headers and cue numbers.
+  it("keeps caption lines that look like header words or numbers", () => {
+    const vtt = [
+      "WEBVTT",
+      "Kind: captions",
+      "Language: en",
+      "",
+      "NOTE written by hand",
+      "spanning two lines",
+      "",
+      "STYLE",
+      "::cue { color: white }",
+      "",
+      "1",
+      "00:00:00.000 --> 00:00:02.000",
+      "Language models are getting better",
+      "NOTE how fast",
+      "",
+      "intro",
+      "00:00:02.000 --> 00:00:04.000",
+      "2024",
+      "Notes on the year",
+    ].join("\n");
+    expect(vttToText(vtt)).toBe("Language models are getting better\nNOTE how fast\n2024\nNotes on the year");
   });
 
   it("refuses anything that is not a plain http(s) URL", () => {
@@ -290,6 +345,8 @@ describe("web_doctor", () => {
 
   it("says whether SearXNG answers, and whether its JSON format is on", async () => {
     expect(await runWebDoctor({ ...base, backend: "auto", searxngUrl: `${baseUrl}/searx` })).toContain(`✓ SearXNG at ${baseUrl}/searx answers.`);
+    // Spaces around the address, which searches ignore, must not make it look unreachable.
+    expect(await runWebDoctor({ ...base, backend: "auto", searxngUrl: ` ${baseUrl}/searx/ ` })).toContain(`✓ SearXNG at ${baseUrl}/searx/ answers.`);
     expect(await runWebDoctor({ ...base, backend: "auto", searxngUrl: `${baseUrl}/nojson` })).toContain("JSON format switched off");
     expect(await runWebDoctor({ ...base, backend: "auto", searxngUrl: "http://127.0.0.1:9" })).toContain("is not reachable");
   });

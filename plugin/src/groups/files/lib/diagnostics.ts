@@ -48,8 +48,14 @@ export async function testHint(root: string): Promise<string> {
  */
 export function npxCommand(args: string[], platform: NodeJS.Platform = process.platform): { file: string; args: string[] } {
   const all = ["--no-install", ...args];
-  return platform === "win32" ? { file: "cmd.exe", args: ["/d", "/s", "/c", "npx", ...all] } : { file: "npx", args: all };
+  return platform === "win32" ? { file: cmdExe(), args: ["/d", "/s", "/c", "npx", ...all] } : { file: "npx", args: all };
 }
+
+/**
+ * cmd.exe by its full path: a bare "cmd.exe" would be looked for in the project folder first, where
+ * a cloned repository can put one. (cmd.exe looks there first for npx too; see runChecker.)
+ */
+const cmdExe = () => process.env.ComSpec || findExecutable("cmd.exe") || "cmd.exe";
 
 /**
  * A checker found on PATH. One installed through npm is a .cmd file on Windows (pyright is, usually),
@@ -58,7 +64,7 @@ export function npxCommand(args: string[], platform: NodeJS.Platform = process.p
 function installedCommand(name: string, args: string[]): { file: string; args: string[] } {
   const found = findExecutable(name);
   if (process.platform === "win32" && found && /\.(cmd|bat)$/i.test(found)) {
-    return { file: "cmd.exe", args: ["/d", "/s", "/c", name, ...args] };
+    return { file: cmdExe(), args: ["/d", "/s", "/c", name, ...args] };
   }
   return { file: found ?? name, args };
 }
@@ -127,8 +133,10 @@ export async function runChecker(
       cwd: root,
       timeoutMs: options.timeoutMs ?? 180_000,
       signal: options.signal,
-      // The same environment the checker was looked for in: see commandEnv.
-      env: commandEnv({ NO_COLOR: "1", FORCE_COLOR: "0" }),
+      // The same environment the checker was looked for in: see commandEnv. The last variable stops
+      // cmd.exe from looking for npx (or a checker) in the project folder before PATH, where a cloned
+      // repository could have put an npx.cmd of its own.
+      env: commandEnv({ NO_COLOR: "1", FORCE_COLOR: "0", NoDefaultCurrentDirectoryInExePath: "1" }),
     });
   } catch (error: any) {
     if (error?.code === "ENOENT") throw new ToolError(`${checker.name} is not installed or not on PATH.`);

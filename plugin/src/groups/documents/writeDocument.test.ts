@@ -140,6 +140,8 @@ describe("markdown helpers", () => {
 
   it("decodes character references", () => {
     expect(decodeEntities("AT&amp;T &lt;b&gt; &#169; &#x41; &nosuch; &#0;")).toBe("AT&T <b> \u00a9 A &nosuch; &#0;");
+    // Names an object inherits are no entities.
+    expect(decodeEntities("&constructor; &toString; &__proto__;")).toBe("&constructor; &toString; &__proto__;");
   });
 });
 
@@ -332,6 +334,8 @@ describe("write_document tool", () => {
     browserChannel: browserChannel ?? "msedge",
     enableFiles: true,
     enableCheckpoints: true,
+    enableMemory: true,
+    enablePlanMode: true,
     ...overrides,
   });
   const provider = (overrides: Record<string, unknown> = {}) =>
@@ -393,6 +397,8 @@ describe("write_document tool", () => {
     const names = (await provider()).map(tool => tool.name);
     expect(names).not.toContain("write_document");
     expect(names).toContain("read_document_text");
+    // With Plan Mode off, nothing could end the planning: it no longer counts.
+    expect((await provider({ enablePlanMode: false })).map(tool => tool.name)).toContain("write_document");
   });
 
   it.runIf(browserChannel)(

@@ -3,6 +3,7 @@ import { join } from "path";
 import { findExecutable, runProcess } from "../../../shared/process";
 import { USER_AGENT } from "../../../shared/userAgent";
 import { TOOLKIT_VERSION } from "../../../version";
+import { searxngSearchUrl } from "./search";
 
 /**
  * What the Web group can use on this machine, one line per piece, each with what a missing piece
@@ -91,17 +92,25 @@ export function findBrowser(channel: string): string | null {
 }
 
 async function checkSearxng(baseUrl: string): Promise<string> {
-  if (!baseUrl.trim()) return "✗ SearXNG: no URL is set.";
-  const url = `${baseUrl.replace(/\/+$/, "")}/search?q=ping&format=json`;
+  const address = baseUrl.trim();
+  if (!address) return "✗ SearXNG: no URL is set.";
+  let url: URL;
+  try {
+    url = searxngSearchUrl(address); // the same address searches will use
+  } catch (error) {
+    return `✗ ${(error as Error).message}`;
+  }
+  url.searchParams.set("q", "ping");
+  url.searchParams.set("format", "json");
   try {
     const response = await fetch(url, { signal: AbortSignal.timeout(3000) });
     if (response.status === 403) {
-      return `✗ SearXNG at ${baseUrl} answers, but has the JSON format switched off. Enable "json" under search.formats in its settings.yml.`;
+      return `✗ SearXNG at ${address} answers, but has the JSON format switched off. Enable "json" under search.formats in its settings.yml.`;
     }
-    if (!response.ok) return `✗ SearXNG at ${baseUrl} answered HTTP ${response.status}.`;
-    return `✓ SearXNG at ${baseUrl} answers.`;
+    if (!response.ok) return `✗ SearXNG at ${address} answered HTTP ${response.status}.`;
+    return `✓ SearXNG at ${address} answers.`;
   } catch {
-    return `✗ SearXNG at ${baseUrl} is not reachable. Search falls back to DuckDuckGo, which often answers automated requests with a bot check. Start SearXNG, or see searxng/README.md to set one up.`;
+    return `✗ SearXNG at ${address} is not reachable. Search falls back to DuckDuckGo, which often answers automated requests with a bot check. Start SearXNG, or see searxng/README.md to set one up.`;
   }
 }
 

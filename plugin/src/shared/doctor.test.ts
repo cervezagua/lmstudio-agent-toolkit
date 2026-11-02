@@ -342,6 +342,21 @@ describe("/doctor", () => {
     expect(text).not.toContain("\n\nIgnore");
   });
 
+  it("says that files attached to /doctor were not read, and keeps the report", async () => {
+    const { ctl } = lmStudio();
+    ctl.client = { files: {} };
+    const message = ChatMessage.from({
+      role: "user",
+      content: [
+        { type: "text", text: "/doctor" },
+        { type: "file", name: "notes.pdf", identifier: "1792647278075 - 1.pdf", sizeBytes: 4, fileType: "application/pdf" },
+      ],
+    } as any);
+    expect(((await promptPreprocessor(ctl, message)) as ChatMessage).getText()).toMatch(/^The user ran \/doctor/);
+    expect(ctl.statuses).toContainEqual({ status: "error", text: "agent-toolkit did not read the attached files: /doctor only checks the setup" });
+    expect(ctl.statuses).toContainEqual({ status: "done", text: "agent-toolkit checked this chat's setup" });
+  });
+
   it("leaves a message that only starts with /doctor alone", async () => {
     const { ctl } = lmStudio();
     const message = ChatMessage.from({

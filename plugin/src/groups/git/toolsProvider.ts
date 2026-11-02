@@ -3,7 +3,7 @@ import { z } from "zod";
 import { configSchematics } from "../../config";
 import { assertNotOption, repoPath, runCli } from "./lib/cli";
 import { safe, ToolError } from "../../shared/errors";
-import { readMode } from "../../shared/mode";
+import { isPlanning } from "../../shared/mode";
 import { findExecutable } from "../../shared/process";
 import { NO_PROJECT_FOLDER_NOTE, projectRoot } from "../../shared/projectFolder";
 
@@ -27,7 +27,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
     );
 
   // memory-tools' plan mode: while planning, only the read-only git tools are offered.
-  const planning = (await readMode(ctl.getWorkingDirectory())).planning;
+  const planning = await isPlanning(ctl.getWorkingDirectory(), config);
 
   const tools: Tool[] = [];
 
@@ -151,6 +151,22 @@ export async function toolsProvider(ctl: ToolsProviderController) {
           if (base) throw new ToolError(`Branch "${branch}" already exists; base only applies when creating.`);
           await git(["switch", branch], { signal });
           return `Switched to existing branch "${branch}".`;
+        }
+        if (!base) {
+          // A branch that so far exists only on the remote is checked out tracking it, as plain
+          // `git switch` would, rather than started afresh from HEAD.
+          const remotes = (await git(["remote"], { signal })).split(/\r?\n/).filter(r => r && r !== "(no output)");
+          const remote = remotes.includes("origin") ? "origin" : remotes.length === 1 ? remotes[0] : null;
+          const onRemote =
+            remote !== null &&
+            (await git(["rev-parse", "--verify", "--quiet", `refs/remotes/${remote}/${branch}`], { signal }).then(
+              () => true,
+              () => false,
+            ));
+          if (onRemote) {
+            await git(["switch", "-c", branch, "--track", `${remote}/${branch}`], { signal });
+            return `Created branch "${branch}" tracking ${remote}/${branch}, and switched to it.`;
+          }
         }
         await git(["switch", "-c", branch, ...baseArgs], { signal });
         return `Created and switched to branch "${branch}".`;

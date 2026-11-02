@@ -1,7 +1,7 @@
 import { readFile } from "fs/promises";
 import { tmpdir } from "os";
 import { extname } from "path";
-import { findExecutable, runProcess } from "../../../shared/process";
+import { findPython, runProcess } from "../../../shared/process";
 
 /**
  * A fast syntax check of one file a tool just wrote, so a broken edit is reported in the same tool
@@ -26,7 +26,7 @@ export async function quickCheck(file: string, options: { cwd: string; signal?: 
     return passed(result) ? null : describe("node --check", result.stderr);
   }
   if (extension === ".py") {
-    const python = findExecutable("python") ?? findExecutable("python3");
+    const python = findPython();
     if (!python) return null;
     // -I (isolated): no current folder or script folder on the module path, no PYTHON* variables, no
     // user site-packages. Without it, `python -m py_compile` imports a project's own tokenize.py or
@@ -39,7 +39,8 @@ export async function quickCheck(file: string, options: { cwd: string; signal?: 
       { cwd: tmpdir(), timeoutMs, signal: options.signal },
     );
     // Windows' Store placeholder answers every call with an offer to install Python: no Python here.
-    if (/Microsoft Store|was not found; run without arguments/i.test(result.stderr)) return null;
+    // Python 2 refuses -I ("Unknown option") and could not judge Python 3 code anyway: no check either.
+    if (/Microsoft Store|was not found; run without arguments|Unknown option/i.test(result.stderr)) return null;
     return passed(result) ? null : describe("Python", result.stderr);
   }
   if (extension === ".json") {

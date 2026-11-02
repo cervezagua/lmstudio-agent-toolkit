@@ -1,9 +1,9 @@
-import { mkdtemp, rm, writeFile } from "fs/promises";
+import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { gitSnapshot } from "./gitSnapshot";
-import { buildContextBlock } from "./instructions";
+import { buildContextBlock, loadInstructionFiles } from "./instructions";
 import { renderIndex, type Memory } from "./memoryStore";
 import { completionNudge, type Todo } from "./todos";
 import { runProcess } from "../../../shared/process";
@@ -41,6 +41,16 @@ describe("memory index", () => {
     const index = renderIndex(many, now);
     expect(index.split("\n").filter(line => line.startsWith("- ")).length).toBe(200);
     expect(index).toContain("50 older memories are not listed; find them with memory_search.");
+  });
+
+  it("keeps the most recently updated memories when capped, still listed by name", () => {
+    // Named so the newest sort last by name: a cap by name would drop exactly those.
+    const many = Array.from({ length: 250 }, (_, i) => memory(`m${String(i).padStart(3, "0")}`, new Date(Date.UTC(2026, 0, 1) + i * 3600_000).toISOString()));
+    const listed = renderIndex(many, now)
+      .split("\n")
+      .filter(line => line.startsWith("- "))
+      .map(line => /\[(.+?)\]/.exec(line)![1]);
+    expect(listed).toEqual(Array.from({ length: 200 }, (_, i) => `m${String(i + 50).padStart(3, "0")}`));
   });
 
   it("still handles an empty collection", () => {
@@ -89,11 +99,52 @@ describe("git snapshot", () => {
     expect(snapshot).toContain("add a");
   }, 60000);
 
+  it("keeps the leading space that marks a change as unstaged", async () => {
+    const git = (args: string[]) => runProcess("git", args, { cwd: dir, timeoutMs: 15000 });
+    await git(["init"]);
+    await git(["config", "user.email", "test@example.com"]);
+    await git(["config", "user.name", "Test"]);
+    await writeFile(join(dir, "a.ts"), "one\n");
+    await git(["add", "a.ts"]);
+    await git(["commit", "-m", "add a"]);
+    await writeFile(join(dir, "a.ts"), "two\n");
+    expect(await gitSnapshot(dir)).toContain("Uncommitted changes:\n M a.ts");
+  }, 60000);
+
   it("says the tree is clean when it is", async () => {
     const git = (args: string[]) => runProcess("git", args, { cwd: dir, timeoutMs: 15000 });
     await git(["init"]);
     expect(await gitSnapshot(dir)).toContain("(working tree clean)");
   }, 60000);
+
+  // It runs unasked in a folder that may have come from anyone; a .git/config naming a program for
+  // git to start must not get it started.
+  it("does not let the repository's config start an fsmonitor program", async () => {
+    const git = (args: string[]) => runProcess("git", args, { cwd: dir, timeoutMs: 15000 });
+    await git(["init"]);
+    const marker = join(dir, "MARKER").replace(/\\/g, "/");
+    const program = `"${process.execPath.replace(/\\/g, "/")}" -e "require('fs').writeFileSync('${marker}','x')"`;
+    await git(["config", "core.fsmonitor", program]);
+    await gitSnapshot(dir);
+    await expect(stat(marker)).rejects.toThrow();
+  }, 60000);
+});
+
+describe("instruction files", () => {
+  // A cloned repository could ship AGENTS.md as a link to a file elsewhere on the machine.
+  it("does not follow a link out of the project folder", async () => {
+    const project = join(dir, "project");
+    await mkdir(project);
+    await writeFile(join(dir, "outside.txt"), "CANARY-OUTSIDE");
+    await writeFile(join(project, "CLAUDE.md"), "Use tabs.");
+    try {
+      await symlink(join(dir, "outside.txt"), join(project, "AGENTS.md"));
+    } catch (error: any) {
+      if (error.code === "EPERM") return; // Windows without the right to create links
+      throw error;
+    }
+    expect(await loadInstructionFiles(project, ["AGENTS.md", "CLAUDE.md"])).toEqual([{ name: "CLAUDE.md", content: "Use tabs." }]);
+  });
 });
 
 describe("todo completion nudge", () => {

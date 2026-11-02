@@ -52,6 +52,8 @@ export function serializeMemory(memory: Memory): string {
 }
 
 export function parseMemory(text: string, fallbackName: string): Memory {
+  // A byte-order mark, which some Windows editors write, would hide the leading "---".
+  text = text.replace(/^\uFEFF/, "");
   const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/.exec(text);
   const fields: Record<string, string> = {};
   if (match) {
@@ -168,21 +170,29 @@ export function renderIndex(memories: Memory[], now = new Date()): string {
   if (memories.length === 0) return "# Memory index\n\n(no memories saved yet)\n";
 
   const staleBefore = now.getTime() - STALE_AFTER_DAYS * 24 * 60 * 60 * 1000;
-  const lines: string[] = [];
-  let used = 0;
-  let dropped = 0;
-
-  for (const memory of memories) {
+  const lineFor = (memory: Memory) => {
     const updated = Date.parse(memory.updated);
     const stale = Number.isFinite(updated) && updated < staleBefore ? " (stale)" : "";
-    const line = `- [${memory.name}](${memory.name}.md) (${memory.type})${stale} — ${memory.description || "(no description)"}`;
-    if (lines.length >= INDEX_MAX_ENTRIES || used + line.length > INDEX_MAX_CHARS) {
+    return `- [${memory.name}](${memory.name}.md) (${memory.type})${stale} — ${memory.description || "(no description)"}`;
+  };
+
+  // Past the cap, the most recently updated memories are the ones kept; the list still reads by name.
+  const kept = new Set<Memory>();
+  let used = 0;
+  let dropped = 0;
+  for (const memory of [...memories].sort((a, b) => b.updated.localeCompare(a.updated))) {
+    const length = lineFor(memory).length;
+    if (kept.size >= INDEX_MAX_ENTRIES || used + length > INDEX_MAX_CHARS) {
       dropped++;
       continue;
     }
-    lines.push(line);
-    used += line.length + 1;
+    kept.add(memory);
+    used += length + 1;
   }
+  const lines = memories
+    .filter(memory => kept.has(memory))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(lineFor);
 
   const notes = ["Keep each entry to a single line."];
   if (dropped > 0) notes.push(`${dropped} older memories are not listed; find them with memory_search.`);

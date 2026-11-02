@@ -161,6 +161,7 @@ describe("wikipedia", () => {
     expect(checkLanguage(" ")).toBe("en");
     expect(checkLanguage("pt")).toBe("pt");
     expect(checkLanguage("zh-min-nan")).toBe("zh-min-nan");
+    expect(checkLanguage("simple")).toBe("simple"); // Simple English
     expect(() => checkLanguage("en.evil.example")).toThrow(ToolError);
   });
 

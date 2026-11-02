@@ -9,7 +9,7 @@ import { toolsProvider } from "./toolsProvider";
 let repo: string;
 let work: string;
 
-const config = { projectFolder: "", allowPush: true, enableGitHub: false, maxOutputChars: 20000 };
+const config = { projectFolder: "", allowPush: true, enableGitHub: false, maxOutputChars: 20000, enableMemory: true, enablePlanMode: true };
 
 beforeEach(async () => {
   repo = await mkdtemp(join(tmpdir(), "git-plan-repo-"));
@@ -22,8 +22,8 @@ afterEach(async () => {
   await rm(work, options).catch(() => {});
 });
 
-const names = async () =>
-  (await toolsProvider(fakeController({ config: { ...config, projectFolder: repo }, workingDirectory: work }))).map(t => t.name);
+const names = async (overrides: Record<string, unknown> = {}) =>
+  (await toolsProvider(fakeController({ config: { ...config, projectFolder: repo, ...overrides }, workingDirectory: work }))).map(t => t.name);
 
 describe("plan mode in git-tools", () => {
   it("keeps only read-only git tools while planning", async () => {
@@ -35,5 +35,12 @@ describe("plan mode in git-tools", () => {
       expect(planning).not.toContain(tool);
     }
     expect(planning).toEqual(expect.arrayContaining(["git_status", "git_diff", "git_log", "git_show"]));
+  });
+
+  // exit_plan_mode is offered by the Memory group's Plan Mode: without it the chat could never leave.
+  it("ignores a planning left behind once Plan Mode or the Memory group is off", async () => {
+    await writeMode(work, { planning: true });
+    expect(await names({ enablePlanMode: false })).toContain("git_commit");
+    expect(await names({ enableMemory: false })).toContain("git_commit");
   });
 });

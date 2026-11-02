@@ -69,11 +69,13 @@ export function editNotebook(
   if (mode === "insert") {
     if (index < 0 || index > count) throw new ToolError(`insert index ${index} is out of range (0..${count}).`);
     if (options.source === undefined) throw new ToolError("source is required when inserting a cell.");
+    const cellType = options.cellType ?? "code";
+    // Only code cells have outputs: nbformat rejects them on a markdown or raw cell.
     const cell: NotebookCell = {
-      cell_type: options.cellType ?? "code",
+      cell_type: cellType,
       source: toSourceLines(options.source),
       metadata: {},
-      ...(options.cellType === "markdown" ? {} : { outputs: [], execution_count: null }),
+      ...(cellType === "code" ? { outputs: [], execution_count: null } : {}),
     };
     notebook.cells.splice(index, 0, cell);
     return { notebook, message: `Inserted ${cell.cell_type} cell at index ${index} (now ${notebook.cells.length} cells).` };
@@ -88,12 +90,12 @@ export function editNotebook(
   const cell = notebook.cells[index];
   if (options.cellType && options.cellType !== cell.cell_type) {
     cell.cell_type = options.cellType;
-    if (options.cellType === "markdown") {
-      delete cell.outputs;
-      delete cell.execution_count;
-    } else {
+    if (options.cellType === "code") {
       cell.outputs = [];
       cell.execution_count = null;
+    } else {
+      delete cell.outputs;
+      delete cell.execution_count;
     }
   }
   if (options.source !== undefined) {

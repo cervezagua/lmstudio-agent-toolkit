@@ -7,7 +7,7 @@ import { BackupStore } from "./lib/backups";
 import { ignoredByGit, recordChange } from "../../shared/checkpoints";
 import { findBlockedPattern, parsePatterns } from "./lib/blocklist";
 import { applyEdit, applyEdits, insertLines, previewDiff } from "./lib/edit";
-import { assertFresh, forget, recordRead, recordWrite } from "./lib/fileState";
+import { fileStateFor } from "./lib/fileState";
 import { assertReadableSize, looksBinary, readTextSlice } from "./lib/readText";
 import { writeFileAtomic } from "../../shared/safeWrite";
 import { overflowNote, storeOverflow } from "./lib/overflow";
@@ -23,21 +23,15 @@ import { formatTaskLine, TaskManager } from "./lib/tasks";
 import { findAttachment } from "../../shared/attachments";
 import { safe, ToolError } from "../../shared/errors";
 import { isLmStudioFile } from "../../shared/lmStudioFiles";
-import { isChatStateFile, PLANNING_NOTE, readMode } from "../../shared/mode";
+import { isChatStateFile, PLANNING_NOTE, isPlanning } from "../../shared/mode";
 import { displayPath, isInside, realpathOfNearestExisting, resolveSafe } from "../../shared/paths";
 import { COMMANDS_FOLDER } from "../../shared/commands";
-import { findExecutable, formatRunResult, runProcess } from "../../shared/process";
+import { findExecutable, formatRunResult, resolveShellName, runProcess } from "../../shared/process";
 import { NO_PROJECT_FOLDER_NOTE, projectRoot } from "../../shared/projectFolder";
 import { truncate } from "../../shared/truncate";
 
 const MAX_LINE_CHARS = 2000;
 const MAX_EDIT_BYTES = 5 * 1024 * 1024;
-
-function resolveShellName(choice: string): string {
-  if (choice !== "auto") return choice;
-  if (process.platform === "win32") return findExecutable("pwsh") ? "pwsh" : "powershell";
-  return findExecutable("bash") ? "bash" : "sh";
-}
 
 function shellInvocation(choice: string, command: string): { file: string; args: string[] } {
   const shell = resolveShellName(choice);
@@ -69,6 +63,20 @@ function quoteForShell(path: string, kind: ShellSpec["kind"]): string {
   return kind === "powershell" ? `'${path.replace(/'/g, "''")}'` : `'${path.replace(/'/g, `'\\''`)}'`;
 }
 
+/**
+ * Runs a command in another folder of the persistent shell without moving the shell itself. The
+ * closing lines stand on their own, so a command that ends in a # comment or a heredoc still ends.
+ * PowerShell's status is saved inside try: after finally, $? is Pop-Location's, and always true.
+ */
+export function scopeToDirectory(command: string, quotedDirectory: string, kind: ShellSpec["kind"]): string {
+  if (kind === "powershell") {
+    return [`Push-Location -LiteralPath ${quotedDirectory}`, "try {", command, "$__scopedOk=$?", "} finally { Pop-Location }"].join("\n");
+  }
+  return [`(cd ${quotedDirectory} || exit`, command, ")"].join("\n");
+}
+
+const UNKNOWN_TASK = "it started before the plugin restarted, so whether it still runs cannot be checked, and task_stop cannot stop it";
+
 export async function toolsProvider(ctl: ToolsProviderController) {
   const config = ctl.getPluginConfig(configSchematics);
   const { root, isSet: projectFolderSet } = projectRoot(config.get("projectFolder"), () => ctl.getWorkingDirectory());
@@ -84,12 +92,20 @@ export async function toolsProvider(ctl: ToolsProviderController) {
   // State that must not pollute the user's project lives in the chat's working directory.
   const stateDir = join(ctl.getWorkingDirectory(), ".coder-tools");
   const backups = new BackupStore(join(stateDir, "backups"));
+  // What the model has read, in this chat only.
+  const fileState = fileStateFor(ctl.getWorkingDirectory());
   // Every change is kept twice: the last one per file for undo_edit, and the first one per turn for /rewind.
   const checkpointsOn = config.get("enableCheckpoints");
-  const remember = async (file: string, previous: string | null) => {
+  // A file that is not UTF-8 text comes as its bytes: undo_edit keeps those exactly, and /rewind
+  // lists the file as one it cannot put back rather than writing back damaged text.
+  const recordPrevious = (file: string, previous: string | Buffer | null) =>
+    Buffer.isBuffer(previous)
+      ? recordChange(ctl.getWorkingDirectory(), file, null, false).catch(() => {})
+      : recordChange(ctl.getWorkingDirectory(), file, previous).catch(() => {});
+  const remember = async (file: string, previous: string | Buffer | null) => {
     await backups.save(file, previous);
     await ignoredByGit(stateDir);
-    if (checkpointsOn) await recordChange(ctl.getWorkingDirectory(), file, previous).catch(() => {});
+    if (checkpointsOn) await recordPrevious(file, previous);
   };
   // null only for a file that does not exist: one that exists but cannot be read is an error, not
   // "new" (a /rewind deletes files recorded as new).
@@ -98,6 +114,22 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       if (error?.code === "ENOENT") return null;
       throw new ToolError(`${show(file)} could not be read (${error?.code ?? error?.message}).`);
     });
+  /** A file's content to keep before a change: its text, or its bytes when it is not UTF-8 text. */
+  const contentToKeep = async (file: string) => {
+    const text = await readIfExists(file);
+    if (text === null) return null;
+    const raw = await readFile(file);
+    return Buffer.compare(Buffer.from(text, "utf-8"), raw) === 0 ? text : raw;
+  };
+  /** A file's text, refused when decoding changed its bytes: writing it back would damage it. */
+  const readTextExactly = async (file: string) => {
+    const raw = await readFile(file);
+    const text = raw.toString("utf-8");
+    if (Buffer.compare(Buffer.from(text, "utf-8"), raw) !== 0) {
+      throw new ToolError(`${show(file)} is not UTF-8 text, so it cannot be edited without damaging it.`);
+    }
+    return text;
+  };
 
   /**
    * Paths resolve inside the project root, or inside the plugin's own state folder (overflow output).
@@ -120,10 +152,12 @@ export async function toolsProvider(ctl: ToolsProviderController) {
     }
     // agent-toolkit-loop's transcript of this chat lives in the chat's own folder, outside the project.
     // It is the only thing there the model is pointed at, so only that folder is reachable, to read.
-    if (/^\.agent-toolkit[\\/]compaction[\\/]/i.test(path.replace(/^\.[\\/]/, ""))) {
-      const inChat = await resolveSafe(ctl.getWorkingDirectory(), path).catch(() => null);
-      if (inChat && (await stat(inChat).then(s => s.isFile(), () => false))) return inChat;
-    }
+    // Checked once resolved, so "../" cannot lead from there to the rest of the chat's folder.
+    const compaction = join(ctl.getWorkingDirectory(), ".agent-toolkit", "compaction");
+    const inChat = await resolveSafe(ctl.getWorkingDirectory(), path)
+      .then(file => resolveSafe(compaction, file))
+      .catch(() => null);
+    if (inChat && (await stat(inChat).then(s => s.isFile(), () => false))) return inChat;
     // Missing: say so with the files the model probably meant, not the system's ENOENT and full path.
     if (inRoot) throw new ToolError(await notFoundMessage(root, path, `${show(inRoot)} does not exist.`));
     try {
@@ -179,8 +213,8 @@ export async function toolsProvider(ctl: ToolsProviderController) {
     if (info.size > MAX_EDIT_BYTES) {
       throw new ToolError(`${show(file)} is ${Math.round(info.size / 1024 / 1024)} MB, too large to edit safely.`);
     }
-    const content = await readFile(file, "utf-8");
-    await assertFresh(file, show(file), content);
+    const content = await readTextExactly(file);
+    await fileState.assertFresh(file, show(file), content);
     return { file, content };
   };
   /**
@@ -188,17 +222,23 @@ export async function toolsProvider(ctl: ToolsProviderController) {
    * edit is reported where it happened, while the model still has the change in mind.
    */
   const autoCheck = config.get("autoCheckEdits");
-  const checked = async (file: string, message: string, signal?: AbortSignal, inParts = false) => {
+  const checked = async (file: string, message: string, signal?: AbortSignal, parts?: "appended" | "new") => {
     if (!autoCheck) return message;
     const problem = await quickCheck(file, { cwd: root, signal }).catch(() => null);
     if (!problem) return message;
-    // A file written in parts is broken until its last part is in.
-    const unfinished = inParts ? " If the file is not finished yet, add the rest with append: true and ignore this until then." : "";
+    // A file written in parts is broken until its last part is in. A new file may as well be complete,
+    // and then the problem is real: only after an append is it said to be fine for now.
+    const unfinished =
+      parts === "appended"
+        ? " If the file is not finished yet, add the rest with append: true and ignore this until then."
+        : parts === "new"
+          ? " If this was only the first part of the file, add the rest with append: true."
+          : "";
     return `${message}\n\nThe file was written, but ${problem}${unfinished}`;
   };
 
   // memory-tools' plan mode: while planning, the tools that change things are not offered at all.
-  const planning = (await readMode(ctl.getWorkingDirectory())).planning;
+  const planning = await isPlanning(ctl.getWorkingDirectory(), config);
 
   const tools: Tool[] = [];
 
@@ -243,7 +283,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         // parts, so if those did not count it could never be edited, and the refusal ("read it
         // first") had no way to be satisfied. An edit still has to quote the text it replaces, and a
         // file that changed since is still refused. Files too big to edit are not hashed for nothing.
-        if (!windowed || info.size <= MAX_EDIT_BYTES) await recordRead(file);
+        if (!windowed || info.size <= MAX_EDIT_BYTES) await fileState.recordRead(file);
         return truncate(body, maxOutputChars) + note || "(empty file)";
       }),
     }),
@@ -275,14 +315,14 @@ export async function toolsProvider(ctl: ToolsProviderController) {
           await mkdir(dirname(file), { recursive: true });
           await remember(file, existing);
           await writeFileAtomic(file, whole);
-          await recordWrite(file, whole);
+          await fileState.recordWrite(file, whole);
           // No running total in the result: the same append made over and over gives the same result,
           // so agent-toolkit-loop's repeat guard stops it.
-          return checked(file, `Appended ${Buffer.byteLength(content)} bytes to ${show(file)}.`, signal, true);
+          return checked(file, `Appended ${Buffer.byteLength(content)} bytes to ${show(file)}.`, signal, "appended");
         }
         // A small model can write the same file over and over; saying nothing changed breaks the loop.
         if (existing === content) {
-          await recordWrite(file, content);
+          await fileState.recordWrite(file, content);
           // Still checked: the same broken file written again is no reason to move on.
           const problem = autoCheck ? await quickCheck(file, { cwd: root, signal }).catch(() => null) : null;
           return problem
@@ -290,11 +330,11 @@ export async function toolsProvider(ctl: ToolsProviderController) {
             : `No change: ${show(file)} already has exactly this content. Move on to the next step.`;
         }
         await mkdir(dirname(file), { recursive: true });
-        await remember(file, existing);
+        await remember(file, await contentToKeep(file));
         await writeFileAtomic(file, content);
-        await recordWrite(file, content);
+        await fileState.recordWrite(file, content);
         // A new file may be the first of several parts; an overwrite is meant to be complete.
-        return checked(file, `${existing === null ? "Created" : "Overwrote"} ${show(file)} (${Buffer.byteLength(content)} bytes).`, signal, existing === null);
+        return checked(file, `${existing === null ? "Created" : "Overwrote"} ${show(file)} (${Buffer.byteLength(content)} bytes).`, signal, existing === null ? "new" : undefined);
       }),
     }),
   );
@@ -321,7 +361,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         if (preview) return `Preview of ${show(file)} (nothing written):\n${previewDiff(original, content)}`;
         await remember(file, original);
         await writeFileAtomic(file, content);
-        await recordWrite(file, content);
+        await fileState.recordWrite(file, content);
         return checked(file, `Edited ${show(file)}: ${replacements} replacement${replacements === 1 ? "" : "s"}.`, signal);
       }),
     }),
@@ -348,7 +388,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         if (preview) return `Preview of ${show(file)} (nothing written):\n${previewDiff(original, content)}`;
         await remember(file, original);
         await writeFileAtomic(file, content);
-        await recordWrite(file, content);
+        await fileState.recordWrite(file, content);
         return checked(file, `Edited ${show(file)}: ${edits.length} edits, ${replacements} replacements.`, signal);
       }),
     }),
@@ -376,9 +416,10 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         const { file, content: original } = existing === null ? { file: target, content: "" } : await openForEdit(path);
         const updated = insertLines(original, after_line, content);
         if (preview) return `Preview of ${show(file)} (nothing written):\n${previewDiff(original, updated)}`;
+        await mkdir(dirname(file), { recursive: true });
         await remember(file, existing === null ? null : original);
         await writeFileAtomic(file, updated);
-        await recordWrite(file, updated);
+        await fileState.recordWrite(file, updated);
         return checked(file, `Inserted ${content.split(/\r?\n/).length} line(s) into ${show(file)} after line ${after_line}.`, signal);
       }),
     }),
@@ -392,10 +433,13 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       implementation: safe(async ({ path }) => {
         const file = await resolveWritable(path);
         // For /rewind only; a backup here would become the next thing undo_edit restores.
-        const before = await readIfExists(file);
-        const { restored, savedAt } = await backups.restore(file);
-        if (checkpointsOn) await recordChange(ctl.getWorkingDirectory(), file, before).catch(() => {});
-        forget(file);
+        const before = await contentToKeep(file);
+        // A change made since (by the user, a build) would otherwise be lost without a word.
+        const { restored, savedAt } = await backups.restore(file, async () => {
+          if (before !== null) await fileState.assertFresh(file, show(file), before.toString("utf-8"));
+        });
+        if (checkpointsOn) await recordPrevious(file, before);
+        fileState.forget(file);
         return restored === "deleted"
           ? `${show(file)} did not exist before that change, so it has been removed again.`
           : `Restored ${show(file)} to its content from ${savedAt}.`;
@@ -481,6 +525,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         const rg = findExecutable("rg");
         let lines: string[];
         let truncated: boolean;
+        let unreadable = "";
         if (rg) {
           // --null ends every path with a NUL, so the path can be split off exactly. --with-filename
           // because ripgrep leaves the path out when searching one file, and the lines would be lost.
@@ -493,10 +538,14 @@ export async function toolsProvider(ctl: ToolsProviderController) {
           if (glob) args.push("-g", glob);
           args.push("-e", pattern, "--", relative(root, searchPath) || ".");
           const result = await runProcess(rg, args, { cwd: root, timeoutMs: 60_000, signal });
-          if (result.exitCode === 2) throw new ToolError(result.stderr.trim() || "ripgrep failed");
+          // 2 is also ripgrep's exit code for matches found while some file could not be read (no
+          // permission, a broken link): those matches still count, with a word about the rest.
+          if (result.exitCode === 2 && !result.stdout.trim()) throw new ToolError(result.stderr.trim() || "ripgrep failed");
           const all = parseRipgrepOutput(result.stdout, mode);
           lines = all.slice(skip, skip + maxResults);
           truncated = all.length > skip + maxResults;
+          const firstError = result.exitCode === 2 ? result.stderr.trim().split(/\r?\n/)[0] : "";
+          if (firstError) unreadable = `\n[some files could not be searched: ${firstError}]`;
         } else {
           const result = await grepFiles({
             root,
@@ -523,13 +572,13 @@ export async function toolsProvider(ctl: ToolsProviderController) {
             const file = await resolveSafe(root, shownPath).catch(() => null);
             if (!file) continue;
             const info = await stat(file).catch(() => null);
-            if (info?.isFile() && info.size <= MAX_EDIT_BYTES) await recordRead(file);
+            if (info?.isFile() && info.size <= MAX_EDIT_BYTES) await fileState.recordRead(file);
           }
         }
         const note = truncated
           ? `\n[stopped at ${maxResults} results; narrow the search, or pass offset ${skip + maxResults} for more]`
           : "";
-        return truncate(lines.join("\n"), maxOutputChars) + note;
+        return truncate(lines.join("\n"), maxOutputChars) + note + unreadable;
       }),
     }),
   );
@@ -542,9 +591,9 @@ export async function toolsProvider(ctl: ToolsProviderController) {
           "Read a Jupyter notebook (.ipynb): every cell with its index, type, source and a summary of its outputs.",
         parameters: { path: z.string() },
         implementation: safe(async ({ path }) => {
-          const file = await resolveWritable(path);
+          const file = await resolveReadable(path);
           const raw = await readFile(file, "utf-8");
-          await recordRead(file, raw);
+          await fileState.recordRead(file, raw);
           const notebook = parseNotebook(raw);
           return truncate(`${show(file)} (${notebook.cells.length} cells)\n\n${renderNotebook(notebook)}`, maxOutputChars);
         }),
@@ -566,8 +615,8 @@ export async function toolsProvider(ctl: ToolsProviderController) {
         },
         implementation: safe(async ({ path, cell_index, mode, source, cell_type }) => {
           const file = await resolveWritable(path);
-          const original = await readFile(file, "utf-8");
-          await assertFresh(file, show(file), original);
+          const original = await readTextExactly(file);
+          await fileState.assertFresh(file, show(file), original);
           const { notebook, message } = editNotebook(parseNotebook(original), {
             index: cell_index,
             mode,
@@ -577,7 +626,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
           await remember(file, original);
           const serialized = JSON.stringify(notebook, null, 1) + "\n";
           await writeFileAtomic(file, serialized);
-          await recordWrite(file, serialized);
+          await fileState.recordWrite(file, serialized);
           return `${message} (${show(file)})`;
         }),
       }),
@@ -687,12 +736,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
             const session = getSession(spec, root);
             // Run elsewhere without losing the session's own current directory.
             const quoted = quoteForShell(workingDir, spec.kind);
-            const scoped =
-              cwd === undefined
-                ? command
-                : spec.kind === "powershell"
-                  ? `Push-Location -LiteralPath ${quoted}\ntry {\n${command}\n} finally { Pop-Location }`
-                  : `(cd ${quoted} && ${command})`;
+            const scoped = cwd === undefined ? command : scopeToDirectory(command, quoted, spec.kind);
             const result = await session.exec(scoped, timeoutMs, signal);
             if (result.timedOut) {
               return `[command timed out after ${timeoutMs / 1000}s; the shell session was restarted]\n${truncate(result.stdout, maxOutputChars)}`;
@@ -783,7 +827,9 @@ export async function toolsProvider(ctl: ToolsProviderController) {
                 ? "running"
                 : result.state === "exited"
                   ? `exited with code ${result.task.exitCode}`
-                  : "no longer running (it started before the plugin restarted)";
+                  : result.state === "unknown"
+                    ? `unknown: ${UNKNOWN_TASK}`
+                    : "no longer running";
             return `task ${id} (${result.task.name}): ${status}\nnext_offset: ${result.nextOffset}\n\n${result.text || "(no new output)"}`;
           }),
         }),
@@ -825,7 +871,9 @@ export async function toolsProvider(ctl: ToolsProviderController) {
                   ? "the wait was stopped"
                   : result.state === "exited"
                     ? `exited with code ${result.task.exitCode}`
-                    : "no longer running (it started before the plugin restarted)";
+                    : result.state === "unknown"
+                      ? `unknown: ${UNKNOWN_TASK}`
+                      : "no longer running";
             const tail = result.text ? truncate(result.text.slice(-4000), maxOutputChars) : "(no new output)";
             return `task ${id} (${result.task.name}): ${how}\nnext_offset: ${result.nextOffset}\n\nEnd of its output:\n${tail}`;
           }),

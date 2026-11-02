@@ -145,12 +145,13 @@ export function applyEdit(
     throw new ToolError("old_string and new_string are identical; nothing to change.");
   }
 
+  const crlf = content.includes("\r\n");
   let search = oldString;
-  let replacement = newString;
+  // New lines follow the file's line endings, also when old_string matched on one line as sent.
+  const replacement = crlf ? newString.replace(/\r?\n/g, "\r\n") : newString;
   let count = countOccurrences(content, search);
-  if (count === 0 && content.includes("\r\n") && !oldString.includes("\r\n")) {
+  if (count === 0 && crlf && !oldString.includes("\r\n")) {
     search = oldString.replace(/\n/g, "\r\n");
-    replacement = newString.replace(/\r?\n/g, "\r\n");
     count = countOccurrences(content, search);
   }
 
@@ -214,6 +215,9 @@ export function applyEdits(content: string, edits: EditOperation[]): { content: 
 
 /** Inserts text after the given 1-based line (0 = beginning of the file). */
 export function insertLines(content: string, afterLine: number, text: string): string {
+  // A byte-order mark stays first in the file: text inserted at the top goes after it.
+  const bom = content.startsWith("﻿") ? "﻿" : "";
+  content = content.slice(bom.length);
   const newline = content.includes("\r\n") ? "\r\n" : "\n";
   const lines = content.length === 0 ? [] : content.split(/\r?\n/);
   if (afterLine < 0 || afterLine > lines.length) {
@@ -221,7 +225,7 @@ export function insertLines(content: string, afterLine: number, text: string): s
   }
   const inserted = text.split(/\r?\n/);
   lines.splice(afterLine, 0, ...inserted);
-  return lines.join(newline);
+  return bom + lines.join(newline);
 }
 
 /**

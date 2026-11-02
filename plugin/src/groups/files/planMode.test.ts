@@ -30,6 +30,8 @@ const baseConfig = {
   enableSqlite: false,
   enableSubagent: false,
   subagentModel: "",
+  enableMemory: true,
+  enablePlanMode: true,
 };
 
 beforeEach(async () => {
@@ -43,8 +45,8 @@ afterEach(async () => {
   await rm(work, options).catch(() => {});
 });
 
-const names = async () =>
-  (await toolsProvider(fakeController({ config: { ...baseConfig, projectFolder: root }, workingDirectory: work }))).map(
+const names = async (overrides: Record<string, unknown> = {}) =>
+  (await toolsProvider(fakeController({ config: { ...baseConfig, projectFolder: root, ...overrides }, workingDirectory: work }))).map(
     t => t.name,
   );
 
@@ -78,5 +80,12 @@ describe("plan mode in coder-tools", () => {
     expect(await names()).not.toContain("edit_file");
     await writeMode(work, { planning: false, plan: "do the thing" });
     expect(await names()).toContain("edit_file");
+  });
+
+  // exit_plan_mode comes with Plan Mode in the Memory group: switched off, nothing could end planning.
+  it("ignores a planning left behind once Plan Mode or the Memory group is off", async () => {
+    await writeMode(work, { planning: true });
+    expect(await names({ enablePlanMode: false })).toContain("edit_file");
+    expect(await names({ enableMemory: false })).toContain("edit_file");
   });
 });

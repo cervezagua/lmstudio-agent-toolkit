@@ -72,7 +72,13 @@ async function runWorker<T>(args: string[], signal?: AbortSignal, timeoutMs = 30
     parsed = JSON.parse(line);
   } catch {
     if (result.timedOut) throw new ToolError("Reading the PDF timed out.");
-    throw new ToolError(`Could not read the PDF: ${result.stderr.trim() || line || "no output"}`);
+    // runProcess keeps only the two ends of a huge output, which leaves the JSON unreadable.
+    if (/\[\.\.\. \d+ characters of output left out \.\.\.\]/.test(result.stdout)) {
+      throw new ToolError("The PDF's text is too large to read at once. Use pages (e.g. \"1-20\") to read part of it.");
+    }
+    // Only the start: the output may be megabytes of half-written JSON.
+    const detail = result.stderr.trim() || line || "no output";
+    throw new ToolError(`Could not read the PDF: ${detail.length > 200 ? `${detail.slice(0, 200)}…` : detail}`);
   }
   if (!parsed.ok) throw new ToolError(String(parsed.error ?? "Could not read the PDF."));
   return parsed as unknown as T;

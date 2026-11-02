@@ -76,7 +76,9 @@ describe("runChecker", () => {
   }, 120000);
 
   it("runs npx through cmd.exe on Windows only, never downloading, with the default ESLint formatter", () => {
-    expect(npxCommand(["tsc"], "win32")).toEqual({ file: "cmd.exe", args: ["/d", "/s", "/c", "npx", "--no-install", "tsc"] });
+    const onWindows = npxCommand(["tsc"], "win32");
+    expect(onWindows.file).toMatch(/cmd.exe$/i);
+    expect(onWindows.args).toEqual(["/d", "/s", "/c", "npx", "--no-install", "tsc"]);
     expect(npxCommand(["tsc"], "linux")).toEqual({ file: "npx", args: ["--no-install", "tsc"] });
     expect(npxCommand(["tsc"], "darwin")).toEqual({ file: "npx", args: ["--no-install", "tsc"] });
     // "compact" was removed from ESLint itself in version 9, where asking for it is an error.
@@ -84,6 +86,21 @@ describe("runChecker", () => {
     expect(eslint.args).not.toContain("--format");
     expect(eslint.args.slice(-2)).toEqual(["eslint", "."]);
   });
+
+  // cmd.exe looks for a bare "npx" in the current folder first: a cloned project could supply its own.
+  it.runIf(process.platform === "win32")("never runs an npx planted in the project", async () => {
+    await writeFile(join(root, "tsconfig.json"), "{}");
+    await writeFile(join(root, "npx.cmd"), "@echo PLANTED NPX\r\n@exit /b 1\r\n"); // failing, so its output is shown
+    // Some machines turn the folder search off for everything; this test needs it on.
+    const saved = process.env.NoDefaultCurrentDirectoryInExePath;
+    delete process.env.NoDefaultCurrentDirectoryInExePath;
+    try {
+      const report = await runChecker(CHECKERS.find(c => c.name === "tsc")!, root, { maxChars: 2000 });
+      expect(report).not.toContain("PLANTED NPX");
+    } finally {
+      if (saved !== undefined) process.env.NoDefaultCurrentDirectoryInExePath = saved;
+    }
+  }, 120000);
 
   it("explains a missing executable", async () => {
     const missing = { ...CHECKERS[0], name: "ghost", command: () => ({ file: "definitely-not-installed-xyz", args: [] }) };
