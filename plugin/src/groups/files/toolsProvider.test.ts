@@ -532,6 +532,30 @@ describe("coder-tools toolsProvider", () => {
     expect(await callTool(sessionTools, "run_command", { command: read })).not.toContain("sticky");
   }, 60000);
 
+  // A small model ran one Get-Service six times in a row, same output each time, and never moved on.
+  it("refuses a command that gave the same output three times in a row, until something changes", async () => {
+    const chat = await mkdtemp(join(tmpdir(), "coder-tools-repeats-"));
+    const repeatTools = await toolsProvider(fakeController({ config: { ...baseConfig, projectFolder: root }, workingDirectory: chat }));
+    const same = { command: "node -e \"console.log('same')\"" };
+    try {
+      expect(await callTool(repeatTools, "run_command", same)).toMatch(/^exit_code: 0\nstdout:\nsame/);
+      expect(await callTool(repeatTools, "run_command", same)).not.toMatch(/same output as the last/);
+      expect(await callTool(repeatTools, "run_command", same)).toMatch(/\(This is the same output as the last 2 times you ran this command\./);
+      expect(await callTool(repeatTools, "run_command", same)).toMatch(/^Error: You already ran this exact command 3 times in a row/);
+      // A different command in between starts the count over.
+      await callTool(repeatTools, "run_command", { command: "node -e \"console.log('other')\"" });
+      expect(await callTool(repeatTools, "run_command", same)).toMatch(/^exit_code: 0/);
+      await callTool(repeatTools, "run_command", same);
+      await callTool(repeatTools, "run_command", same);
+      // An edit can change what the command gives, so it runs again.
+      await callTool(repeatTools, "write_file", { path: "repeat-note.txt", content: "changed\n" });
+      expect(await callTool(repeatTools, "run_command", same)).toMatch(/^exit_code: 0\nstdout:\nsame/);
+    } finally {
+      await rm(chat, { recursive: true, force: true }).catch(() => {});
+      await rm(join(root, "repeat-note.txt"), { force: true }).catch(() => {});
+    }
+  }, 60000);
+
   // Decoding cp1252 as UTF-8 turns "é" into U+FFFD; writing that back destroyed the original bytes.
   it("refuses to edit a file that is not UTF-8 text, and leaves it as it was", async () => {
     const bytes = Buffer.from("caf\xe9 au lait\n", "latin1");
