@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/cervezagua/lmstudio-agent-toolkit/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/cervezagua/lmstudio-agent-toolkit/actions/workflows/ci.yml/badge.svg"></a>
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue.svg"></a>
-  <img alt="Tests" src="https://img.shields.io/badge/tests-1071%20passing-brightgreen">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-1075%20passing-brightgreen">
   <img alt="Tested on Windows, macOS and Linux" src="https://img.shields.io/badge/tested%20on-Windows%20%7C%20macOS%20%7C%20Linux-informational">
   <a href="https://lmstudio.ai/cervezagua/agent-toolkit"><img alt="LM Studio Hub" src="https://img.shields.io/badge/LM%20Studio%20Hub-cervezagua%2Fagent--toolkit-7c3aed"></a>
 </p>
@@ -70,6 +70,7 @@ LM Studio fetches the dependencies itself. Re-run `npm run setup` after `git pul
 
 | Version | What changed |
 |---|---|
+| [**0.8.5**](https://github.com/cervezagua/lmstudio-agent-toolkit/releases/tag/v0.8.5) | `run_command` won't run a command a fourth time after it gave the same output three times in a row, so a small model can't get stuck rerunning it. A file change or a different command starts the count over. |
 | [**0.8.4**](https://github.com/cervezagua/lmstudio-agent-toolkit/releases/tag/v0.8.4) | A full code review and security audit, with about 80 fixes. **Security:** programs start from your PATH, never a same-named file in the project; the git snapshot can't run a repository's own git config; `AGENTS.md` isn't read through links; `memory_save` is scanned like skills; secrets starting with "my" are hidden. **Fixes:** a failing command in a subfolder reports its real exit code, edits no longer damage non-UTF-8 files, editing a symlink updates the real file, a broken tool call no longer ends the reply, and `fetch_url` points at a working page after a 404. |
 | [**0.8.3**](https://github.com/cervezagua/lmstudio-agent-toolkit/releases/tag/v0.8.3) | **`/doctor`** checks the chat's setup and says what to fix: how much of the context the tools take, tools offered twice, whether agent-toolkit-loop runs the reply, the Project Folder, and the programs the enabled groups need. |
 | [**0.8.2**](https://github.com/cervezagua/lmstudio-agent-toolkit/releases/tag/v0.8.2) | On a small context, agent-toolkit-loop summarizes earlier messages only when that makes the prompt smaller; otherwise it just hides old tool output. |
