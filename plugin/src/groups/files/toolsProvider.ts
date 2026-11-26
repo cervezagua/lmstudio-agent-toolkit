@@ -8,6 +8,7 @@ import { ignoredByGit, recordChange } from "../../shared/checkpoints";
 import { findBlockedPattern, parsePatterns } from "./lib/blocklist";
 import { applyEdit, applyEdits, insertLines, previewDiff } from "./lib/edit";
 import { fileStateFor } from "./lib/fileState";
+import { commandRepeatsFor, REPEAT_LIMIT } from "./lib/repeats";
 import { assertReadableSize, looksBinary, readTextSlice } from "./lib/readText";
 import { writeFileAtomic } from "../../shared/safeWrite";
 import { overflowNote, storeOverflow } from "./lib/overflow";
@@ -94,6 +95,8 @@ export async function toolsProvider(ctl: ToolsProviderController) {
   const backups = new BackupStore(join(stateDir, "backups"));
   // What the model has read, in this chat only.
   const fileState = fileStateFor(ctl.getWorkingDirectory());
+  // The same command run again and again with the same result, in this chat only.
+  const repeats = commandRepeatsFor(ctl.getWorkingDirectory());
   // Every change is kept twice: the last one per file for undo_edit, and the first one per turn for /rewind.
   const checkpointsOn = config.get("enableCheckpoints");
   // A file that is not UTF-8 text comes as its bytes: undo_edit keeps those exactly, and /rewind
@@ -103,6 +106,7 @@ export async function toolsProvider(ctl: ToolsProviderController) {
       ? recordChange(ctl.getWorkingDirectory(), file, null, false).catch(() => {})
       : recordChange(ctl.getWorkingDirectory(), file, previous).catch(() => {});
   const remember = async (file: string, previous: string | Buffer | null) => {
+    repeats.changed();
     await backups.save(file, previous);
     await ignoredByGit(stateDir);
     if (checkpointsOn) await recordPrevious(file, previous);
@@ -727,9 +731,19 @@ export async function toolsProvider(ctl: ToolsProviderController) {
           const { signal } = ctx;
           checkCommand(command);
           const workingDir = await resolveCommandDirectory(cwd);
+          const repeatKey = `${workingDir}\n${command}`;
+          const refusal = repeats.refusal(repeatKey);
+          if (refusal) throw new ToolError(refusal);
           const timeoutMs = (timeout_seconds ?? defaultTimeout) * 1000;
           const label = description?.trim() || (command.length > 80 ? command.slice(0, 80) + "…" : command);
           ctx.status(`Running: ${label}`);
+          // Compared by what the command gave, not by the text shown: long output goes to a file with
+          // a new name each time.
+          const counted = (text: string, result: { exitCode: number | null; stdout: string; stderr: string; timedOut: boolean }) => {
+            const times = repeats.record(repeatKey, JSON.stringify([result.exitCode, result.stdout, result.stderr, result.timedOut]));
+            if (times < REPEAT_LIMIT) return text;
+            return `${text}\n\n(This is the same output as the last ${times - 1} times you ran this command. Running it again will not change it: use what it shows, or take the next step.)`;
+          };
 
           if (persistent) {
             const spec = sessionSpec(shellChoice);
@@ -739,17 +753,21 @@ export async function toolsProvider(ctl: ToolsProviderController) {
             const scoped = cwd === undefined ? command : scopeToDirectory(command, quoted, spec.kind);
             const result = await session.exec(scoped, timeoutMs, signal);
             if (result.timedOut) {
-              return `[command timed out after ${timeoutMs / 1000}s; the shell session was restarted]\n${truncate(result.stdout, maxOutputChars)}`;
+              return counted(
+                `[command timed out after ${timeoutMs / 1000}s; the shell session was restarted]\n${truncate(result.stdout, maxOutputChars)}`,
+                result,
+              );
             }
-            return withOverflow(
-              { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr, timedOut: false, aborted: false },
+            return counted(
+              await withOverflow({ exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr, timedOut: false, aborted: false }),
+              result,
             );
           }
 
           const { file, args } = shellInvocation(shellChoice, command);
           try {
             const result = await runProcess(file, args, { cwd: workingDir, timeoutMs, signal });
-            return withOverflow(result);
+            return counted(await withOverflow(result), result);
           } catch (error: any) {
             if (error?.code === "ENOENT") throw new ToolError(`Shell "${file}" was not found on PATH.`);
             throw error;
